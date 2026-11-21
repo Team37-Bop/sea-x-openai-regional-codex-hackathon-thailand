@@ -1129,10 +1129,12 @@ function applyOption(option, routes, summary = '') {
 }
 async function adjust(command, day = state.selected) {
   if (!state.plan) return;
-  const hadPreview = Boolean(preview);
   clearChat();
   preview = pendingVotes = null;
-  if (hadPreview) render();
+  focusedStop = null;
+  allDays = false;
+  closePlaceSheet($('#place-panel'), { restoreFocus: false });
+  switchView('plan');
   status.textContent = '';
   $('#chat-command').textContent = command;
   chatState('running', 'Bop กำลังปรับแผน…');
@@ -1166,13 +1168,13 @@ async function adjust(command, day = state.selected) {
     if (activeReplan === ctrl) activeReplan = null;
   }
   for (const option of result.options) option.usage = result.usage;
+  if (Number.isInteger(result.day)) state.selected = result.day;
   if (!result.needs_vote) {
     applyOption(result.options[0], result.routes, result.summary);
     return;
   }
   pendingVotes = result;
   preview = { plan: result.options[0].plan, routes: result.routes };
-  state.selected = result.day ?? state.selected;
   render();
   chatState('decision', 'อยากใช้แผนไหน?', result.vote_reason || result.summary);
   const area = $('#options');

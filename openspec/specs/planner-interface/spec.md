@@ -134,3 +134,8 @@ The desktop workspace SHALL keep the timeline or booking list at the left and th
 - **WHEN** a traveler taps the place name, time or body of a stop, or activates its name with Enter or Space
 - **THEN** the place panel opens. The card has one primary action named for the stop. Reservation actions remain independent. Meals on the committed itinerary also offer an inline menu toggle, which can expand or collapse without opening the place panel.
 - **AND** the plan tab displays the trip summary and stop notes directly when available.
+
+#### Scenario: Asking Bop to change another day from bookings
+
+- **WHEN** the organizer sends a replan request while viewing bookings or the whole-trip map
+- **THEN** the itinerary and its daily map open, any previous place sheet closes, and the day returned by Bop is selected for an automatic change as well as a group decision.
