@@ -1,0 +1,68 @@
+.lodging-chooser {
+  position: fixed;
+  inset: 0;
+  display: none;
+  width: min(680px, calc(100% - 40px));
+  max-width: none;
+  max-height: calc(100dvh - 48px);
+  margin: auto;
+  padding: 0;
+  overflow: hidden;
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  box-shadow: 0 20px 64px #20334733;
+}
+.lodging-chooser[open] { display: flex; flex-direction: column; }
+.lodging-chooser::backdrop { background: #18262366; }
+.lodging-header,
+.lodging-actions {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; padding: 18px 22px; flex: none;
+}
+.lodging-header { align-items: flex-start; border-bottom: 1px solid var(--line); }
+.lodging-header h2 { margin: 3px 0 0; font-size: clamp(1.2rem, 4vw, 1.55rem); }
+.lodging-header h2:focus { outline: none; }
+.lodging-header p { margin: 0; color: var(--muted); font-size: .86rem; }
+.lodging-header button { flex: none; }
+.lodging-content { min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 15px 22px 20px; }
+.lodging-content [data-message] { margin: 0; font-size: .9rem; }
+.lodging-content [data-message]:empty { display: none; }
+.lodging-content [data-message]:not(:empty) { margin-bottom: 10px; }
+.lodging-content [data-message][data-pending]::before {
+  display: inline-block; content: ''; margin-inline-end: 9px;
+  width: .9em; height: .9em; vertical-align: -.1em;
+  border: 2px solid var(--line); border-top-color: var(--accent); border-radius: 50%;
+  animation: lodging-search-spin .85s linear infinite;
+}
+@keyframes lodging-search-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .lodging-content [data-message][data-pending]::before { animation: none; }
+}
+.lodging-content fieldset { display: grid; gap: 9px; min-width: 0; margin: 0; padding: 0; border: 0; }
+.lodging-content fieldset[hidden] { display: none; }
+.lodging-option {
+  display: grid; grid-template-columns: 1fr; min-width: 0; overflow-wrap: anywhere;
+  padding: 11px 14px; border: 1px solid var(--line); border-radius: 10px;
+}
+.lodging-option:has(input:checked) { border-color: var(--accent); background: #edf4f8; }
+.lodging-option:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+.lodging-option label { display: flex; align-items: baseline; gap: 10px; cursor: pointer; }
+.lodging-option input { width: auto; min-height: 0; margin: 0; accent-color: var(--accent); }
+.lodging-option strong { flex: 1; min-width: 0; }
+.lodging-option small { color: var(--accent); font-size: .76rem; }
+.lodging-option p, .lodging-option a { margin: 3px 0 0 23px; font-size: .82rem; }
+.lodging-option a { width: fit-content; }
+.lodging-actions { justify-content: flex-end; border-top: 1px solid var(--line); }
+@media (max-width: 580px) {
+  .lodging-chooser { inset: auto 0 0; width: 100%; max-height: calc(100dvh - 18px); margin: 0; border-radius: 16px 16px 0 0; }
+  .lodging-header, .lodging-actions { padding: 13px 15px; }
+  .lodging-content { padding: 12px 15px; }
+  .lodging-actions { gap: 6px; padding-bottom: max(13px, env(safe-area-inset-bottom)); }
+  .lodging-actions button { flex: 1; padding-inline: 5px; }
+}
+.lodging-chooser legend.sr-only {
+  position: absolute; width: 1px; height: 1px; overflow: hidden;
+  clip-path: inset(50%); white-space: nowrap;
+}

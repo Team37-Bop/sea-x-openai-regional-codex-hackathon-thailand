@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { pendingReservationMessage, reservationStatus, setReservationDone } from '../web/booking-tasks.js';
+import { pendingReservationMessage, reconcileReservations, reservationStatus, setReservationDone } from '../web/booking-tasks.js';
 
 test('LINE reservation work names the organizer, dates and pending calls, moves and cancellations', () => {
   const state = {
@@ -87,4 +87,24 @@ test('calling script for a pending or moved table uses booking state and organiz
   stop.start = '19:15';
   const moved = reservationCallScript(state, stop, day);
   assert.ok(moved.includes('18:00') && moved.includes('19:15'));
+});
+
+
+test('moving a hotel slot keeps the confirmed original reservation as organizer follow-up', () => {
+  const original = { id: 'stay', kind: 'hotel', name: 'Original Hotel', start: '15:00',
+    res: { done: true, phone: '+44001', script: 'Original Hotel desk' } };
+  const same = { id: 'dinner', kind: 'food', name: 'The Grill', start: '18:00', res: { done: true } };
+  const oldDay = { date: '2026-12-01', stops: [original, same] };
+  const state = { plan: { days: [oldDay] }, bookings: {}, cancellations: [] };
+  const hotel = { ...structuredClone(original), name: 'Chosen Hotel' };
+  const next = { days: [{ ...oldDay, stops: [hotel, { ...same, start: '19:00' }] }] };
+  const changes = reconcileReservations(state, next);
+  assert.equal(changes.bookings.stay, undefined);
+  assert.equal(reservationStatus(changes, hotel), 'todo');
+  assert.deepEqual(changes.cancellations.map(row => [row.name, row.phone, row.time]),
+    [['Original Hotel', '+44001', '15:00']]);
+  assert.equal(changes.bookings.dinner.state, 'move');
+  assert.equal(hotel.res.phone, undefined);
+  assert.equal(hotel.res.script, undefined);
+  assert.equal(original.res.done, true);
 });

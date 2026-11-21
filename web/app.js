@@ -1,7 +1,8 @@
-import { needsAutoLodging } from './lodging-state.js';
+import { isLodgingStop, needsLodgingChoice } from './lodging-state.js';
+import { createLodgingChooser } from './lodging-chooser.js';
 import { presentChecks } from './check-presentation.js';
 import { appendTrace, finishTrace } from './operation-trace.js';
-import { renderBookingTasks, reservationStatus, setReservationDone } from './booking-tasks.js';
+import { renderBookingTasks, reconcileReservations, reservationStatus, setReservationDone } from './booking-tasks.js';
 import { describePlanChange, renderPlanReview, renderRepairOutcome } from './plan-review.js';
 import { openPlaceSheet, closePlaceSheet, createStopMenu, refreshPlaceLocation } from './place-details.js';
 import { renderStopNote, splitStopNote } from './stop-note.js';
@@ -94,7 +95,7 @@ const history = [];
 let state = { plan: null, routes: {}, setup: {}, selected: 0, demo: true, bookings: {}, cancellations: [] };
 let busy = false;
 let focusedStop;
-let archivedMap, lodgingRequest;
+let archivedMap;
 let menuScope;
 let original, preview, activePlanning, activeReplan;
 let allDays = false,
@@ -111,8 +112,7 @@ function updateTripLink() {
   if (state.localTripId) window.history.replaceState(null, '', '#trip=' + state.localTripId);
 }
 function newTrip() {
-  stopLodgingRequest();
-  lodgingRequest = null;
+  lodgingChooser.reset();
   archivedMap?.controller?.abort();
   archivedMap = null;
   bindTripIntegrations(state);
@@ -355,73 +355,65 @@ async function recoverDayMap(plan, index) {
     if (archive.controller === controller) archive.pending = undefined;
   }
 }
-function updateLodgingNotice() {
-  const notice = $('#lodging-notice');
-  const chosen = state.plan?.flags?.stay?.stays?.find(stay => stay.name && state.setup?.stay?.mode === 'auto');
-  const canChoose = state.localTripId && needsAutoLodging(state.plan) && !preview;
-  const request = lodgingRequest?.plan === state.plan ? lodgingRequest : null;
-  const pending = request?.phase === 'running';
-  const text = request?.text || 'ยังไม่ได้เลือกโรงแรมสำหรับทริปนี้';
-  notice.hidden = Boolean(preview) || !(chosen || canChoose);
-  const button = notice.querySelector('button');
-  const description = chosen ? 'Bop เลือก ' + chosen.name + ' เป็นที่พัก · ยังไม่ได้จอง' : text;
-  if (notice.querySelector('p').textContent !== description) notice.querySelector('p').textContent = description;
-  button.hidden = !chosen && (!canChoose || pending);
-  button.textContent = chosen ? 'ดูรายละเอียดที่พัก' : 'ให้ Bop เลือกที่พัก';
-  button.onclick = chosen ? () => switchView('book') : chooseArchivedLodging;
-  for (const message of document.querySelectorAll('[data-lodging-status]'))
-    if (message.textContent !== text) message.textContent = text;
-  for (const retry of document.querySelectorAll('[data-lodging-retry]')) retry.hidden = pending;
-}
-function stopLodgingRequest() {
-  if (lodgingRequest?.phase !== 'running') return;
-  lodgingRequest.controller.abort();
-  lodgingRequest.phase = 'paused';
-  lodgingRequest.text = 'พักการเลือกที่พักไว้ สามารถให้ Bop เลือกต่อได้';
-  updateLodgingNotice();
-}
-async function chooseArchivedLodging() {
-  const id = state.localTripId, plan = state.plan;
-  if (!id || !needsAutoLodging(plan) || activePlanning || activeReplan || preview || pendingVotes) return;
-  if (lodgingRequest?.plan === plan && lodgingRequest.phase === 'running') return;
-  stopLodgingRequest();
-  const request = { plan, phase: 'running', controller: new AbortController(), text: 'Bop กำลังเลือกโรงแรมสำหรับทริปนี้…' };
-  lodgingRequest = request;
-  updateLodgingNotice();
-  try {
-    const result = await api('/api/local-trips/' + id + '/lodging', {}, undefined, {
-      signal: request.controller.signal,
-      onStep: text => {
-        if (request !== lodgingRequest || request.controller.signal.aborted) return;
-        request.text = text;
-        updateLodgingNotice();
-      },
-    });
-    if (request.controller.signal.aborted || state.plan !== plan || state.localTripId !== id || activeReplan || activePlanning || preview) return;
-    if (!result.plan || needsAutoLodging(result.plan)) throw Error('ยังยืนยันโรงแรมสำหรับทริปนี้ไม่ได้');
+const lodgingChooser = createLodgingChooser($('#lodging-chooser'), {
+  changed: updateLodgingNotice,
+  request(plan, action, shortlist, signal, onStep) {
+    if (state.plan !== plan) throw Error('แผนทริปเปลี่ยนแล้ว');
+    if (state.localTripId)
+      return api('/api/local-trips/' + state.localTripId + '/lodging', action, undefined, { signal, onStep });
+    // A stateless server verifies the offered ids against the look-up result on confirmation.
+    const offeredPlan = action.action === 'options' ? plan : {
+      ...plan,
+      flags: { ...plan.flags, stay: {
+        ...plan.flags?.stay, options: shortlist.options, recommendedId: shortlist.recommendedId,
+        offerRef: shortlist.offerRef || plan.flags?.stay?.offerRef,
+      } },
+    };
+    return api('/api/plan/lodging', { ...action, plan: offeredPlan, routes: state.routes }, undefined, { signal, onStep });
+  },
+  apply(plan, result) {
+    if (state.plan !== plan || activePlanning || activeReplan || preview || pendingVotes) return;
     archivedMap?.controller?.abort();
+    const reservations = reconcileReservations(state, result.plan);
+    Object.assign(state, reservations);
     state.plan = result.plan;
     state.setup = result.plan.setup;
     state.routes = result.routes || {};
-    archivedMap = { id, plan: result.plan, checked: new Set() };
-    lodgingRequest = null;
-    if (original?.localTripId === id) {
+    if (result.localTripId) state.localTripId = result.localTripId;
+    archivedMap = state.localTripId ? { id: state.localTripId, plan: state.plan, checked: new Set() } : null;
+    if (original && !history.length) {
       original.plan = structuredClone(state.plan);
       original.setup = original.plan.setup;
       original.routes = structuredClone(state.routes);
+      original.localTripId = state.localTripId;
+      Object.assign(original, structuredClone(reservations));
     }
-    if (focusedStop && !$('#place-panel').hidden) {
-      const updated = state.plan.days.flatMap(day => day.stops).find(stop => stop.id === focusedStop);
-      if (updated) place(updated);
-      else closePlaceSheet($('#place-panel'), { restoreFocus: false });
-    }
+    presentSummary(result.summary);
+    updateTripLink();
     render();
-  } catch (error) {
-    if (request.controller.signal.aborted || state.plan !== plan || lodgingRequest !== request) return;
-    request.phase = 'error';
-    request.text = error.message || 'ยังยืนยันโรงแรมสำหรับทริปนี้ไม่ได้';
-    updateLodgingNotice();
-  }
+    forecast.refresh();
+  },
+});
+function chooseLodging() {
+  if (state.sample || state.demo || activeReplan || activePlanning || preview || pendingVotes || !needsLodgingChoice(state.plan)) return;
+  lodgingChooser.open(state.plan);
+}
+function updateLodgingNotice() {
+  const notice = $('#lodging-notice');
+  const flag = state.plan?.flags?.stay;
+  const canChoose = !state.sample && !state.demo && needsLodgingChoice(state.plan);
+  const hotel = !canChoose && state.setup?.stay?.mode === 'auto' && flag?.stays?.find(stay => stay.name);
+  notice.hidden = Boolean(preview) || !(canChoose || hotel);
+  const button = notice.querySelector('button');
+  const text = hotel ? (flag.selection === 'chosen' ? 'ที่พักที่เลือก · ' : 'Bop เลือก ') + hotel.name + ' · ยังไม่ได้จอง'
+    : 'เลือกโรงแรมเพื่อนำไปจัดจุดพักในกำหนดการ';
+  if (notice.querySelector('p').textContent !== text) notice.querySelector('p').textContent = text;
+  button.hidden = notice.hidden;
+  button.textContent = canChoose ? 'ดูตัวเลือกที่พัก' : 'ดูรายละเอียดที่พัก';
+  if (canChoose) button.setAttribute('aria-haspopup', 'dialog');
+  else button.removeAttribute('aria-haspopup');
+  button.setAttribute('aria-controls', canChoose ? 'lodging-chooser' : 'book-panel');
+  button.onclick = canChoose ? chooseLodging : () => switchView('book');
 }
 function render() {
   const plan = preview?.plan || state.plan;
@@ -441,6 +433,11 @@ function render() {
   $('#book-tab').setAttribute('aria-selected', String(view === 'book'));
   $('#day-map').setAttribute('aria-pressed', String(!allDays));
   $('#whole-map').setAttribute('aria-pressed', String(allDays));
+  if ($('#planning-progress').hidden) {
+    const mapTitle = $('#map-title');
+    mapTitle.textContent = preview ? 'ตัวอย่างแผน ' + preview.key : 'แผนที่ทริป';
+    mapTitle.classList.toggle('map-accessible-text', !preview);
+  }
   const dateStrip = $('#tabs');
   const retainDateFocus = dateStrip.contains(document.activeElement);
   const dateScroll = dateStrip.scrollLeft;
@@ -470,6 +467,7 @@ function render() {
   ].filter(Boolean).join(' · ');
   if (preview) $('#itinerary').append(node('p', 'กำลังดูตัวอย่างแผน · รอผลโหวต', 'preview-note'));
   const stops = plan.days.flatMap((row) => row?.stops ?? []);
+  const lodgingPending = !preview && !state.sample && !state.demo && needsLodgingChoice(plan);
   const total = stops.reduce((sum, stop) => sum + Number(stop.cost || 0) + Number(stop.leg?.cost || 0), 0);
   const unknownRoomPrice = plan.flags?.stay?.stays?.some(stay => stay.recommended && !Number.isFinite(stay.cost));
   $('#totals').textContent = '฿' + cash.format(total) + ' / คน' + (unknownRoomPrice ? ' · ยังไม่รวมค่าที่พัก' : '');
@@ -592,8 +590,10 @@ function render() {
       }
       const heading = node('h3');
       const openStop = button(name, () => place(stop), 'stop-open');
-      openStop.setAttribute('aria-label', name + ' ' + start + ' ดูรายละเอียดสถานที่');
-      openStop.setAttribute('aria-controls', 'place-panel');
+      const opensChooser = lodgingPending && isLodgingStop(stop);
+      openStop.setAttribute('aria-label', name + ' ' + start + (opensChooser ? ' ดูตัวเลือกที่พัก' : ' ดูรายละเอียดสถานที่'));
+      openStop.setAttribute('aria-controls', opensChooser ? 'lodging-chooser' : 'place-panel');
+      if (opensChooser) openStop.setAttribute('aria-haspopup', 'dialog');
       if (stop.id === focusedStop) openStop.setAttribute('aria-current', 'true');
       heading.append(openStop);
       content.append(heading, meta);
@@ -602,7 +602,7 @@ function render() {
       const note = renderStopNote(stop.note, 'stop-note', stop.src);
       if (note) content.append(note);
       const actions = node('div', null, 'stop-actions');
-      if (stop.res?.todo || stop.res?.done || state.bookings[stop.id]) {
+      if (!preview && (stop.res?.todo || stop.res?.done || state.bookings[stop.id])) {
         const booked = reservationStatus(state, stop);
         const mark = button(booked === 'move' ? 'ต้องโทรเลื่อน' : booked === 'done' ? 'จองแล้ว ✓' : 'ทำเครื่องหมายว่าจองแล้ว', () => {
           setReservationDone(state, stop, booked !== 'done');
@@ -627,7 +627,7 @@ function render() {
   const todo = renderBookingTasks($('#reservations'), state, {
     run: task,
     rerender: render,
-    resolveLodging: state.localTripId ? chooseArchivedLodging : null,
+    resolveLodging: !state.sample && !state.demo ? chooseLodging : null,
     adjust: (command, day) => {
       switchView('plan');
       return adjust(command, day);
@@ -721,6 +721,11 @@ function place(stop) {
   if (index >= 0) state.selected = index;
   if (view !== 'plan') view = 'plan';
   focusedStop = stop.id;
+  if (!preview && !state.sample && !state.demo && needsLodgingChoice(plan) && isLodgingStop(stop)) {
+    closePlaceSheet($('#place-panel'), { restoreFocus: false });
+    chooseLodging();
+    return;
+  }
   render();
   if (matchMedia('(max-width: 860px)').matches) $('#map').scrollIntoView({ block: 'start' });
   else document.querySelector('.stop[data-focused="true"]')?.scrollIntoView({ block: 'nearest' });
@@ -1127,7 +1132,7 @@ $('#cancel-plan').onclick = editPlanningDraft;
 $('#planning-edit').onclick = editPlanningDraft;
 
 async function generateTrip(input) {
-  stopLodgingRequest();
+  lodgingChooser.reset();
   archivedMap?.controller?.abort();
   const ctrl = new AbortController();
   activePlanning = ctrl;
@@ -1240,6 +1245,7 @@ async function generateTrip(input) {
     render();
     $('#plan-tab').focus({ preventScroll: true });
     forecast.refresh();
+    queueMicrotask(chooseLodging);
   } catch (error) {
     if (signal.aborted) {
       showPlanning(false);
@@ -1328,30 +1334,7 @@ function applyOption(option, routes, { summary = '', fromLineVote = false, selec
   closePlaceSheet($('#place-panel'), { restoreFocus: false });
   preview = null;
   history.push(structuredClone(state));
-  const nextStops = option.plan.days.flatMap((day) => day.stops);
-  const bookings = { ...state.bookings };
-  const cancellations = [...state.cancellations];
-  for (const day of state.plan.days) {
-    for (const stop of day.stops) {
-      if (stop.res?.done && !bookings[stop.id]) bookings[stop.id] = {
-        state: 'done', name: stop.name, time: stop.start, day: day.date, phone: stop.res?.phone || stop.phone,
-      };
-    }
-  }
-  for (const [id, booking] of Object.entries(bookings)) {
-    const stop = nextStops.find((item) => item.id === id && item.name === booking.name);
-    if (!stop) {
-      const former = state.plan.days.find((d) => d.stops.some((s) => s.id === id));
-      const old = former?.stops.find((s) => s.id === id);
-      cancellations.push({ ...booking, day: booking.day || former?.date, phone: booking.phone || old?.res?.phone || old?.phone });
-      delete bookings[id];
-    } else {
-      const newDay = option.plan.days.find(day => day.stops.includes(stop))?.date;
-      if (stop.start !== booking.time || (booking.day && newDay !== booking.day)) {
-        bookings[id] = { ...booking, state: 'move', next: stop.start };
-      } else if (booking.state === 'move') bookings[id] = { ...booking, state: 'done' };
-    }
-  }
+  const { bookings, cancellations } = reconcileReservations(state, option.plan);
   state = {
     ...state,
     selected,
@@ -1380,7 +1363,7 @@ function applyOption(option, routes, { summary = '', fromLineVote = false, selec
   forecast.refresh();
 }
 async function adjust(command, day = state.selected) {
-  stopLodgingRequest();
+  lodgingChooser.reset();
   if (!state.plan) return;
   clearChat();
   preview = pendingVotes = null;
@@ -1582,7 +1565,7 @@ if (localTrip)
     archivedMap = { id: localTrip[1], plan: state.plan, checked: new Set() };
     presentSummary(saved.summary);
     render();
-    if (needsAutoLodging(state.plan)) void chooseArchivedLodging();
+    chooseLodging();
     forecast.refresh();
   });
 else setupDialog.showModal();

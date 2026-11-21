@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 
 const memory = new Map();
 const pendingLodging = new Map();
+const pendingOffers = new Map();
 const uuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
 const folder = () =>
   join(process.env.BOP_CACHE_DIR || fileURLToPath(new URL('./.cache', import.meta.url)), 'showcase');
@@ -36,7 +37,10 @@ export async function saveLocalTrip(request, result) {
         files.map(async (name) => ({ name, created: (await stat(join(root, name))).mtimeMs })),
       );
       saved.sort((a, b) => b.created - a.created);
-      for (const old of saved.slice(8)) await unlink(join(root, old.name));
+      for (const old of saved.slice(8)) {
+        await unlink(join(root, old.name));
+        await unlink(join(root, old.name + '.hotels')).catch(() => {});
+      }
     })
     .catch(() => {});
   await queue;
@@ -59,14 +63,20 @@ export async function readLocalTrip(request, id) {
 }
 
 // Preserve the original snapshot alongside its verified lodging revision under the same local link.
-export async function resolveLocalLodging(request, id, resolve) {
+export async function resolveLocalLodging(request, id, resolve, choiceKey = '') {
   const saved = await readEntry(request, id);
   if (!saved) return;
-  if (saved.lodgingRevision) return saved.lodgingRevision;
-  if (pendingLodging.has(id)) return pendingLodging.get(id);
+  if (saved.lodgingRevision && !choiceKey) return saved.lodgingRevision;
+  const pending = pendingLodging.get(id);
+  if (pending) {
+    if (pending.choiceKey === choiceKey) return pending.job;
+    await pending.job.catch(() => {});
+    return resolveLocalLodging(request, id, resolve, choiceKey);
+  }
+  const current = saved.lodgingRevision || saved;
   const job = (async () => {
-    const result = await resolve(saved);
-    if (result === saved || !result?.plan?.flags?.stay?.stays?.some(row => row.recommended && row.name)) return result;
+    const result = await resolve(current);
+    if (result === current || !result?.plan?.flags?.stay?.stays?.some(row => row.recommended && row.name)) return result;
     const updated = { ...saved, lodgingRevision: result };
     const target = join(folder(), id + '.json');
     const write = queue.then(async () => {
@@ -79,6 +89,28 @@ export async function resolveLocalLodging(request, id, resolve) {
     await write;
     return result;
   })();
-  pendingLodging.set(id, job);
+  pendingLodging.set(id, { choiceKey, job });
   try { return await job; } finally { pendingLodging.delete(id); }
+}
+
+// Keep the presented list available after reload without changing either itinerary snapshot.
+export async function localLodgingOffers(request, id, discover) {
+  const saved = await readLocalTrip(request, id);
+  if (!saved) return;
+  const file = join(folder(), id + '.json.hotels');
+  if (pendingOffers.has(file)) return pendingOffers.get(file);
+  const job = (async () => {
+    try {
+      const cached = JSON.parse(await readFile(file, 'utf8'));
+      if (cached.options?.length) return cached;
+    } catch { /* A first or incomplete search can be repeated. */ }
+    const offer = await discover(saved);
+    if (offer.options.length) {
+      await writeFile(file + '.tmp', JSON.stringify(offer), { mode: 0o600 });
+      await rename(file + '.tmp', file);
+    }
+    return offer;
+  })();
+  pendingOffers.set(file, job);
+  try { return await job; } finally { pendingOffers.delete(file); }
 }

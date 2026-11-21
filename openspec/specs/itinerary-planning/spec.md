@@ -142,9 +142,14 @@ The plan SHALL set `plan.flags.stay = { area, why, booked?, examples[] }`; in au
 
 #### Scenario: Choose an overnight hotel from a neighborhood
 - **WHEN** a multi-day trip leaves lodging to Bop and the initial design supplies only a neighborhood or unsupported hotel examples
-- **THEN** Bop makes one focused lookup with up to three searches for one named property in that area. The lookup receives only destination, area, check-in and check-out dates. A selected hotel takes precedence over a different suggestion, while a booked multi-stay keeps its original sequence.
+- **THEN** Bop uses the verified examples already available and can make a focused lookup for up to three named hotels in that area. The lookup receives only destination, area, check-in and check-out dates. A selected hotel takes precedence over a different suggestion, while a booked multi-stay keeps its original sequence.
 - **AND** the recommendation requires a usable location plus a selected property, corroborated venue identity, or a hotel source cited in the actual search. A missing or unverifiable result remains retryable. Model-provided coordinates remain marked as estimates. A source for a hotel’s identity does not establish room availability or a verified price.
 - **AND** the same hotel name and position apply to luggage, check-in, morning departures, nightly returns and checkout. Directions without a confirmed room price identify that cost as unknown. The booking screen identifies the suggestion separately from a reservation.
+
+#### Scenario: Present the overnight options with the finished itinerary
+- **WHEN** an overnight plan with automatic lodging is ready and the group has not chosen a property
+- **THEN** Bop presents the available hotels with the itinerary. Each option identifies the property, the room rate when known and an available source. The planner may use a provisional hotel to calculate the proposed route.
+- **AND** the traveler can select a property, accept Bop’s recommendation or dismiss the choices and return from an unresolved lodging stop. Choosing a property updates the trip without making a booking. Day trips and travelers who have already supplied a hotel skip this choice.
 
 #### Scenario: Open an older trip with a neighborhood and no selected hotel
 - **WHEN** lodging recommendations are enabled for that saved trip

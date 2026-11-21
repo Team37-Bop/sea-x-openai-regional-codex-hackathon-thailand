@@ -198,9 +198,10 @@ const research = object({
   sources: array(src),
   photoPage: string,
 });
+const hotelOption = object({ name: string, query: string, ll, priceNight: number, why: string,
+  src: object({ url: string, title: string }, ['url', 'title']) }, ['name', 'query', 'll', 'priceNight', 'why', 'src']);
 export const shapes = {
-  lodging: object({ name: string, query: string, ll, priceNight: number, why: string,
-    src: object({ url: string, title: string }, ['url', 'title']) }, ['name', 'query', 'll', 'priceNight', 'why', 'src']),
+  lodging: object({ options: array(hotelOption) }, ['options']),
   design,
   daily: design,
   skeleton: object(
