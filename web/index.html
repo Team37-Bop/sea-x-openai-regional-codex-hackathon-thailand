@@ -144,6 +144,25 @@
             <button id="reset-plan" type="button" class="plain">กลับไปแผนแรก</button>
           </div>
         </div>
+        <section id="chat-response" aria-labelledby="chat-state" hidden>
+          <div class="chat-request-line">
+            <p>คำขอของคุณ <strong id="chat-command"></strong></p>
+            <button type="button" id="chat-cancel" class="quiet">ยกเลิกคำขอ</button>
+            <button type="button" id="chat-dismiss" class="quiet" hidden>ปิดผลการปรับแผน</button>
+          </div>
+          <h2 id="chat-state" tabindex="-1" aria-live="polite"></h2>
+          <p id="chat-description" hidden></p>
+          <details id="chat-progress" hidden>
+            <summary>ขั้นตอนการปรับแผน</summary>
+            <ol id="chat-steps" aria-live="polite" aria-relevant="additions"></ol>
+          </details>
+          <button type="button" id="chat-retry" class="quiet" hidden>ลองอีกครั้ง</button>
+          <div id="options" aria-label="ทางเลือกในการปรับแผน"></div>
+          <details id="chat-result" hidden>
+            <summary>ดูสิ่งที่เปลี่ยนในแผน</summary>
+            <div id="chat-review"></div>
+          </details>
+        </section>
       </section>
       <div class="trip-board">
         <aside class="trip-sidebar" aria-label="รายละเอียดแผนการเดินทาง">
@@ -228,7 +247,6 @@
         <aside id="place-panel" class="place-reader" hidden aria-labelledby="place-title">
           <div id="place-panel-content"></div>
         </aside>
-        <aside id="options" aria-label="ทางเลือกในการปรับแผน"></aside>
       </div>
     </main>
     <dialog id="setup-dialog" aria-labelledby="setup-title">

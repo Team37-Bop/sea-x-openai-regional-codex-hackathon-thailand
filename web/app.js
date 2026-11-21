@@ -85,7 +85,7 @@ const history = [];
 let state = { plan: null, routes: {}, setup: {}, selected: 0, demo: true, bookings: {}, cancellations: [] };
 let busy = false;
 let focusedStop;
-let original, preview, activePlanning, timer;
+let original, preview, activePlanning, activeReplan, timer;
 let allDays = false,
   view = 'plan',
   readiness;
@@ -110,7 +110,8 @@ function newTrip() {
   history.length = 0;
   view = 'plan';
   allDays = !state.demo;
-  $('#options').replaceChildren();
+  clearChat();
+  $('#command').value = '';
   $('#alerts').replaceChildren();
 }
 async function checkHealth() {
@@ -185,8 +186,7 @@ function clean(value, key = '') {
     return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, key === 'setup' && k === 'title' ? v : clean(v, k)]));
   return value;
 }
-async function api(path, payload, onDay) {
-  const signal = activePlanning?.signal;
+async function api(path, payload, onDay, { signal = activePlanning?.signal, onStep } = {}) {
   const response = await fetch(path, {
     signal,
     ...(payload === undefined
@@ -195,7 +195,11 @@ async function api(path, payload, onDay) {
   });
   const result = await readEvents(response, (event) => {
     signal?.throwIfAborted();
-    if (event.type === 'step') status.textContent = clean(event.text || '');
+    if (event.type === 'step') {
+      const text = clean(event.text || '');
+      if (onStep) onStep(text);
+      else status.textContent = text;
+    }
     if (event.type === 'day') onDay?.(clean(event));
   });
   return clean(result);
@@ -947,7 +951,44 @@ $('#cancel-plan').onclick = () => {
   activePlanning?.abort();
   if (detail.open) detail.close();
 };
-function applyOption(option, routes) {
+function clearChat() {
+  activeReplan?.abort();
+  activeReplan = null;
+  $('#chat-response').hidden = true;
+  $('#chat-steps').replaceChildren();
+  $('#chat-progress').hidden = true;
+  $('#chat-retry').onclick = null;
+  $('#chat-result').hidden = true;
+  $('#chat-result').open = false;
+  $('#chat-review').replaceChildren();
+  $('#options').replaceChildren();
+}
+function chatState(phase, title, detail = '') {
+  const response = $('#chat-response');
+  response.dataset.state = phase;
+  response.hidden = false;
+  $('#chat-state').textContent = title;
+  $('#chat-description').textContent = detail;
+  $('#chat-description').hidden = !detail;
+  $('#chat-cancel').hidden = phase !== 'running';
+  $('#chat-dismiss').hidden = phase === 'running' || phase === 'decision';
+  $('#chat-retry').hidden = phase !== 'error';
+  $('#chat-progress').open = phase === 'running';
+  response.scrollTop = 0;
+}
+function chatStep(text) {
+  if (typeof text !== 'string' || !text.trim()) return;
+  const steps = $('#chat-steps');
+  if (steps.lastElementChild?.textContent === text) return;
+  $('#chat-progress').hidden = false;
+  steps.append(node('li', text));
+}
+$('#chat-cancel').onclick = () => activeReplan?.abort();
+$('#chat-dismiss').onclick = () => {
+  clearChat();
+  $('#command').focus();
+};
+function applyOption(option, routes, summary = '') {
   closePlaceSheet($('#place-panel'), { restoreFocus: false });
   preview = null;
   history.push(structuredClone(state));
@@ -990,80 +1031,117 @@ function applyOption(option, routes) {
   state.localTripId = option.localTripId || state.localTripId;
   updateTripLink();
   presentSummary(option.line);
-  status.textContent = option.title;
+  const details = [...new Set([option.title, summary || option.head])].filter(Boolean);
+  chatState('applied', 'ปรับแผนแล้ว', details.join(' · '));
+  renderPlanReview($('#chat-review'), history.at(-1).plan, option);
+  $('#chat-result').hidden = false;
+  if (document.activeElement !== $('#command')) $('#chat-state').focus({ preventScroll: true });
   render();
   forecast.refresh();
 }
 async function adjust(command, day = state.selected) {
   if (!state.plan) return;
+  const hadPreview = Boolean(preview);
+  clearChat();
+  preview = pendingVotes = null;
+  if (hadPreview) render();
+  status.textContent = '';
+  $('#chat-command').textContent = command;
+  chatState('running', 'Bop กำลังปรับแผน…');
+  $('#chat-response').scrollIntoView({ block: 'nearest' });
   const pinnedPlan = structuredClone(state.plan);
   for (const stop of pinnedPlan.days.flatMap((d) => d.stops))
     if (state.bookings[stop.id]?.state === 'done') stop.res = { ...stop.res, done: true };
   const offlineSample = state.sample && !hasLiveService();
   const input = { plan: pinnedPlan, setup: state.setup, command, day, demo: Boolean(offlineSample) };
-  status.textContent = 'กำลังปรับแผนตามคำขอของคุณ…';
   if (
     offlineSample &&
     !/ฝน|น้ำตก|ร้าน.*(?:เต็ม|ปิด)|(?:เต็ม|ปิด).*ร้าน|ดีเลย์|เที่ยวบิน.*(?:ช้า|เลื่อน)/.test(command)
   ) {
-    status.textContent = 'ลองพิมพ์ ฝนตก ร้านปิด ร้านเต็ม เที่ยวบินดีเลย์ หรือตัดน้ำตกออก';
+    chatState('help', 'คำขอนี้ยังใช้กับทริปตัวอย่างไม่ได้', 'ลองพิมพ์ ฝนตก ร้านปิด ร้านเต็ม เที่ยวบินดีเลย์ หรือตัดน้ำตกออก');
     return;
   }
-  const result = offlineSample
-    ? await (
-        await import('/assets/sample-replan.js')
-      ).replan(input, {
-        signal: new AbortController().signal,
-        step: (text) => {
-          status.textContent = text;
-        },
-        usage: {},
-        emit() {},
-      })
-    : await api('/api/replan', input);
-  for (const option of result.options || []) option.usage = result.usage;
-  status.textContent = result.summary;
+  const ctrl = new AbortController();
+  activeReplan = ctrl;
+  const onStep = (text) => {
+    if (activeReplan === ctrl && !ctrl.signal.aborted) chatStep(text);
+  };
+  let result;
+  try {
+    result = offlineSample
+      ? await (await import('/assets/sample-replan.js')).replan(input, {
+          signal: ctrl.signal, step: onStep, usage: {}, emit() {},
+        })
+      : await api('/api/replan', input, undefined, { signal: ctrl.signal, onStep });
+    ctrl.signal.throwIfAborted();
+    if (!Array.isArray(result.options) || !result.options.length ||
+        !result.options.every((option) => option?.plan?.days?.length && option.plan.days.every((d) => Array.isArray(d?.stops)))) {
+      throw Error('ยังไม่ได้รับแผนที่สมบูรณ์');
+    }
+  } catch (error) {
+    if (activeReplan !== ctrl) return;
+    if (ctrl.signal.aborted) chatState('cancelled', 'ยกเลิกคำขอแล้ว');
+    else {
+      chatState('error', 'ปรับแผนไม่สำเร็จ', clean(error.message) || 'กรุณาลองอีกครั้ง');
+      $('#chat-retry').onclick = () => task(() => adjust(command, day));
+    }
+    return;
+  } finally {
+    if (activeReplan === ctrl) activeReplan = null;
+  }
+  for (const option of result.options) option.usage = result.usage;
   if (!result.needs_vote) {
-    applyOption(result.options[0], result.routes);
+    applyOption(result.options[0], result.routes, result.summary);
     return;
   }
   pendingVotes = result;
   preview = { plan: result.options[0].plan, routes: result.routes };
   state.selected = result.day ?? state.selected;
   render();
+  chatState('decision', 'อยากใช้แผนไหน?', result.vote_reason || result.summary);
   const area = $('#options');
-  area.replaceChildren(node('h3', 'โหวตแผนกับเพื่อน'));
+  const choices = node('div', null, 'chat-choices');
+  area.replaceChildren(choices);
+  if (document.activeElement !== $('#command')) $('#chat-state').focus({ preventScroll: true });
+  function showPreview(option) {
+    preview = option ? { plan: option.plan, routes: result.routes } : null;
+    state.selected = result.day ?? state.selected;
+    for (const control of choices.querySelectorAll('[data-preview]')) {
+      control.setAttribute('aria-pressed', String(control.dataset.preview === option?.key));
+    }
+    render();
+  }
   const ballot = {};
   const localActions = [];
   for (const option of result.options) {
     const row = node('article', null, 'option');
-    row.append(node('strong', option.key + ' · ' + option.title));
+    const heading = node('h3', option.key + ' · ' + option.title);
+    row.append(heading);
+    if (option.head && option.head !== option.title) row.append(node('p', option.head));
+    const actions = node('div', null, 'inline');
+    const compare = button('ดูตัวอย่าง', () => showPreview(option));
+    compare.dataset.preview = option.key;
+    compare.setAttribute('aria-pressed', String(option === result.options[0]));
+    actions.append(compare);
+    row.append(actions);
     renderPlanReview(row, state.plan, option);
-    row.append(
-      button('ดูตัวอย่าง', () => {
-        preview = { plan: option.plan, routes: result.routes };
-        state.selected = result.day ?? state.selected;
-        render();
-      }),
-      button('ดูแผนปัจจุบัน', () => {
-        preview = null;
-        render();
-      }),
-    );
-    area.append(row);
-    localActions.push(() => row.append(button('ใช้แผน ' + option.key, () => {
+    choices.append(row);
+    localActions.push(() => actions.append(button('ใช้แผน ' + option.key, () => {
       applyOption(option, result.routes);
       setBusy(false);
     }, 'primary')));
   }
+  area.append(button('ดูแผนปัจจุบัน', () => showPreview(null)));
   if (renderLineVote(area, state, result, (option) => applyOption(option, result.routes))) return;
   for (const show of localActions) show();
   area.append(button('คงแผนเดิม', () => {
     pendingVotes = preview = null;
     area.replaceChildren();
     render();
-    status.textContent = 'ใช้กำหนดการเดิม';
+    chatState('kept', 'ใช้กำหนดการเดิม');
+    $('#chat-state').focus({ preventScroll: true });
   }));
+  area.append(node('h3', 'โหวตแผนกับเพื่อน'));
   const selectedLabels = Object.fromEntries(result.options.map((option) => [option.key, option.title]));
   for (const member of state.setup.members) {
     const voter = selectField(member.name, member.id, { '': 'ยังไม่ได้โหวต', ...selectedLabels }, '');
@@ -1087,7 +1165,7 @@ async function adjust(command, day = state.selected) {
           .map((option) => [option.key, Object.values(ballot).filter((vote) => vote === option.key).length])
           .sort((a, b) => b[1] - a[1]);
         if (Object.values(ballot).filter(Boolean).length < state.setup.members.length) {
-          status.textContent = 'รอสมาชิกโหวตให้ครบ';
+          voteStatus.textContent = 'รอสมาชิกโหวตให้ครบ';
           return;
         }
         const key = counts[0][1] === counts[1][1] ? tie.querySelector('select').value : counts[0][0];
@@ -1095,16 +1173,22 @@ async function adjust(command, day = state.selected) {
         if (selected) {
           applyOption(selected, result.routes);
           setBusy(false);
-        } else status.textContent = 'คะแนนเสมอ ให้ผู้จัดทริปเลือก';
+        } else voteStatus.textContent = 'คะแนนเสมอ ให้ผู้จัดทริปเลือก';
       },
       'primary',
     ),
   );
+  const voteStatus = node('p', '', 'feedback');
+  voteStatus.setAttribute('role', 'status');
+  area.append(voteStatus);
 }
 $('#replan').addEventListener('submit', (event) => {
   event.preventDefault();
   const command = $('#command').value.trim();
-  if (command) task(() => adjust(command));
+  if (command && !busy) {
+    $('#command').value = '';
+    task(() => adjust(command));
+  }
 });
 $('#undo').addEventListener('click', () => {
   if (!history.length) return;
@@ -1114,7 +1198,7 @@ $('#undo').addEventListener('click', () => {
   preview = null;
   pendingVotes = null;
   forecast.refresh();
-  $('#options').replaceChildren();
+  clearChat();
   $('#alerts').replaceChildren();
   status.textContent = 'ย้อนกลับเป็นแผนก่อนหน้าแล้ว';
   setBusy(false);
