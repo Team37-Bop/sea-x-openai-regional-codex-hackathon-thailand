@@ -1,6 +1,68 @@
-# Bop
+# Bop · ไปด้วยกัน
 
-Bop ช่วยกลุ่มเพื่อนวางทริปโดยใช้เวลาเดินทาง ที่พัก งบและความต้องการของแต่ละคน ผู้จัดเห็นแผนรายวันบนแผนที่ ตรวจเงื่อนไขร่วมกัน และโหวตเมื่อการปรับแผนมีผลกับสมาชิก
+**Better trips together.** Bop turns “Where should we go?” and “What if the plan changes?” into a shared itinerary, with the trade-offs visible before the group decides.
+
+**Team 37 · Sea × OpenAI Regional Codex Hackathon Thailand · 21 November 2026**
+
+Build direction: **AI-Native Products & Operations** · [Event](https://luma.com/39zve8ph)
+
+[Open Bop](https://d2nlguqr61q2jd.cloudfront.net/) · [Verified deployment](https://github.com/Team37-Bop/sea-x-openai-regional-codex-hackathon-thailand/actions/runs/44887735297) · [Architecture runbook](terraform/README.md) · [OpenSpec](openspec/README.md)
+
+## Judge walkthrough
+
+1. **Plan together.** Start a Chiang Mai trip, add friends with different budgets, walking limits, dietary needs and must-visit places. Let Bop plan immediately or ask the group to choose places first.
+2. **Inspect the plan.** Follow the streamed planning stages. Switch between the daily and whole-trip map, open a stop from the itinerary, and compare sourced details with estimates. If the map is unavailable, the itinerary remains usable.
+3. **Change one thing.** Ask in Thai to remove a stop that is actually in the itinerary while keeping flights and meals unchanged. Compare changed stops, time and cost; use Undo to restore the previous plan. For a change involving trade-offs, inspect alternatives and the vote flow. A configured LINE group can receive Flex cards and vote from LINE or LIFF; use an authorized test group only.
+
+Bop keeps the edit, the evidence and the group decision in one workflow. It does not treat a chat answer as consensus or a booking.
+
+## How the product works
+
+- **OpenAI at runtime:** interprets Thai requests, researches places, proposes the itinerary and drafts targeted edits. The planner streams progress and partial results into the interface.
+- **Deterministic code:** normalizes inputs, schedules and routes stops, checks constraints, calculates before/after differences, and applies vote and undo rules. Unverified prices and route estimates are not guarantees.
+- **People:** set preferences, compare options and make decisions. Flight checkout is a separate, explicitly confirmed flow in supported configurations.
+
+```mermaid
+flowchart LR
+  U["Browser / Thai planner"] --> CF["CloudFront + edge AWS WAF"]
+  CF -->|"Static files via OAC"| S3["Private S3"]
+  CF -->|"/api/*"| AP["Regional REST API Gateway + WAF"]
+  LINE["LINE group / LIFF"] -->|"Signed webhook / verified identity"| CF
+  AP -->|"Streamed NDJSON response"| L["Node.js Lambda"]
+  L -->|"Plan / research / replan"| O["OpenAI"]
+  L -->|"Operational records"| D["DynamoDB"]
+  L -->|"Provider configuration"| S["KMS-encrypted Secrets Manager"]
+  G["GitHub Actions + Terraform"] -->|"OIDC deployment"| CF
+  G -->|"Versioned release"| L
+```
+
+**Data flow:** CloudFront serves the frontend from private S3. Planning requests go through API Gateway to Lambda; progress streams back to the browser. The editable plan lives in the browser, while DynamoDB stores operational records such as LINE links, votes, delivery deduplication, and booking idempotency. GitHub Actions tests and packages releases; Terraform manages AWS infrastructure. See the [runbook](terraform/README.md) for environment controls and rollback.
+
+## What is live, configurable, or not built
+
+| Surface | What to expect |
+| --- | --- |
+| OpenAI planning | Live in the deployed planner when configured. Local fixture mode is available without a model key. |
+| Maps, routes and weather | MapLibre GL, OpenFreeMap, and OpenStreetMap-based geocoding/routing (OSRM and Valhalla). Estimated legs are labeled. Open-Meteo supplies forecast context; demo disruption scenarios are not automatic flight or weather alerts. |
+| LINE | Group linking, Thai Flex messages and voting are implemented. Requires Messaging API setup plus LINE Login and LIFF for member identity. Set the registered LIFF Endpoint URL to the deployed `/liff.html` (not the LINE default placeholder), then verify a trip link on a real LINE device. |
+| Flights and other bookings | Duffel test-mode offer, review, order and cancellation paths. No real ticket purchase or customer payment is being demonstrated. Bop does not make hotel or activity reservations. When a suggested hotel has no rate, the displayed total excludes that cost and does not establish that the trip is within budget. |
+
+## Hackathon work and evidence
+
+The prep repository provided a behavior reference, not the submitted application. During the event, Team 37 built the competition implementation: Thai map-first setup and planning, streamed research, targeted replan with comparison and undo, configurable LINE voting, and the AWS deployment path. The [OpenSpec guide](openspec/README.md) identifies the pinned prep baseline and 15 behavior specifications. The [Codex skills](.codex/skills/) document the spec workflow. See [PR #9](https://github.com/Team37-Bop/sea-x-openai-regional-codex-hackathon-thailand/pull/9) for a Codex-assisted visual change with workflow regression checks and [PR #12](https://github.com/Team37-Bop/sea-x-openai-regional-codex-hackathon-thailand/pull/12) for the LINE Flex release with mocked message checks. Inspect [the implementation history](https://github.com/Team37-Bop/sea-x-openai-regional-codex-hackathon-thailand/commits/main/) and tests for what was built and verified.
+
+| Judging criterion | Evidence to inspect |
+| --- | --- |
+| Problem & Solution Fit | Multiple travelers, one plan: budget, walking, meals, preferences and timing are visible in setup and checks. |
+| Build Quality | Streamed UI, explicit estimates, edit and undo, integration tests and a reproducible AWS release. |
+| Insight & Originality | A disruption is a reviewable change to a shared plan, not a regenerated itinerary that hides changes. |
+| Real-World Value | Friends can evaluate trade-offs, vote in LINE when configured, and keep track of booking follow-ups. |
+| Alignment with Build Direction | AI drives research and replanning; code and people retain control over decisions. |
+| Use of Codex | Checked-in OpenSpec workflow, behavior requirements and regression tests make implementation and verification reviewable. |
+
+**Verification and limits:** the verified all-Flex release at [`8013681`](https://github.com/Team37-Bop/sea-x-openai-regional-codex-hackathon-thailand/commit/8013681aed6588cd248ab997fe162147ba9210b8) passed **116 tests** and the production build. A separate live one-day Chiang Mai smoke test verified generation, a Thai request to remove Three Kings Monument while keeping flights and both meals, and Undo restoring the stop. Map initialization failed in that cloud browser; the itinerary still worked. Automated LINE and Duffel checks use mocks or fixtures, not a live group send or real purchase.
+
+**Later release:** [Deploy #47](https://github.com/Team37-Bop/sea-x-openai-regional-codex-hackathon-thailand/actions/runs/44888203085) passed for `3a53501` (hotel recommendations and schedule explanations). The Chiang Mai browser smoke above predates that release; it does not verify the new lodging flow.
 
 ## เปิดบนเครื่อง
 
