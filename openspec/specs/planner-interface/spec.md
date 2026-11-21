@@ -48,6 +48,11 @@ The planner SHALL present itinerary and bookings tabs. The itinerary view SHALL 
 - **WHEN** the organizer selects a different day
 - **THEN** the timeline changes, the previous stop selection clears and the map focuses on that day. Opening a stop displays its place details.
 
+#### Scenario: Show the dates of the displayed itinerary
+
+- **WHEN** the organizer views a trip, previews a revised duration, applies it or undoes it
+- **THEN** the day selector displays one button per itinerary day, with its Thai weekday, calendar date, walking distance and per-person cost. The dates follow the itinerary across month and year boundaries. If the selected day is removed, selection moves to the last available day. Arrow-key navigation uses the displayed buttons.
+
 #### Scenario: Reservation follow-up
 
 - **WHEN** the current plan has calls to make or cancellations to handle

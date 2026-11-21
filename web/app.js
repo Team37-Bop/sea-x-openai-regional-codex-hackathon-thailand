@@ -222,11 +222,22 @@ async function task(action) {
     setBusy(false);
   }
 }
-function formatDay(day) {
-  return day?.date ? dateLabel(day.date) : '';
+function itineraryDate(day, index, setup) {
+  const recorded = Date.parse(day?.date);
+  if (Number.isFinite(recorded)) return calendar.format(recorded);
+  const start = Date.parse(setup?.startDate);
+  return Number.isFinite(start) ? calendar.format(start + index * dayMs) : 'วันที่ ' + (index + 1);
+}
+function dayTotals(day) {
+  const stops = day?.stops || [];
+  const cost = stops.reduce((sum, stop) => sum + Number(stop.cost || 0) + Number(stop.leg?.cost || 0), 0);
+  const walk = stops.reduce((sum, stop) => sum + Number(stop.walk || stop.walkKm || 0) +
+    (stop.leg?.mode === 'walk' ? Number(stop.leg.km || 0) : 0), 0);
+  return 'เดิน ' + walk.toFixed(1) + ' กม. · ฿' + cash.format(cost);
 }
 function render() {
   const plan = preview?.plan || state.plan;
+  if (plan?.days.length) state.selected = Math.max(0, Math.min(state.selected, plan.days.length - 1));
   const day = plan?.days[state.selected];
   const menuDay = view === 'plan' && !preview ? day : null;
   const liveResearch = hasLiveService();
@@ -268,7 +279,8 @@ function render() {
   const total = stops.reduce((sum, stop) => sum + Number(stop.cost || 0) + Number(stop.leg?.cost || 0), 0);
   $('#totals').textContent = '฿' + cash.format(total) + ' / คน';
   for (let i = 0; i < plan.days.length; i++) {
-    const tab = button('วันที่ ' + (i + 1), () => {
+    const tabDay = plan.days[i];
+    const tab = button(itineraryDate(tabDay, i, plan.setup || state.setup), () => {
       focusedStop = null;
       state.selected = i;
       closePlaceSheet($('#place-panel'), { restoreFocus: false });
@@ -276,26 +288,13 @@ function render() {
       render();
     });
     tab.setAttribute('aria-current', i === state.selected ? 'true' : 'false');
+    if (tabDay) tab.append(node('small', dayTotals(tabDay)));
     $('#tabs').append(tab);
   }
   if (!day?.stops.length)
     $('#itinerary').append(node('p', day ? 'ยังไม่มีจุดแวะในวันนี้' : 'Bop กำลังจัดแผนวันนี้', 'empty'));
   else {
     const title = node('h3', day.title, 'day-title');
-    const dayCost = day.stops.reduce((sum, stop) => sum + (stop.cost || 0) + (stop.leg?.cost || 0), 0);
-    const walk = day.stops.reduce(
-      (sum, stop) =>
-        sum +
-        Number(stop.walk || stop.walkKm || 0) +
-        (stop.leg?.mode === 'walk' ? Number(stop.leg.km || 0) : 0),
-      0,
-    );
-    title.append(
-      node(
-        'small',
-        formatDay(day) + ' · เดิน ' + walk.toFixed(1) + ' กม. · ฿' + cash.format(dayCost) + ' / คน',
-      ),
-    );
     $('#itinerary').append(title);
     const changes = new Map((preview ? describePlanChange(state.plan, plan).changes : []).map(change => [change.id, change]));
     for (const stop of day.stops) {
@@ -436,9 +435,9 @@ $('#views').onkeydown = (event) => {
 $('#tabs').onkeydown = (event) => {
   if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
   event.preventDefault();
-  const next =
-    (state.selected + (event.key === 'ArrowRight' ? 1 : -1) + state.plan.days.length) %
-    state.plan.days.length;
+  const count = $('#tabs').children.length;
+  if (!count) return;
+  const next = (state.selected + (event.key === 'ArrowRight' ? 1 : -1) + count) % count;
   $('#tabs').children[next].click();
   $('#tabs').children[next].focus();
 };

@@ -931,7 +931,10 @@ dialog::backdrop {
   color: #555b54;
   font-size: 0.8rem;
   padding: 4px 10px;
+  text-align: start;
+  line-height: 1.45;
 }
+.day-tabs button small { display: block; font-size: .7rem; font-weight: 400; white-space: nowrap; }
 .day-tabs button[aria-current="true"],
 button[aria-pressed="true"] {
   background: var(--tint);
