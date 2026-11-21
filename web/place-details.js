@@ -1,5 +1,5 @@
 import { appendTrace } from './operation-trace.js';
-import { renderStopNote, splitStopNote } from './stop-note.js';
+import { splitStopNote } from './stop-note.js';
 import { visitCoordinates } from './map.js';
 import { legLabels, legMode, isScheduledService } from './leg-modes.js';
 import { loadPlaceImage, mediaUrl } from './setup-extras.js';
@@ -45,11 +45,7 @@ const money = (amount) =>
   typeof amount === 'number' && Number.isFinite(amount) ? '฿' + number.format(amount) : '';
 function plain(text) {
   if (typeof text !== 'string') return '';
-  return text
-    .replace(/\(\s*\[[^\]]+\]\(https?:\/\/[^\s)]+\)\s*\)/gi, '')
-    .replace(/!?\[([^\]]+)\]\(https?:\/\/[^\s)]+\)/gi, '$1')
-    .replace(/Claude|Anthropic/gi, 'Bop')
-    .trim();
+  return splitStopNote(text).text.replace(/Claude|Anthropic/gi, 'Bop');
 }
 function el(tag, value, className) {
   const element = document.createElement(tag);
@@ -274,16 +270,15 @@ function dishList(dishes) {
 function menuSection(info, sample) {
   const dishes = dishList(info.dishes);
   const body = dishes || el('p', sample ? 'ยังไม่มีเมนูตัวอย่างของร้านนี้' : 'ยังไม่พบเมนูแนะนำของร้านนี้');
-  const menu = section(sample ? 'ไอเดียมื้ออาหารในเดโม' : 'เมนูแนะนำ', body, 'pd-dishes');
-  const source = link('ดูหน้าเมนูที่เผยแพร่', info.menuSource);
-  if (source) menu.append(source);
-  return menu;
+  return section(sample ? 'ไอเดียมื้ออาหารในเดโม' : 'เมนูแนะนำ', body, 'pd-dishes');
 }
 function sourceSection(info, stop) {
   const sources = el('div', '', 'pd-links');
   const urls = new Set();
   const planSource = stop.src?.checked === 'web' ? [stop.src] : [];
-  for (const source of [...planSource, ...arr(info.sources)]) {
+  const menuSource = { title: 'ดูหน้าเมนูที่เผยแพร่', url: info.menuSource };
+  const noteSources = splitStopNote(stop.note).sources.map((url) => ({ url, fromNote: true }));
+  for (const source of [menuSource, ...planSource, ...arr(info.sources), ...noteSources]) {
     const a = link(source?.title, source?.url);
     if (!a) continue;
     const url = new URL(a.href);
@@ -292,6 +287,7 @@ function sourceSection(info, stop) {
     }
     if (urls.has(url.href)) continue;
     urls.add(url.href);
+    if (source.fromNote) a.textContent = 'ลิงก์ในหมายเหตุ · ' + url.hostname;
     sources.append(a);
   }
   return sources.childElementCount ? section('แหล่งข้อมูล', sources) : null;
@@ -353,8 +349,7 @@ function header(container, context, visit) {
   ]);
   if (visit.legText) fields.querySelector('dd').dataset.placeLeg = '';
   if (fields) plan.append(fields);
-  const note = renderStopNote(context.stop.note, 'pd-note', context.stop.src);
-  if (note) plan.append(note);
+  if (visit.note) plan.append(el('p', visit.note, 'pd-note'));
   if (visit.closure) plan.append(el('p', visit.closure, 'pd-warning'));
   const location = el('div', '', 'pd-map-location');
   paintPlaceLocation(location, context.stop, context.city);

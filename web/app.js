@@ -611,7 +611,7 @@ function render() {
       content.append(heading, meta);
       const badge = forecast.badge(stop, state.selected, plan);
       if (badge) content.append(badge);
-      const note = renderStopNote(stop.note, 'stop-note', stop.src);
+      const note = renderStopNote(stop.note, 'stop-note');
       if (note) content.append(note);
       const actions = node('div', null, 'stop-actions');
       if (!preview && (stop.res?.todo || stop.res?.done || state.bookings[stop.id])) {

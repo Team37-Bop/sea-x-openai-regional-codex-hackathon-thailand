@@ -1,52 +1,52 @@
 import { mediaUrl } from './setup-extras.js';
 
-// A destination can contain balanced parentheses, e.g. a Wikipedia article title.
-const destination = /(?:[^\s()<>]|\((?:[^\s()<>]|\([^\s()<>]*\))*\))+/;
-const markdownLink = new RegExp(String.raw`(!?)\[([^\]\n]*)\]\(\s*<?(${destination.source})>?\s*\)`, 'gi');
-const bareLink = new RegExp(String.raw`https?://${destination.source}`, 'gi');
+// URLs can contain parentheses in article titles and brackets in query keys or IPv6 hosts.
+const segment = /(?:[^\s()<>[\]]|\[[^\s()<>[\]]*\])/;
+const destination = String.raw`(?:${segment.source}|\((?:${segment.source}|\(${segment.source}*\))*\))+`;
+const markdownLink = new RegExp(String.raw`(!?)\[([^\]\n]*)\]\(\s*<?(${destination})>?(?:\s+(?:"[^"\n]*"|'[^'\n]*'))?\s*\)`, 'gi');
+const citationLabel = /(?:sources?|citations?|แหล่งข้อมูล|แหล่งอ้างอิง|ที่มา|อ้างอิง)/;
+const domain = /(?:[a-z\d](?:[a-z\d-]*[a-z\d])?\.)+[a-z]{2,}(?:[/?#][^\s<>()\[\],;]*)?/;
+const sourceHost = String.raw`(?:https?://)?${domain.source}`;
+const parentheticalSource = new RegExp(String.raw`\(\s*(?:${citationLabel.source}\s*[:：]\s*)?(${sourceHost}(?:\s*[,;]\s*${sourceHost})*)\s*\)`, 'gi');
+const address = String.raw`(?:https?://|www\.)${destination}`;
+const bareLink = new RegExp(String.raw`(?:${citationLabel.source}\s*[:：]\s*)?(?:<(${address})>|(${address}))`, 'gi');
+const labelOnly = new RegExp(`^(?:${citationLabel.source}|${domain.source})$`, 'i');
 
 export function splitStopNote(value) {
   const sources = new Set();
   function keep(url) {
-    const href = mediaUrl(url);
+    const href = mediaUrl(/^https?:/i.test(url) ? url : 'https://' + url);
     if (href) sources.add(href);
   }
   const text = String(value ?? '')
     .replace(/\\([()[\]:<>])/g, '$1')
     .replace(/\\(?=\r?\n)/g, '')
     .replace(markdownLink, (_, image, label, url) => {
-      keep(url);
-      const sourceLabel = /^(?:https?:\/\/|www\.)|^(?:[\w-]+\.)+[a-z]{2,}(?:[/?#].*)?$/i.test(label.trim());
-      return image || sourceLabel || /^(?:source|citation|แหล่งข้อมูล|ที่มา)$/i.test(label.trim()) ? '' : label;
+      if (/^https:\/\//i.test(url)) keep(url);
+      return image || labelOnly.test(label.trim()) || /^https?:\/\//i.test(label.trim()) ? '' : label;
     })
-    .replace(bareLink, (url) => {
-      const clean = url.replace(/[.,;:!?]+$/, '');
+    .replace(parentheticalSource, (_, urls) => {
+      for (const url of urls.split(/\s*[,;]\s*/)) keep(url);
+      return '';
+    })
+    .replace(bareLink, (_, wrapped, bare) => {
+      const clean = wrapped || bare.replace(/[.,;:!?]+$/, '');
       keep(clean);
-      return url.slice(clean.length);
+      return bare ? bare.slice(clean.length) : '';
     })
-    .replace(/\(\s*\)/g, '')
+    .replace(/\(\s*\)|\[\s*\]/g, '')
     .replace(/[ \t]+(?=\r?\n)/g, '')
+    .replace(/[ \t]+([.,;!?])/g, '$1')
     .replace(/[ \t]{2,}/g, ' ')
     .trim();
   return { text, sources: [...sources] };
 }
 
-export function renderStopNote(value, className, source) {
-  const { text, sources } = splitStopNote(value);
-  if (!text && !sources.length) return null;
-  const verifiedPage = source?.checked === 'web' ? mediaUrl(source.url).split('#')[0] : '';
+export function renderStopNote(value, className) {
+  const { text } = splitStopNote(value);
+  if (!text) return null;
   const note = document.createElement('p');
   note.className = className;
-  if (text) note.append(text);
-  for (const [index, href] of sources.entries()) {
-    const anchor = document.createElement('a');
-    anchor.href = href;
-    anchor.target = '_blank';
-    anchor.rel = 'noopener noreferrer';
-    const label = href.split('#')[0] === verifiedPage ? 'แหล่งข้อมูล' : 'ลิงก์ในหมายเหตุ';
-    anchor.textContent = sources.length === 1 ? label : label + ' ' + (index + 1);
-    anchor.setAttribute('aria-label', anchor.textContent + ' ' + new URL(href).hostname);
-    note.append(' ', anchor);
-  }
+  note.textContent = text;
   return note;
 }
