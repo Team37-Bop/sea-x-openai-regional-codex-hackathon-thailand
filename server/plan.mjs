@@ -51,6 +51,54 @@ const reportPlan = (p, setup) => {
   p.checks = p.report.list;
   return p;
 };
+
+function repairCheckSummary(plan) {
+  return {
+    passed: plan.report.pass,
+    total: plan.checks.length,
+    failures: plan.checks.filter((c) => !c.pass).map((c) => ({
+      id: c.id,
+      label: [c.member, c.label].filter(Boolean).join(' · '),
+      ...(c.problems[0] && { detail: c.problems[0].replace(/, id [^)]*(?=\))/g, '') }),
+    })),
+  };
+}
+
+function repairActions(before, after, edits) {
+  const visits = new Map();
+  for (const [day, d] of before.days.entries())
+    for (const stop of d.stops) visits.set(stop.id, { day, stop });
+  const changes = [];
+  for (const [day, d] of after.days.entries()) {
+    for (const stop of d.stops) {
+      const prior = visits.get(stop.id);
+      visits.delete(stop.id);
+      const prefix = 'วันที่ ' + (day + 1) + ' · ';
+      const name = stop.n || stop.name;
+      if (!prior) {
+        changes.push(prefix + 'เพิ่ม ' + name);
+        continue;
+      }
+      const old = prior.stop;
+      const changed = (...keys) => keys.some((key) => JSON.stringify(old[key]) !== JSON.stringify(stop[key]));
+      if (name !== (old.n || old.name)) changes.push(prefix + 'เปลี่ยน ' + (old.n || old.name) + ' เป็น ' + name);
+      else if (prior.day !== day) changes.push(prefix + 'ย้าย ' + name + ' มาจากวันที่ ' + (prior.day + 1));
+      else if (changed('diet', 'veg', 'meal')) changes.push(prefix + 'ปรับมื้ออาหารที่ ' + name);
+      else if (changed('start', 'end'))
+        changes.push(prefix + 'ปรับเวลา ' + name + ' เป็น ' + stop.start + '–' + stop.end);
+      else if ((old.cost || 0) !== (stop.cost || 0) || (old.leg?.cost || 0) !== (stop.leg?.cost || 0))
+        changes.push(prefix + 'ปรับค่าใช้จ่ายที่ ' + name);
+      else if (edits.some((edit) => edit?.op === 'replace' && edit.id === stop.id &&
+          changed(...Object.keys(edit.stop ?? edit.spec ?? {}))))
+        changes.push(prefix + 'ปรับรายละเอียดของ ' + name);
+    }
+  }
+  for (const { day, stop } of visits.values())
+    changes.push('วันที่ ' + (day + 1) + ' · นำ ' + (stop.n || stop.name) + ' ออกจากแผน');
+  if (JSON.stringify(before.flags) !== JSON.stringify(after.flags)) changes.push('ปรับข้อมูลประกอบทริป');
+  return changes;
+}
+
 const transportLeg = (setup, dir) => (dir === 'go' ? setup.arrive : setup.depart);
 export async function transport(setup, dir, ctx) {
   const leg = transportLeg(setup, dir);
@@ -474,6 +522,9 @@ export async function planTrip(input, ctx, demo = false) {
   const failures = explain(plan, setup).flatMap((r) => r.problems.map((p) => r.label + ' · ' + p));
   if (!demo && failures.length + picks.length + repeated.length) {
     const tRepair = performance.now();
+    const before = repairCheckSummary(plan);
+    let changes = [], reason = 'unchanged';
+    ctx.step('กำลังปรับรายละเอียดที่ต้องแก้ แล้วตรวจแผนอีกครั้ง');
     try {
       const issues = [...failures, ...picks, ...repeated],
         indices = issues.map((line) => line.match(/วันที่ (\d+)/)?.[1]);
@@ -488,20 +539,26 @@ export async function planTrip(input, ctx, demo = false) {
       );
       if (result.value.edits?.length) {
         const update = await editPlan(plan, result.value.edits, setup, ctx, offline, new Set(), allUrls);
-        if (
-          update.plan.report.pass * 10 - pickIssues(update.plan, setup.picks).length >=
-          plan.report.pass * 10 - picks.length - repeated.length
-        ) {
-          plan = update.plan;
-          routes = update.routes;
-          repaired = true;
-          ctx.step('ตรวจเงื่อนไขหลังซ่อม: ผ่าน ' + passes(plan));
-        } else ctx.step('ตรวจเงื่อนไขหลังซ่อม: ผ่าน ' + passes(update.plan) + ' (แย่ลง ใช้แผนเดิม)');
+        const newIssues = pickIssues(update.plan, setup.picks).length + (split ? duplicates(update.plan).length : 0);
+        if (update.plan.report.pass * 10 - newIssues >= plan.report.pass * 10 - picks.length - repeated.length) {
+          changes = repairActions(plan, update.plan, result.value.edits);
+          if (changes.length) {
+            plan = update.plan;
+            routes = update.routes;
+            repaired = true;
+          }
+        } else reason = 'worse';
       }
     } catch (error) {
       if (protectedError(error)) throw error;
-      ctx.step('ซ่อมไม่สำเร็จ ใช้แผนก่อนซ่อม');
+      reason = 'unavailable';
     }
+    plan.repairOutcome = {
+      status: repaired ? 'applied' : 'kept',
+      before, after: repairCheckSummary(plan), changes,
+      ...(!repaired && { reason }),
+    };
+    ctx.step((repaired ? 'ตรวจเงื่อนไขหลังแก้' : 'ใช้แผนก่อนแก้') + ' · ผ่าน ' + passes(plan));
     timing.repair = elapsed(tRepair);
   }
   return {
@@ -825,6 +882,7 @@ async function resizeTrip(original, setup, count, command, ctx, offline, started
 export async function replan(input, ctx) {
   const t = performance.now();
   const original = validatePlan(input.plan);
+  delete original.repairOutcome;
   const command = str(input.command, 1000);
   if (!command) throw bad('ไม่มีคำสั่ง');
   const draft = input.setup ?? original.setup;
@@ -891,6 +949,8 @@ export async function replan(input, ctx) {
     );
     if (!offline && (updated.errors.length || newFailures.length)) {
       const tRepair = performance.now();
+      const beforeChecks = repairCheckSummary(updated.plan);
+      let changes = [], reason = 'unchanged';
       ctx.step('กำลังแก้รายละเอียดของทางเลือก ' + 'ABC'[i] + ' แล้วตรวจเงื่อนไขอีกครั้ง');
       try {
         const result = await model(
@@ -901,14 +961,23 @@ export async function replan(input, ctx) {
         if (result.value.edits?.length) {
           const fix = await editPlan(updated.plan, result.value.edits, copy, ctx, false, new Set(), verified);
           if (fix.plan.report.pass >= updated.plan.report.pass) {
-            updated = fix;
-            repaired = true;
-          }
+            changes = repairActions(updated.plan, fix.plan, result.value.edits);
+            if (changes.length) {
+              updated = fix;
+              repaired = true;
+            }
+          } else reason = 'worse';
         }
       } catch (e) {
         if (protectedError(e)) throw e;
-        ctx.step('ซ่อมไม่สำเร็จ ใช้ทางเลือกก่อนซ่อม');
+        reason = 'unavailable';
       }
+      updated.plan.repairOutcome = {
+        status: changes.length ? 'applied' : 'kept',
+        before: beforeChecks, after: repairCheckSummary(updated.plan),
+        changes, ...(!changes.length && { reason }),
+      };
+      ctx.step('ทางเลือก ' + 'ABC'[i] + (changes.length ? ' ใช้รายละเอียดที่แก้แล้ว' : ' คงรายละเอียดก่อนแก้'));
       timing.repair = (timing.repair ?? 0) + elapsed(tRepair);
     }
     const delta = Math.round(updated.plan.report.total - total(original));

@@ -68,6 +68,18 @@ The conversation SHALL retain the organizer's request and the public Thai progre
 - **WHEN** the service fails before returning valid options
 - **THEN** the conversation reports the failure and the committed itinerary remains available.
 
+### Requirement: Inspect the result of an automatic repair
+
+When Bop attempts a repair during initial planning or on an individual proposed option, the returned plan SHALL carry a public repair outcome. The organizer SHALL be able to see whether Bop used the correction or kept the plan from before the attempt, which checks passed before and after, which conditions still fail, and the actual affected visits when available. Final-only delivery and reopening a saved trip SHALL expose the same outcome. A later request SHALL show only the repair performed for that request and option.
+
+#### Scenario: A repair improves the plan
+- **WHEN** a meal is changed to satisfy a member's food restriction
+- **THEN** the organizer can see the affected visit, the condition that now passes, and any remaining failed conditions when viewing the result.
+
+#### Scenario: The correction is rejected or has no effect
+- **WHEN** a correction worsens the plan, changes nothing or fails to complete
+- **THEN** the organizer sees that the plan before the repair was kept, along with its actual remaining checks. Other options without a repair carry no such outcome.
+
 ### Requirement: Option output
 Each option SHALL carry `key`, `title`, `head`, `line` (2-4 short Thai lines for the group chat, with the cost change per person and who has a new task) and a full scheduled `plan`; the `done` event SHALL also carry `summary`, `day` (0-based, most affected), `routes` for every leg of every option, `ms` and `repaired`.
 

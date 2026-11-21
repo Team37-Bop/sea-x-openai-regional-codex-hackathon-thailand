@@ -1,5 +1,5 @@
 import { renderBookingTasks, reservationStatus, setReservationDone } from './booking-tasks.js';
-import { describePlanChange, renderPlanReview } from './plan-review.js';
+import { describePlanChange, renderPlanReview, renderRepairOutcome } from './plan-review.js';
 import { openPlaceSheet, closePlaceSheet, createStopMenu } from './place-details.js';
 import { renderStopNote } from './stop-note.js';
 import { attachLocationSuggestions, localSuggestions } from './location-suggest.js';
@@ -258,6 +258,8 @@ function render() {
   $('#tabs').replaceChildren();
   $('#itinerary').replaceChildren();
   $('#checks-list').replaceChildren();
+  $('#plan-repair').replaceChildren();
+  if (!preview) renderRepairOutcome($('#plan-repair'), plan?.repairOutcome);
   $('#totals').textContent = '';
   $('#checks-count').textContent = '';
   if (!plan) {
@@ -1121,6 +1123,7 @@ function applyOption(option, routes, summary = '') {
   const details = [...new Set([option.title, summary || option.head])].filter(Boolean);
   chatState('applied', 'ปรับแผนแล้ว', details.join(' · '));
   renderPlanReview($('#chat-review'), history.at(-1).plan, option);
+  renderRepairOutcome($('#chat-review'), option.plan.repairOutcome);
   $('#chat-result').hidden = false;
   if (document.activeElement !== $('#command')) $('#chat-state').focus({ preventScroll: true });
   render();
@@ -1200,6 +1203,7 @@ async function adjust(command, day = state.selected) {
     actions.append(compare);
     row.append(actions);
     renderPlanReview(row, state.plan, option);
+    renderRepairOutcome(row, option.plan.repairOutcome);
     choices.append(row);
     localActions.push(() => actions.append(button('ใช้แผน ' + option.key, () => {
       applyOption(option, result.routes);

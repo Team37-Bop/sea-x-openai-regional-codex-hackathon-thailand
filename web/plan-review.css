@@ -76,3 +76,31 @@
   min-height: 68px;
   margin-top: 8px;
 }
+.repair-outcome {
+  margin-block: 8px;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 0.86rem;
+  overflow-wrap: anywhere;
+}
+.repair-outcome summary {
+  color: var(--ink);
+  cursor: pointer;
+  font-weight: 600;
+}
+.repair-outcome summary small {
+  display: inline-block;
+  margin-inline-start: 0.6em;
+  color: var(--muted);
+  font-weight: 400;
+}
+.repair-outcome > strong,
+.repair-outcome > p {
+  display: block;
+  margin: 6px 0 0;
+}
+.repair-outcome ul {
+  margin: 3px 0 6px;
+  padding-inline-start: 1.25rem;
+}
