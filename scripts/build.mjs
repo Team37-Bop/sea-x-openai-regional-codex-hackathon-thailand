@@ -11,6 +11,7 @@ const publicFiles = [
   'booking-tasks.js',
   'lodging-state.js',
   'candidate-survey.css',
+  'check-presentation.js',
   'flight-panel.js',
   'forecast.js',
   'index.html',

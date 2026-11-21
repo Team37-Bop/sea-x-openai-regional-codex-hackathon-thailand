@@ -1140,26 +1140,125 @@ button[aria-pressed="true"] {
   font-size: 0.77rem;
 }
 #checks-list {
-  padding: 0 16px;
+  padding: 0 16px 8px;
+  font-size: .9rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
 }
-.check-row {
-  padding: 9px 0;
-  font-size: 0.85rem;
+#checks-list:empty { padding: 0; }
+#checks-count {
+  color: var(--muted);
+  background: var(--surface-2);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
-.check-row + .check-row {
-  border-top: 1px solid var(--line);
-}
-.check-row b {
-  display: inline-block;
+#checks-count[data-state="complete"] {
   color: var(--go);
-  width: 23px;
+  background: color-mix(in srgb, var(--go) 8%, var(--paper));
 }
-.check-row .fail,
-.check-row p {
-  color: var(--red);
+.check-attention {
+  margin: 5px 0 6px;
+  font-size: .82rem;
+  color: var(--warn);
 }
-.check-row p {
-  padding-left: 23px;
+.check-failures {
+  border: 1px solid color-mix(in srgb, var(--warn) 20%, var(--line));
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--warn) 4%, var(--paper));
+}
+.check-failure + .check-failure { border-top: 1px solid var(--line); }
+.check-summary,
+.check-passed > summary {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 44px;
+  list-style: none;
+  border-radius: 8px;
+}
+.check-summary { align-items: baseline; padding: 9px 12px; }
+#checks-list summary::-webkit-details-marker { display: none; }
+#checks-list summary::after {
+  content: "";
+  flex: none;
+  align-self: center;
+  width: 7px;
+  height: 7px;
+  margin: -3px 2px 0 auto;
+  border: solid var(--muted);
+  border-width: 0 1.5px 1.5px 0;
+  transform: rotate(45deg);
+}
+#checks-list details[open] > summary::after {
+  margin-top: 3px;
+  transform: rotate(225deg);
+}
+#checks-list summary:focus-visible { outline-offset: -2px; }
+.check-mark {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 1.1rem;
+  height: 1.1rem;
+  color: var(--warn);
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+  font: 700 .75rem/1 system-ui, sans-serif;
+}
+.check-text { flex: 1; min-width: 0; }
+.check-label { font-weight: 600; }
+.check-meta {
+  font-weight: 400;
+  color: var(--muted);
+}
+.check-preview {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: .8rem;
+}
+.check-failure[open] .check-preview { display: none; }
+.check-issues,
+.check-passed ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.check-issues {
+  margin: 0 12px 10px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--paper);
+}
+.check-issues li { padding: 7px 0; }
+.check-issues li + li { border-top: 1px solid var(--line); }
+.check-issues small,
+.check-issues strong { display: block; }
+.check-issues small { font-size: .8rem; color: var(--muted); }
+.check-issues strong { font-weight: 600; }
+.check-issues p { color: var(--ink); }
+.check-passed > summary {
+  padding-inline: 2px;
+  color: var(--muted);
+  font-size: .86rem;
+  font-weight: 500;
+}
+.check-passed ul { padding-bottom: 5px; }
+.check-passed li {
+  display: flex;
+  gap: 8px;
+  padding-block: 4px;
+  color: var(--muted);
+}
+.check-passed .check-label { font-weight: 400; }
+.check-tick { color: var(--go); }
+@media (hover: hover) {
+  #checks-list summary:hover {
+    background: color-mix(in srgb, var(--ink) 4%, transparent);
+  }
 }
 .bookings .panel-heading {
   margin: 0;
@@ -1697,24 +1796,6 @@ body:has(.planning-map) { height: 100dvh; overflow: hidden; }
 }
 .trip-sidebar #alerts:not(:empty) {
   margin: 8px 14px;
-}
-.trip-sidebar #checks-list {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 4px 8px;
-  padding-block: 2px 10px;
-}
-.trip-sidebar .check-row {
-  padding: 2px 0;
-  border: 0;
-  line-height: 1.4;
-  font-size: 0.77rem;
-}
-.trip-sidebar .check-row b {
-  width: 15px;
-}
-.trip-sidebar .check-row p {
-  padding-left: 15px;
 }
 .trip-sidebar .planner {
   border-top: 1px solid var(--line);

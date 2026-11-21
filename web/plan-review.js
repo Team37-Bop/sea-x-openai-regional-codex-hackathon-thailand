@@ -1,4 +1,5 @@
 import { el } from './integration-ui.js';
+import { presentChecks } from './check-presentation.js';
 
 const currency = new Intl.NumberFormat('th-TH', {
   style: 'currency',
@@ -164,9 +165,15 @@ export function renderPlanReview(container, beforePlan, option) {
   if (diff.newFailures.length) {
     review.append(el('h4', 'เงื่อนไขที่เพิ่งไม่ผ่าน'));
     const list = el('ul');
-    for (const rule of diff.newFailures) {
-      const issue = [rule.member, rule.label, ...(rule.problems || [])].filter(Boolean).join(' · ');
-      list.append(el('li', issue));
+    for (const rule of presentChecks({ ...option.plan, checks: diff.newFailures })) {
+      const row = el('li', [rule.member, rule.label].filter(Boolean).join(' · '));
+      if (rule.issues.length) {
+        const issues = el('ul');
+        for (const issue of rule.issues)
+          issues.append(el('li', [issue.when, issue.subject, issue.detail].filter(Boolean).join(' · ')));
+        row.append(issues);
+      }
+      list.append(row);
     }
     review.append(list);
   }

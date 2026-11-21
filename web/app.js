@@ -1,4 +1,5 @@
 import { needsAutoLodging } from './lodging-state.js';
+import { presentChecks } from './check-presentation.js';
 import { appendTrace, finishTrace } from './operation-trace.js';
 import { renderBookingTasks, reservationStatus, setReservationDone } from './booking-tasks.js';
 import { describePlanChange, renderPlanReview, renderRepairOutcome } from './plan-review.js';
@@ -254,6 +255,76 @@ function dayTotals(day) {
     ((stop.leg?.mode ?? stop.leg?.m) === 'walk' ? Number(stop.leg.km || 0) : 0), 0);
   return 'เดิน ' + walk.toFixed(1) + ' กม. · ฿' + cash.format(cost);
 }
+function checkLabel(check) {
+  const label = node('span', check.label, 'check-label');
+  if (check.member) label.append(node('small', ' · ' + check.member, 'check-meta'));
+  return label;
+}
+function failedCheck(check) {
+  const { issues } = check;
+  const row = node(issues.length ? 'details' : 'div', null, 'check-failure');
+  const heading = node(issues.length ? 'summary' : 'div', null, 'check-summary');
+  const mark = node('span', '!', 'check-mark');
+  mark.setAttribute('aria-hidden', 'true');
+  const text = node('span', null, 'check-text');
+  const label = checkLabel(check);
+  if (issues.length > 1) label.append(node('small', ' · ' + issues.length + ' รายการ', 'check-meta'));
+  text.append(label);
+  if (issues.length) {
+    const first = issues[0];
+    const reason = first.detail.split(' · ')[0];
+    const preview = [reason, first.subject || first.when].filter(Boolean).join(' · ');
+    if (preview) text.append(node('small', preview, 'check-preview'));
+  }
+  heading.append(mark, text);
+  row.append(heading);
+  if (issues.length) {
+    const list = node('ul', null, 'check-issues');
+    for (const issue of issues) {
+      const entry = node('li');
+      if (issue.when) entry.append(node('small', issue.when));
+      if (issue.subject) entry.append(node('strong', issue.subject));
+      if (issue.detail) entry.append(node('p', issue.detail));
+      list.append(entry);
+    }
+    row.append(list);
+  }
+  return row;
+}
+let displayedCheckPlan;
+function renderChecks(plan) {
+  if (displayedCheckPlan === plan) return;
+  displayedCheckPlan = plan;
+  const container = $('#checks-list'), count = $('#checks-count');
+  container.replaceChildren();
+  count.textContent = '';
+  if (!plan) return;
+  const checks = presentChecks(plan, plan.setup ?? state.setup);
+  if (!checks.length) return;
+  const passed = checks.filter(check => check.pass), failed = checks.filter(check => !check.pass);
+  count.textContent = 'ผ่าน ' + passed.length + '/' + checks.length + ' ข้อ';
+  count.dataset.state = failed.length ? 'partial' : 'complete';
+  if (failed.length) {
+    container.append(node('h3', 'ต้องปรับ ' + failed.length + ' ข้อ', 'check-attention'));
+    const group = node('div', null, 'check-failures');
+    for (const check of failed) group.append(failedCheck(check));
+    container.append(group);
+  }
+  if (passed.length) {
+    const group = node('details', null, 'check-passed');
+    const title = node('summary', failed.length ? 'ดูเงื่อนไขที่ผ่านแล้ว' : 'ดูเงื่อนไขทั้งหมด');
+    const list = node('ul');
+    for (const check of passed) {
+      const item = node('li');
+      const mark = node('span', '✓', 'check-tick');
+      mark.setAttribute('aria-hidden', 'true');
+      item.append(mark, checkLabel(check));
+      list.append(item);
+    }
+    group.append(title, list);
+    container.append(group);
+  }
+}
 async function recoverDayMap(plan, index) {
   const archive = archivedMap;
   if (archive?.plan !== plan || archive.checked.has(index)) return;
@@ -376,11 +447,10 @@ function render() {
   const previousDate = dateStrip.dataset.activeDate;
   dateStrip.replaceChildren();
   $('#itinerary').replaceChildren();
-  $('#checks-list').replaceChildren();
+  renderChecks(plan);
   $('#plan-repair').replaceChildren();
   if (!preview) renderRepairOutcome($('#plan-repair'), plan?.repairOutcome);
   $('#totals').textContent = '';
-  $('#checks-count').textContent = '';
   if (!plan) {
     $('#itinerary').append(node('p', 'ยังไม่มีแผนทริป', 'empty'));
     return;
@@ -553,20 +623,6 @@ function render() {
       row.append(time, content);
       $('#itinerary').append(row);
     }
-  }
-  const checks = plan.checks ?? [];
-  if (checks.length)
-    $('#checks-count').textContent =
-      checks.filter((item) => item.pass).length + ' / ' + checks.length + ' ผ่าน';
-  for (const item of checks) {
-    const row = node('div', null, 'check-row');
-    row.append(
-      node('b', item.pass ? '✓' : '!', item.pass ? '' : 'fail'),
-      document.createTextNode(item.label),
-    );
-    if (item.member) row.append(node('small', item.member, 'rule-member'));
-    for (const problem of item.problems || []) row.append(node('p', problem));
-    $('#checks-list').append(row);
   }
   const todo = renderBookingTasks($('#reservations'), state, {
     run: task,
