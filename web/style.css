@@ -2342,3 +2342,18 @@ body:has(.planning-map) { height: 100dvh; overflow: hidden; }
 .wish-remove:hover {
   background: #d2e2ee;
 }
+
+/* Existing LINE participant page: read-only trip summary below the voting panel. */
+.liff-trip-summary {
+  margin-top: 16px;
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+.liff-trip-summary summary {
+  font-weight: 700;
+}
+.liff-trip-summary p {
+  margin-top: 8px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

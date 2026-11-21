@@ -50,7 +50,7 @@ Connect a planner session to a LINE group, send summaries, and collect real grou
 
 ### Requirement: Link and unlink a group
 
-Bop SHALL reply to a group join with instructions for sending the link code, accept a trimmed case-insensitive six-character group text matching the alphabet, and verify the lookup and its 30-minute expiry. A successful link writes the group-to-trip mapping, removes the link lookup and pending code, and replies with the trip title and any plan summary. Unrelated text SHALL be ignored. A leave event removes the group association; a member-joined event can reply with LIFF identity instructions.
+Bop SHALL reply to a group join with instructions for sending the link code, accept a trimmed case-insensitive six-character group text matching the alphabet, and verify the lookup and its 30-minute expiry. A successful link writes the group-to-trip mapping, removes the link lookup and pending code, and replies with a short Flex confirmation containing the trip title and one trip-specific LIFF action when LIFF and LINE Login are configured, or a brief text confirmation otherwise. The link reply does not contain the itinerary summary or organizer credential. Unrelated text SHALL be ignored. A leave event removes the group association; a member-joined event can reply with LIFF identity instructions.
 
 #### Scenario: Organizer watches the link
 
@@ -105,6 +105,11 @@ The LIFF page SHALL require a trip ID, an enabled server config and a public LIF
 
 - **WHEN** the LIFF page posts `{idToken}` to `/api/trips/{id}/identity`
 - **THEN** it receives a trip view plus `identity.displayName` and the current member ID or null. Posting a valid `memberId` links the identity. Requesting a second different member ID or claiming a member linked to another LINE account fails with `bad_request`.
+
+#### Scenario: Linked participant opens the trip summary
+
+- **WHEN** the existing authenticated LIFF view returns a linked member identity and a nonempty trip summary
+- **THEN** the page offers a read-only summary disclosure after the vote panel, renders the summary as plain text, and leaves existing identity and voting flows unchanged.
 
 #### Scenario: LIFF voting
 

@@ -178,6 +178,7 @@ test('signed group linking, public views, LIFF identity, cross-channel ballots, 
     LINE_CHANNEL_SECRET: 'test-secret',
     LINE_LOGIN_CHANNEL_ID: 'login-app',
     LINE_LIFF_ID: 'test-liff',
+    LIFF_ID: undefined,
     BOP_LINE_MONTHLY_CAP: '2',
   });
   let replyFailure = false,
@@ -244,7 +245,31 @@ test('signed group linking, public views, LIFF identity, cross-channel ballots, 
   });
   await webhook([link, link]);
   assert.equal(sent.length, 1);
-  assert.ok(sent[0][1].messages[0].text.includes(title));
+  const confirmationMessages = sent[0][1].messages;
+  assert.equal(confirmationMessages.length, 1);
+  const [confirmation] = confirmationMessages;
+  assert.equal(confirmation.type, 'flex');
+  assert.equal(confirmation.altText, 'เชื่อมกลุ่มกับทริป ' + title + ' แล้ว');
+  assert.equal(confirmation.contents.type, 'bubble');
+  assert.ok(confirmation.contents.body.contents.some((item) => item.text === title));
+  const actions = [];
+  const scanActions = (value) => {
+    if (value.action) actions.push(value);
+    if (Array.isArray(value.contents)) value.contents.forEach(scanActions);
+    else if (value.contents) scanActions(value.contents);
+    if (value.footer) scanActions(value.footer);
+    if (value.body) scanActions(value.body);
+  };
+  scanActions(confirmation);
+  assert.equal(actions.length, 1);
+  const [cta] = actions;
+  assert.equal(cta.action.type, 'uri');
+  assert.equal(cta.action.label, 'ดูสรุปทริป');
+  assert.equal(cta.backgroundColor, '#FF5A1F');
+  assert.equal(cta.contents[0].color, '#17181C');
+  assert.equal(cta.action.uri, 'https://liff.line.me/test-liff?tripId=' + created.tripId);
+  for (const privateValue of ['แผนแรก', token, created.linkCode, 'group-private', 'line-private'])
+    assert.ok(!JSON.stringify(confirmation).includes(privateValue));
   const { data: view } = await organizer('GET', '');
   assert.equal(view.title, title);
   assert.equal(view.linked, true);
@@ -261,7 +286,7 @@ test('signed group linking, public views, LIFF identity, cross-channel ballots, 
   await webhook([ev('retry', { type: 'join' })]);
   await webhook([ev('retry', { type: 'join' })]);
   assert.equal(
-    sent.filter(([kind, msg]) => kind === 'reply' && msg.messages[0].text.includes('สวัสดีจาก')).length,
+    sent.filter(([kind, msg]) => kind === 'reply' && msg.messages[0].text?.includes('สวัสดีจาก')).length,
     2,
   );
   const post = await organizer('POST', '/post', { text: 'Bop: Bop: แตะเพื่อดู' });
@@ -330,6 +355,23 @@ test('signed group linking, public views, LIFF identity, cross-channel ballots, 
   await call('DELETE', '/api/trips/' + next.tripId, null, next.organizerToken);
   assert.equal(await operationalStore.linkGroup(next.linkCode, 'another'), undefined);
   assert.equal(sent.filter(([kind]) => kind === 'push').length, 2);
+  await webhook([ev('no-summary', {
+    type: 'message',
+    source: { ...event.source, groupId: 'no-summary' },
+    message: { type: 'text', text: untitled.linkCode },
+  })]);
+  assert.equal(sent.at(-1)[1].messages[0].contents.footer.contents[0].action.label, 'เปิดหน้าทริปใน LINE');
+
+  // LINE linking still succeeds when LIFF is unavailable. No broken URL or plan wall.
+  delete process.env.LINE_LIFF_ID;
+  delete process.env.LIFF_ID;
+  const { data: fallbackTrip } = await call('POST', '/api/trips', { setup: { ...setup, title }, summary: 'ข้อความสรุปที่ไม่ส่งในแชต' });
+  await webhook([ev('no-liff', {
+    type: 'message',
+    source: { ...event.source, groupId: 'no-liff' },
+    message: { type: 'text', text: fallbackTrip.linkCode },
+  })]);
+  assert.deepEqual(sent.at(-1)[1].messages, [{ type: 'text', text: 'เชื่อมกลุ่มกับทริป ' + title + ' แล้ว' }]);
 });
 
 test('missing configuration and disabled persistence isolate the LINE file from flight state', async (t) => {
