@@ -3,6 +3,8 @@ import { el, action, tripRequest } from './integration-ui.js';
 
 const status = document.querySelector('#status');
 const panel = document.querySelector('#participant');
+const summaryDetails = document.querySelector('#trip-summary');
+const summaryText = document.querySelector('#trip-summary-text');
 const params = new URLSearchParams(location.search);
 const tripId =
   params.get('tripId') ||
@@ -33,6 +35,9 @@ async function run(actionWork, memberId) {
     document.querySelector('#title').textContent = trip.title;
     status.textContent = 'สวัสดี ' + trip.identity.displayName;
     panel.replaceChildren();
+    const summary = trip.identity.memberId && typeof trip.summary === 'string' ? trip.summary.trim() : '';
+    summaryDetails.hidden = !summary;
+    summaryText.textContent = summary;
     if (!trip.identity.memberId) {
       panel.append(el('h2', 'เลือกชื่อของคุณในทริป'));
       const available = trip.members.filter((m) => !m.linked);
@@ -85,6 +90,8 @@ async function run(actionWork, memberId) {
       schedule();
     }
   } catch (error) {
+    summaryDetails.hidden = true;
+    summaryText.textContent = '';
     status.textContent = error.message;
     schedule();
   } finally {

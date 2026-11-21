@@ -127,6 +127,57 @@ function finalize(trip) {
   vote.status = winner ? 'CLOSED' : 'TIE';
   return trip;
 }
+function linkConfirmation(trip) {
+  const title = trip.title.replace(/\s+/g, ' ');
+  const confirmation = 'เชื่อมกลุ่มกับทริป ' + title + ' แล้ว';
+  const { liffId } = lineConfig();
+  const loginChannel = process.env.LINE_LOGIN_CHANNEL_ID || process.env.LINE_CHANNEL_ID;
+  if (!liffId || liffId !== liffId.trim() || !loginChannel?.trim()) return text(confirmation);
+  const uri = liffUri(trip.tripId);
+  const hasSummary = Boolean(trip.summary);
+  const label = hasSummary ? 'ดูสรุปทริป' : 'เปิดหน้าทริปใน LINE';
+  const ink = '#17181C';
+  return {
+    type: 'flex',
+    altText: confirmation,
+    contents: {
+      type: 'bubble',
+      styles: { body: { backgroundColor: '#FBFAF7' }, footer: { backgroundColor: '#FBFAF7' } },
+      body: {
+        type: 'box',
+        layout: 'vertical',
+        spacing: 'sm',
+        contents: [
+          { type: 'text', text: 'เชื่อมกลุ่ม LINE แล้ว', color: '#0F7442', size: 'sm', weight: 'bold' },
+          { type: 'text', text: title, color: ink, size: 'xl', weight: 'bold', wrap: true, maxLines: 2 },
+          ...(hasSummary ? [{
+            type: 'text',
+            text: 'เลือกชื่อของคุณในทริปเพื่อดูสรุปแผน',
+            color: '#5B5D66',
+            size: 'sm',
+            wrap: true,
+          }] : []),
+        ],
+      },
+      footer: {
+        type: 'box',
+        layout: 'vertical',
+        contents: [{
+          type: 'box',
+          layout: 'vertical',
+          justifyContent: 'center',
+          height: '48px',
+          cornerRadius: '12px',
+          backgroundColor: '#FF5A1F',
+          action: { type: 'uri', label, uri },
+          contents: [
+            { type: 'text', text: label, color: ink, size: 'md', weight: 'bold', align: 'center' },
+          ],
+        }],
+      },
+    },
+  };
+}
 function voteFlex(trip) {
   const vote = trip.vote;
   const uri = liffUri(trip.tripId);
@@ -397,11 +448,7 @@ export function createLineService(store = operationalStore, request = (...args) 
       const code = event.message.text.trim().toUpperCase();
       if (code.length !== 6 || ![...code].every((c) => alphabet.includes(c))) return;
       const trip = await store.linkGroup(code, groupId);
-      if (trip)
-        return reply(
-          event,
-          text('เชื่อมกลุ่มกับทริป ' + trip.title + ' แล้ว' + (trip.summary ? '\n' + trip.summary : '')),
-        );
+      if (trip) return reply(event, linkConfirmation(trip));
       return reply(event, text('รหัสนี้หมดอายุหรือถูกใช้แล้ว'));
     }
     const trip = await store.groupTrip(groupId);
