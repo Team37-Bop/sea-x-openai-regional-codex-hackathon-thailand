@@ -10,9 +10,11 @@ const memory = new Map();
 let run = 0;
 
 const prompt =
-  'เสนอคำถามภาษาไทยตามความต้องการของกลุ่ม ไม่เกิน 3 คำถาม kind food/sight/stay คำถามละไม่เกิน 6 สถานที่จริง ' +
+  'ช่วยกลุ่มเปรียบเทียบสถานที่จริงในเมืองนี้ ถามเป็นภาษาไทยหนึ่งคำถามต่อหมวดที่ระบุใน categories เป้าหมาย 4 ตัวเลือกที่แตกต่างกันต่อคำถาม ให้ได้ถึง 6 ถ้ามีที่เหมาะจริง ' +
+  'จำนวนนี้เป็นทางเลือกให้พิจารณา แม้ทริปวันเดียวก็เสนอหลายร้านและหลายที่เที่ยวได้ เลือกให้ต่างกันทั้งประสบการณ์ ย่าน หรือราคา และให้เข้ากับเวลา งบ การเดินและสิ่งที่สมาชิกสนใจ หลีกเลี่ยงการเสนอจุดเดิมซ้ำต่างชื่อ ' +
+  'ใช้ผลค้นที่ระบุสถานที่จริง เช่น บทความที่รวบรวมหลายสถานที่หรือหน้าเว็บไซต์ของแต่ละแห่ง หากยืนยันไม่ได้หรือหมวดนั้นขัดกับคำขอให้ส่งเท่าที่เหมาะ ห้ามสร้างชื่อ ราคา หรือลิงก์เพื่อให้ครบจำนวน ' +
   'บอกข้อดี tags ราคาต่อคนแบบสั้น เช่น £20–30 ต่อคน พิกัด query และ aliases สำหรับหา POI, photoPage หน้าเว็บที่มีรูปของสถานที่หรือย่านนี้ ' +
-  'ร้านอาหารทุกร้านต้องระบุให้สมาชิกแต่ละคนที่มี avoid ว่ามีเมนูใดกินได้ ตรวจด้วยแหล่งข้อมูลจริง ใส่ src.checked=web พร้อม URL เมื่อมีหลักฐานเท่านั้น';
+  'ร้านอาหารระบุเมนูที่เหมาะกับข้อจำกัดอาหารของสมาชิกแต่ละคนตามหลักฐาน ถ้ายืนยันไม่ได้ให้บอกตรง ๆ ไม่รับรองความปลอดภัยของอาหาร ใส่ src.checked=web กับ URL ผลค้นที่อ้างได้';
 
 export function resolvePicks(input = {}) {
   const must = list(input?.must)
@@ -49,16 +51,30 @@ function priceHint(value) {
   }
   return text.slice(0, end || 239).trimEnd() + '…';
 }
-export function normalizeQuestions(result, runId) {
-  const ids = new Set();
-  const verified = new Set([...result.verified].map(httpsUrl).filter(Boolean));
+const comparable = value => placeText(value).normalize('NFKC').toLowerCase()
+  .replace(/^the\s+/i, '').replace(/[^\p{L}\p{M}\p{N}]+/gu, '');
+function sameVenue(a, b) {
+  const names = [comparable(a.option.name), comparable(a.stop.query)];
+  return [comparable(b.option.name), comparable(b.stop.query)].some(name => name && names.includes(name));
+}
+function addDistinct(options, entry) {
+  const previous = options.find(item => sameVenue(item, entry));
+  if (previous) {
+    if (!previous.option.src && entry.option.src) {
+      previous.option.src = entry.option.src;
+      previous.photoPage ||= entry.photoPage;
+    }
+  } else if (options.length < 6) options.push(entry);
+}
+export function normalizeQuestions(result, runId, ids = new Set()) {
+  const verified = new Set([...(result.verified || []), ...(result.cited || [])].map(httpsUrl).filter(Boolean));
   return list(result.value.questions)
     .slice(0, 3)
     .flatMap((q, i) => {
       const kind = ['food', 'sight', 'stay'].includes(q?.kind) ? q.kind : 'sight';
-      const options = list(q?.options)
+      const entries = list(q?.options)
         .filter((item) => placeText(item?.name))
-        .slice(0, 6)
+        .slice(0, 24)
         .map((item) => {
           const name = placeText(item.name);
           const slug =
@@ -95,10 +111,57 @@ export function normalizeQuestions(result, runId) {
           };
           return { option, stop, catalogId: item.catalogId, photoPage: publicPage(item.photoPage) };
         });
+      const options = [];
+      for (const entry of entries) addDistinct(options, entry);
       return options.length
         ? [{ id: 'q' + (i + 1), kind, title: placeText(q.title) || titles[kind], multi: true, options }]
         : [];
     });
+}
+function combineQuestions(questions, incoming, allowed, requireSource = false) {
+  for (const question of incoming) {
+    if (!allowed.includes(question.kind)) continue;
+    let target = questions.find(item => item.kind === question.kind);
+    if (!target) {
+      target = { ...question, id: 'q' + (questions.length + 1), options: [] };
+      questions.push(target);
+    }
+    for (const entry of question.options) {
+      if (requireSource && !entry.option.src) continue;
+      const elsewhere = questions.some(other => other !== target && other.options.some(item => sameVenue(item, entry)));
+      if (!elsewhere) addDistinct(target.options, entry);
+    }
+  }
+}
+async function discoverQuestions(discovery, restrictions, ctx) {
+  const categories = ['food', 'sight'];
+  if (discovery.days > 1 && discovery.stay?.mode !== 'booked') categories.push('stay');
+  const input = { setup: discovery, restrictions, categories };
+  const result = await model(prompt, input, { ...ctx, operation: 'candidates', searches: 3 });
+  const runId = ++run;
+  const ids = new Set();
+  const questions = [];
+  combineQuestions(questions, normalizeQuestions(result, runId, ids), categories);
+  const target = 4;
+  const gaps = categories.map(kind => {
+    const found = questions.find(q => q.kind === kind)?.options.length || 0;
+    return { kind, needed: target - found };
+  }).filter(gap => gap.needed > 0);
+  if (provider !== 'fake' && gaps.length) {
+    ctx.step('กำลังค้นตัวเลือกเพิ่มเติมให้กลุ่มเปรียบเทียบ');
+    const existing = questions.flatMap(q => q.options.map(entry => entry.option.name));
+    const missing = gaps.map(gap => gap.kind);
+    try {
+      const more = await model(prompt + ' รอบนี้เติมเฉพาะหมวดและจำนวนใน gaps ไม่ต้องส่งสถานที่ใน existing ซ้ำ ทุกสถานที่ที่เพิ่มต้องมีหน้าผลค้นสนับสนุน ถ้าไม่มีให้เว้น', {
+        ...input, categories: missing, gaps, existing,
+      }, { ...ctx, signal: AbortSignal.any([ctx.signal, AbortSignal.timeout(50_000)]), operation: 'candidates', searches: 2 });
+      combineQuestions(questions, normalizeQuestions(more, runId, ids), missing, true);
+    } catch {
+      ctx.signal.throwIfAborted();
+      ctx.step('ใช้ตัวเลือกที่ค้นได้ในรอบแรก');
+    }
+  }
+  return questions.filter(q => q.options.length);
 }
 async function group(items, width, work) {
   let cursor = 0;
@@ -145,12 +208,7 @@ export async function candidates(setup, ctx) {
   }
   const restrictions = setup.members.filter((m) => m.avoid).map((m) => ({ name: m.name, avoid: m.avoid }));
   ctx.step('กำลังค้นหาสถานที่ให้สมาชิกเลือก');
-  const result = await model(
-    prompt,
-    { setup: discovery, restrictions },
-    { ...ctx, operation: 'candidates', searches: 5 },
-  );
-  const questions = normalizeQuestions(result, ++run);
+  const questions = await discoverQuestions(discovery, restrictions, ctx);
   const items = questions.flatMap((q) => q.options);
   const offline = provider === 'fake';
   const batch = { remaining: 8 };
