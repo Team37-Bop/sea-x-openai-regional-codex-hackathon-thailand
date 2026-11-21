@@ -27,7 +27,6 @@
   color: var(--accent-dark);
   font-size: .88rem;
 }
-.planning-map .map-toolbar #map-title { display: none; }
 .review-totals {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

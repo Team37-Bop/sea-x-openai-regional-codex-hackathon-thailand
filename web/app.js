@@ -1110,6 +1110,7 @@ function setupInput(found, transportOnly = false) {
 const planningPanel = $('#planning-progress');
 function showPlanning(show) {
   planningPanel.hidden = !show;
+  if (show) $('#map-title').classList.add('map-accessible-text');
   $('.trip-board').classList.toggle('planning-map', show);
   $('.trip-bar').inert = show;
   if (!show) {
