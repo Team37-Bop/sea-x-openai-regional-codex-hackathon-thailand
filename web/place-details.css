@@ -186,22 +186,43 @@
   font-size: 0.75rem;
   color: var(--muted, #526354);
 }
-.place-reader .pd-menu {
+:is(.place-reader, .stop-menu) .pd-menu {
   margin: 0;
   padding: 0;
   list-style: none;
 }
-.place-reader .pd-menu li {
+:is(.place-reader, .stop-menu) .pd-menu li {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
   justify-content: space-between;
   gap: 2px 8px;
-  border-bottom: 1px solid var(--reader-border);
+  border-bottom: 1px solid var(--reader-border, var(--line));
   padding: 5px 0;
 }
-.place-reader .pd-menu li small {
+:is(.place-reader, .stop-menu) .pd-menu li small {
   flex-basis: 100%;
+}
+.stop-menu .stop-menu-toggle {
+  min-height: 32px;
+  margin: 0;
+  padding-inline: 0;
+  background: transparent;
+  border: 0;
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 0.18em;
+}
+.stop-menu-body {
+  margin-block: 4px;
+  padding: 6px 10px;
+  border-inline-start: 2px solid var(--edge);
+  font-size: 0.85rem;
+}
+.stop-menu-body > small {
+  display: block;
+  margin-top: 5px;
+  color: var(--muted);
 }
 .place-reader .pd-live:not(:empty) {
   border-top: 1px solid var(--reader-border);

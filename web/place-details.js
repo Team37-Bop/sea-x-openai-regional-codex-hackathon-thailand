@@ -4,6 +4,8 @@ import { samplePlaceInfo } from './sample-place-details.js';
 
 const current = new WeakMap();
 const cache = new Map();
+const pendingResearch = new Map();
+let nextMenu = 0;
 const category = {
   sight: 'สถานที่เที่ยว',
   nature: 'ธรรมชาติ',
@@ -114,6 +116,9 @@ function formatRange(value) {
   if (Array.isArray(value)) return value.map(plain).filter(Boolean).join('–');
   return plain(value);
 }
+function isMeal(stop) {
+  return Boolean(stop.meal) || /food|restaurant|ร้านอาหาร|คาเฟ่|อาหาร/i.test(stop.k || stop.kind || '');
+}
 export function plannedVisit({ stop, day, setup, stay, bookingStatus }) {
   const name = plain(stop.n || stop.name);
   const from = stop.t0 || stop.start,
@@ -137,7 +142,7 @@ export function plannedVisit({ stop, day, setup, stay, bookingStatus }) {
     })
     .join(' · ');
   const kind = plain(stop.k || stop.kind);
-  const meal = Boolean(stop.meal) || /food|restaurant|ร้านอาหาร|คาเฟ่|อาหาร/i.test(kind);
+  const meal = isMeal(stop);
   const lodging = /hotel|stay|ที่พัก|โรงแรม/i.test(kind);
   const booking = typeof bookingStatus === 'object' ? bookingStatus?.state : bookingStatus;
   const wish = arr(setup?.members)
@@ -241,6 +246,21 @@ function contact(phone) {
   a.href = 'tel:' + phone.replace(/[^\d+]/g, '');
   return a;
 }
+function dishList(dishes) {
+  const menu = el('ul', '', 'pd-menu');
+  for (const dish of arr(dishes)) {
+    if (!plain(dish?.name)) continue;
+    const row = el('li');
+    row.append(el('strong', plain(dish.name)));
+    if (Number.isFinite(dish.price)) row.append(el('span', money(dish.price)));
+    if (dish.priceLocal?.currency && Number.isFinite(dish.priceLocal.amount))
+      row.append(el('small', number.format(dish.priceLocal.amount) + ' ' + dish.priceLocal.currency));
+    if (dish.veg || plain(dish.why))
+      row.append(el('small', [dish.veg ? 'มังสวิรัติ' : '', plain(dish.why)].filter(Boolean).join(' · ')));
+    menu.append(row);
+  }
+  return menu.childElementCount ? menu : null;
+}
 function paintInfo({ results, photos }, visit, stop, info, sample) {
   const parts = [];
   const images = gallery(info.photos, visit.name);
@@ -261,22 +281,8 @@ function paintInfo({ results, photos }, visit, stop, info, sample) {
     ['ติดต่อ', contact(plain(info.phone) || visit.phone)],
   ]);
   if (details) parts.push(section('ข้อมูลสำหรับการไปเยือน', details));
-  const dishes = arr(info.dishes);
-  if (visit.meal && dishes.length) {
-    const menu = el('ul', '', 'pd-menu');
-    for (const dish of dishes) {
-      if (!plain(dish?.name)) continue;
-      const row = el('li');
-      row.append(el('strong', plain(dish.name)));
-      if (Number.isFinite(dish.price)) row.append(el('span', money(dish.price)));
-      if (dish.priceLocal?.currency && Number.isFinite(dish.priceLocal.amount))
-        row.append(el('small', number.format(dish.priceLocal.amount) + ' ' + dish.priceLocal.currency));
-      if (dish.veg || plain(dish.why))
-        row.append(el('small', [dish.veg ? 'มังสวิรัติ' : '', plain(dish.why)].filter(Boolean).join(' · ')));
-      menu.append(row);
-    }
-    if (menu.childElementCount) parts.push(section(sample ? 'ไอเดียมื้ออาหารในเดโม' : 'เมนูแนะนำ', menu));
-  }
+  const menu = visit.meal && dishList(info.dishes);
+  if (menu) parts.push(section(sample ? 'ไอเดียมื้ออาหารในเดโม' : 'เมนูแนะนำ', menu));
   if (visit.why) parts.push(section('เหตุผลที่เลือกที่พักนี้', el('p', visit.why)));
   const tips = items(info.tips);
   if (tips) parts.push(section('ก่อนออกเดินทาง', tips));
@@ -334,6 +340,127 @@ function header(container, context, visit) {
   container.replaceChildren(head, photos, plan, results, live);
   return { photos, results, live, close };
 }
+function initialResearch({ city, stop, sample, liveResearch }) {
+  const name = plain(stop.n || stop.name);
+  const key = JSON.stringify([city, stop.id, name, stop.ll, stop.query]);
+  const offline = sample && !liveResearch;
+  const saved = !offline && cache.get(key);
+  return {
+    key,
+    initial: saved?.expires > Date.now() ? saved.info : null,
+    local: sample ? samplePlaceInfo(city, name) : {},
+    offline,
+  };
+}
+async function fetchPlaceInfo({ city, stop }, signal, onStep) {
+  const response = await fetch('/api/place-info', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    signal,
+    body: JSON.stringify({
+      city,
+      stop: {
+        id: stop.id, n: plain(stop.n || stop.name), k: isMeal(stop) ? 'food' : stop.k || stop.kind,
+        ll: stop.ll, note: stop.note, query: stop.query, aliases: stop.aliases, place: stop.place,
+      },
+    }),
+  });
+  const result = await readEvents(response, (event) => {
+    if (event.type === 'step' && !signal.aborted) onStep(plain(event.text));
+  });
+  signal.throwIfAborted();
+  if (!result?.info) throw new Error('ยังไม่มีข้อมูลสถานที่เพิ่มเติม');
+  return result.info;
+}
+async function researchPlace(context, key, signal, onStep) {
+  signal.throwIfAborted();
+  let request = pendingResearch.get(key);
+  if (!request) {
+    const controller = new AbortController();
+    const listeners = new Set();
+    const promise = fetchPlaceInfo(context, controller.signal, (text) => {
+      for (const notify of listeners) notify(text);
+    }).then((info) => {
+      if (cache.size >= 100) cache.delete(cache.keys().next().value);
+      cache.set(key, { info, expires: Date.now() + 30 * 60_000 });
+      return info;
+    }).finally(() => {
+      if (pendingResearch.get(key) === request) pendingResearch.delete(key);
+    });
+    request = { controller, listeners, promise };
+    pendingResearch.set(key, request);
+  }
+  request.listeners.add(onStep);
+  const release = () => {
+    request.listeners.delete(onStep);
+    if (!request.listeners.size && pendingResearch.get(key) === request) {
+      pendingResearch.delete(key);
+      request.controller.abort();
+    }
+  };
+  signal.addEventListener('abort', release, { once: true });
+  try {
+    return await request.promise;
+  } finally {
+    signal.removeEventListener('abort', release);
+    release();
+  }
+}
+export function createStopMenu(context) {
+  const { stop, signal } = context;
+  if (!isMeal(stop)) return null;
+  const menu = el('div', '', 'stop-menu');
+  const body = el('div', '', 'stop-menu-body');
+  body.id = 'stop-menu-' + ++nextMenu;
+  body.hidden = true;
+  const toggle = click('ดูเมนูแนะนำ', () => {
+    body.hidden = !body.hidden;
+    toggle.textContent = body.hidden ? 'ดูเมนูแนะนำ' : 'ซ่อนเมนูแนะนำ';
+    toggle.setAttribute('aria-expanded', String(!body.hidden));
+    if (body.hidden) controller?.abort();
+    else void load();
+  }, 'stop-menu-toggle');
+  toggle.setAttribute('aria-controls', body.id);
+  toggle.setAttribute('aria-expanded', 'false');
+  menu.addEventListener('click', (event) => event.stopPropagation());
+  menu.append(toggle, body);
+  let controller;
+  const show = (info, sample) => {
+    const dishes = dishList(info.dishes);
+    body.replaceChildren();
+    if (!dishes) {
+      body.append(el('p', sample ? 'ยังไม่มีเมนูตัวอย่างของร้านนี้' : 'ยังไม่พบเมนูแนะนำของร้านนี้'));
+      return;
+    }
+    body.append(dishes);
+    if (sample) body.append(el('small', 'เมนูตัวอย่าง'));
+    else if (info.confidence !== 'web') body.append(el('small', 'ข้อมูลเมนูโดยประมาณ'));
+  };
+  async function load() {
+    if (signal?.aborted) return;
+    const { key, initial, local, offline } = initialResearch(context);
+    if (initial || offline) return show(initial || local, !initial);
+    controller?.abort();
+    controller = new AbortController();
+    const active = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
+    const status = el('p', 'กำลังค้นเมนูแนะนำ…');
+    status.setAttribute('role', 'status');
+    body.replaceChildren(status);
+    try {
+      const info = await researchPlace(context, key, active, (text) => { status.textContent = text; });
+      if (!active.aborted) show(info, false);
+    } catch (error) {
+      if (active.aborted) return;
+      status.textContent = plain(error.message) || 'ค้นเมนูไม่สำเร็จ';
+      const retry = click('ลองค้นอีกครั้ง', () => {
+        toggle.focus();
+        void load();
+      }, 'quiet');
+      body.append(retry);
+    }
+  }
+  return menu;
+}
 export function closePlaceSheet(panel, { restoreFocus = true } = {}) {
   if (!panel || panel.hidden) return;
   const active = current.get(panel);
@@ -346,11 +473,11 @@ export function closePlaceSheet(panel, { restoreFocus = true } = {}) {
     (item) => item.dataset.stopId === active.id,
   );
   const origin = active.origin;
-  const focus = origin?.isConnected && origin !== document.body ? origin : row;
+  const focus = origin?.isConnected && origin !== document.body ? origin : row?.querySelector('.stop-open') || row;
   focus?.focus();
 }
 export async function openPlaceSheet(context) {
-  const { panel, content, stop, city, sample } = context;
+  const { panel, content, stop, sample } = context;
   const previous = current.get(panel);
   previous?.controller.abort();
   const controller = new AbortController(),
@@ -360,10 +487,7 @@ export async function openPlaceSheet(context) {
   const visit = plannedVisit(context);
   const reader = header(content, context, visit);
   const { live, close } = reader;
-  const local = sample ? samplePlaceInfo(city, visit.name) : {};
-  const key = JSON.stringify([city, stop.id, visit.name, stop.ll, stop.query]);
-  const cached = (!sample || context.liveResearch) && cache.get(key);
-  const initial = cached?.expires > Date.now() ? cached.info : null;
+  const { key, initial, local, offline } = initialResearch(context);
   paintInfo(reader, visit, stop, initial || local, sample && !initial);
   panel.hidden = false;
   panel.scrollTop = 0;
@@ -379,43 +503,17 @@ export async function openPlaceSheet(context) {
     },
     { signal },
   );
-  if ((sample && !context.liveResearch) || initial) return;
+  if (offline || initial) return;
   async function research() {
     content.querySelector('.pd-heading').after(live);
     live.textContent = 'กำลังค้นรายละเอียดและรูปสถานที่…';
     try {
-      const response = await fetch('/api/place-info', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        signal,
-        body: JSON.stringify({
-          city,
-          stop: {
-            id: stop.id,
-            n: visit.name,
-            k: visit.meal ? 'food' : stop.k || stop.kind,
-            ll: stop.ll,
-            note: stop.note,
-            query: stop.query,
-            aliases: stop.aliases,
-            place: stop.place,
-          },
-        }),
-      });
-      const terminal = await readEvents(response, (event) => {
-        if (event.type === 'step' && !signal.aborted) live.textContent = plain(event.text);
-      });
+      const info = await researchPlace(context, key, signal, (text) => { live.textContent = text; });
       if (signal.aborted) return;
-      if (!terminal?.info) throw new Error('ยังไม่มีข้อมูลสถานที่เพิ่มเติม');
-      if (cache.size >= 100) cache.delete(cache.keys().next().value);
-      cache.set(key, {
-        info: terminal.info,
-        expires: Date.now() + 30 * 60_000,
-      });
-      paintInfo(reader, visit, stop, terminal.info, false);
+      paintInfo(reader, visit, stop, info, false);
       content.append(live);
       live.textContent =
-        terminal.info.confidence === 'web'
+        info.confidence === 'web'
           ? 'รายละเอียดจากแหล่งข้อมูลที่ระบุ'
           : 'รายละเอียดเพิ่มเติมเป็นข้อมูลประมาณ';
     } catch (error) {

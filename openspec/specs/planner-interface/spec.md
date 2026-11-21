@@ -113,3 +113,9 @@ The desktop workspace SHALL keep the timeline or booking list at the left and th
 
 - **WHEN** the organizer selects an itinerary row or map marker
 - **THEN** the same stop is selected on the map and timeline. The place card opens beside the map or below it at narrow widths. Escape or the close control restores focus to the stop.
+
+#### Scenario: Open a timeline stop
+
+- **WHEN** a traveler taps the place name, time or body of a stop, or activates its name with Enter or Space
+- **THEN** the place panel opens. The card has one primary action named for the stop. Reservation actions remain independent. Meals on the committed itinerary also offer an inline menu toggle, which can expand or collapse without opening the place panel.
+- **AND** the plan tab displays the trip summary and stop notes directly when available.

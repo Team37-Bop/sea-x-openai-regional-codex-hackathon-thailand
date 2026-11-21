@@ -759,10 +759,6 @@ dialog::backdrop {
   color: var(--muted);
   font-size: 0.85rem;
 }
-.summary-note summary {
-  color: var(--accent-dark);
-  font-weight: 600;
-}
 .summary-note p {
   max-width: 90ch;
   padding: 9px 12px;
@@ -1002,7 +998,7 @@ button[aria-pressed="true"] {
   box-shadow: inset 3px 0 #d4761c;
 }
 .stop[data-focused='true']::before { background: #a24c0e; }
-.stop:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.stop:has(.stop-open:focus-visible) { outline: 2px solid var(--accent); outline-offset: 1px; }
 .stop time {
   grid-area: time;
   text-align: right;
@@ -1046,7 +1042,7 @@ button[aria-pressed="true"] {
   color: #774a0b;
 }
 .stop-chip[data-status='closed'], .stop .feedback { color: #963627; background: #fff0e9; }
-.stop button {
+.stop .stop-actions button {
   border-radius: 6px;
   min-height: 25px;
   padding: 2px 7px;
@@ -1055,6 +1051,22 @@ button[aria-pressed="true"] {
   font-weight: 580;
 }
 .stop .stop-actions button { margin: 0; }
+.stop .stop-open {
+  appearance: none;
+  padding: 0;
+  margin: 0;
+  min-height: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+}
+.stop-open::after { content: ''; position: absolute; inset: 0; }
+.stop .stop-open:focus-visible { outline: none; }
+.stop .stop-actions, .stop details, .stop .stop-menu { position: relative; z-index: 1; }
+.stop .stop-actions { width: fit-content; }
+.stop .stop-note { margin-top: 4px; }
 .leg {
   margin: 0 0 0 66px;
   padding: 2px 0 3px 20px;

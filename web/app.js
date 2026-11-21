@@ -1,6 +1,6 @@
 import { renderBookingTasks, reservationStatus, setReservationDone } from './booking-tasks.js';
 import { describePlanChange, renderPlanReview } from './plan-review.js';
-import { openPlaceSheet, closePlaceSheet } from './place-details.js';
+import { openPlaceSheet, closePlaceSheet, createStopMenu } from './place-details.js';
 import { attachLocationSuggestions } from './location-suggest.js';
 import { bindWorkspace, renderPeople } from './workspace-controls.js';
 import { installSetupExtras, chooseCandidates } from './setup-extras.js';
@@ -85,6 +85,7 @@ const history = [];
 let state = { plan: null, routes: {}, setup: {}, selected: 0, demo: true, bookings: {}, cancellations: [] };
 let busy = false;
 let focusedStop;
+let menuScope;
 let original, preview, activePlanning, activeReplan, timer;
 let allDays = false,
   view = 'plan',
@@ -92,7 +93,6 @@ let allDays = false,
 function presentSummary(text) {
   const summary = $('#plan-summary');
   summary.hidden = !text;
-  summary.open = false;
   summary.querySelector('p').textContent = text || '';
   status.textContent = '';
 }
@@ -228,6 +228,12 @@ function formatDay(day) {
 function render() {
   const plan = preview?.plan || state.plan;
   const day = plan?.days[state.selected];
+  const menuDay = view === 'plan' && !preview ? day : null;
+  const liveResearch = hasLiveService();
+  if (menuScope?.day !== menuDay || menuScope?.liveResearch !== liveResearch) {
+    menuScope?.controller.abort();
+    menuScope = { day: menuDay, liveResearch, controller: new AbortController(), menus: new Map() };
+  }
   $('#views').hidden = !plan;
   $('#plan-panel').hidden = view !== 'plan';
   $('#book-panel').hidden = view !== 'book';
@@ -308,19 +314,8 @@ function render() {
           ),
         );
       const row = node('article', null, 'stop');
-      row.tabIndex = 0;
       row.dataset.stopId = stop.id;
-      row.addEventListener('click', (event) => {
-        if (!event.target.closest('button, a, input')) place(stop);
-      });
       row.dataset.focused = String(stop.id === focusedStop);
-      row.setAttribute('aria-label', stop.name + ' รายละเอียด');
-      row.addEventListener('keydown', (event) => {
-        if (event.target === row && [' ', 'Enter'].includes(event.key)) {
-          event.preventDefault();
-          place(stop);
-        }
-      });
       const time = node('time', stop.start);
       if (stop.end && stop.end !== stop.start) time.append(node('small', stop.end));
       const content = node('div');
@@ -348,11 +343,17 @@ function render() {
         note.dataset.status = added ? 'added' : 'moved';
         content.append(note);
       }
-      content.append(node('h3', stop.name), meta);
+      const heading = node('h3');
+      const openStop = button(stop.name, () => place(stop), 'stop-open');
+      openStop.setAttribute('aria-label', stop.name + ' ' + stop.start + ' ดูรายละเอียดสถานที่');
+      openStop.setAttribute('aria-controls', 'place-panel');
+      if (stop.id === focusedStop) openStop.setAttribute('aria-current', 'true');
+      heading.append(openStop);
+      content.append(heading, meta);
       const badge = forecast.badge(stop, state.selected, plan);
       if (badge) content.append(badge);
+      if (stop.note) content.append(node('p', stop.note, 'stop-note'));
       const actions = node('div', null, 'stop-actions');
-      actions.append(button('รายละเอียด', () => place(stop)));
       if (stop.res?.todo || stop.res?.done || state.bookings[stop.id]) {
         const booked = reservationStatus(state, stop);
         const mark = button(booked === 'move' ? 'ต้องโทรเลื่อน' : booked === 'done' ? 'จองแล้ว ✓' : 'ทำเครื่องหมายว่าจองแล้ว', () => {
@@ -362,7 +363,15 @@ function render() {
         mark.dataset.status = booked;
         actions.append(mark);
       }
-      content.append(actions);
+      if (actions.childElementCount) content.append(actions);
+      if (menuDay) {
+        if (!menuScope.menus.has(stop.id))
+          menuScope.menus.set(stop.id, createStopMenu({
+            city: plan.city, stop, sample: state.sample === true, liveResearch, signal: menuScope.controller.signal,
+          }));
+        const menu = menuScope.menus.get(stop.id);
+        if (menu) content.append(menu);
+      }
       row.append(time, content);
       $('#itinerary').append(row);
     }
@@ -467,7 +476,7 @@ function place(stop) {
     setup: state.setup,
     stay: plan.flags?.stay,
     bookingStatus: state.bookings[stop.id]?.state,
-    opener: [...document.querySelectorAll('[data-stop-id]')].find(row => row.dataset.stopId === stop.id),
+    opener: document.querySelector('.stop[data-focused="true"] .stop-open'),
     sample: state.sample === true,
     liveResearch: hasLiveService(),
   });
