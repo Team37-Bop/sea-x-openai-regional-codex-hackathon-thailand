@@ -119,3 +119,17 @@ The server SHALL trim incoming names to 120 characters, kinds to 20, notes to 30
 #### Scenario: Photo lookup has limited evidence
 - **WHEN** no exact image or matching page preview survives
 - **THEN** the collector checks nearby Commons files for a distinctive name token and an eligible raster extension. With no match it returns an empty photo list and the remaining place details
+
+### Requirement: Stop details in the trip workspace
+
+The timeline and map SHALL open the same place panel, with the visit date, itinerary time, budget, traveler wishes, directions and any known booking information available immediately. The panel SHALL progressively display researched information, photos with credits and clickable sources. A failed request SHALL retain itinerary facts and offer a retry.
+
+#### Scenario: Opening an activity on another day
+
+- **WHEN** the organizer selects a marker for another day on the whole-trip map
+- **THEN** the timeline switches to that activity and highlights it. Closing the details returns keyboard focus to the selected stop.
+
+#### Scenario: Opening a sample activity
+
+- **WHEN** a sample stop opens with a live service configured
+- **THEN** its itinerary facts appear immediately while the backend researches the actual place. The offline sample remains readable without a model connection.

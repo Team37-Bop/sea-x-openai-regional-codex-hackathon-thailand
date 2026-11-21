@@ -1,17 +1,6 @@
 import { readEvents } from './stream.js';
 
 const money = new Intl.NumberFormat('th-TH', { maximumFractionDigits: 0 });
-const kinds = {
-  food: 'อาหาร',
-  sight: 'สถานที่เที่ยว',
-  hotel: 'ที่พัก',
-  stay: 'ย่านที่พัก',
-  nature: 'ธรรมชาติ',
-  view: 'จุดชมวิว',
-  terminal: 'จุดเดินทาง',
-  transit: 'สถานีเดินทาง',
-  market: 'ตลาด',
-};
 const travel = { flight: 'เครื่องบิน', bus: 'รถบัส', train: 'รถไฟ', drive: 'รถยนต์' };
 function plain(value) {
   return typeof value === 'string'
@@ -405,119 +394,6 @@ export function installSetupExtras(form, readSetup) {
     legs.depart.restore(setup.depart, flags.transport?.back);
   };
   return augment;
-}
-function presentFacts(content, info, stop) {
-  const checked = info.confidence === 'web' || (stop.src?.checked === 'web' && mediaUrl(stop.src.url));
-  content.append(element('p', checked ? 'ตรวจจากเว็บ' : 'ข้อมูลประมาณ', 'muted'));
-  const summary = plain(info.summary),
-    what = plain(info.details?.what);
-  if (summary) content.append(element('p', summary));
-  if (what && what !== summary) content.append(element('p', what));
-  const appendList = (heading, items) => {
-    const texts = (Array.isArray(items) ? items : []).map(plain).filter(Boolean);
-    if (!texts.length) return;
-    const ul = element('ul');
-    for (const text of texts) ul.append(element('li', text));
-    content.append(element('h3', heading), ul);
-  };
-  appendList('จุดเด่น', info.details?.highlights);
-  const facts = element('dl');
-  for (const [label, value] of [
-    ['ราคา', info.details?.price || info.priceRange],
-    ['เวลาเปิด', info.hours || info.details?.hours],
-    ['ที่อยู่', info.details?.address],
-    ['คะแนนรีวิว', info.details?.rating],
-    ['การจอง', info.details?.booking],
-    ['โทรศัพท์', info.phone],
-  ]) {
-    if (plain(value)) facts.append(element('dt', label), element('dd', plain(value)));
-  }
-  if (facts.childElementCount) content.append(facts);
-  if ((stop.k ?? stop.kind) === 'food' && Array.isArray(info.dishes) && info.dishes.length) {
-    const menu = element('ul');
-    for (const dish of info.dishes) {
-      if (!plain(dish?.name)) continue;
-      const baht = Number.isFinite(dish.price) ? ' · ฿' + money.format(dish.price) : '';
-      const why = plain(dish.why);
-      menu.append(element('li', plain(dish.name) + baht + (why ? ' · ' + why : '')));
-    }
-    if (menu.childElementCount) content.append(element('h3', 'เมนูแนะนำ'), menu);
-  }
-  appendList('ข้อแนะนำ', info.tips);
-  for (const photo of (info.photos ?? []).slice(0, 4)) {
-    const figure = photoFigure(photo, stop.n ?? stop.name);
-    if (figure) content.append(figure);
-  }
-  const sources = element('ul'),
-    used = new Set();
-  for (const source of [...(info.sources ?? []), stop.src?.checked === 'web' ? stop.src : null]) {
-    const target = link(source?.url, source?.title);
-    if (!target || used.has(target.href)) continue;
-    used.add(target.href);
-    const li = element('li');
-    li.append(target);
-    sources.append(li);
-  }
-  if (sources.childElementCount) content.append(element('h3', 'แหล่งข้อมูล'), sources);
-}
-const sheets = new WeakMap();
-export async function openPlaceSheet({ dialog, content, stop, city, sample = false }) {
-  sheets.get(dialog)?.abort();
-  const ctrl = new AbortController();
-  sheets.set(dialog, ctrl);
-  const abort = () => ctrl.abort();
-  dialog.addEventListener('close', abort, { once: true });
-  const n = stop.n ?? stop.name,
-    k = stop.k ?? stop.kind;
-  const tokens = [
-    kinds[k] || 'กิจกรรม',
-    [stop.start ?? stop.t0, stop.end ?? stop.t1].filter(Boolean).join('–'),
-  ].filter(Boolean);
-  content.replaceChildren(element('h2', plain(n)), element('p', tokens.join(' · '), 'muted'));
-  if (!dialog.open) dialog.showModal();
-  const progress = element('p', null, 'muted');
-  progress.setAttribute('role', 'status');
-  content.append(progress);
-  try {
-    if (sample) {
-      presentFacts(
-        content,
-        {
-          summary: plain(stop.note) || 'จุดแวะในทริปตัวอย่าง',
-          priceRange: Number.isFinite(stop.cost) ? '฿' + money.format(stop.cost) + ' / คน' : '',
-          hours: typeof stop.open === 'string' ? stop.open : '',
-          phone: stop.res?.phone,
-        },
-        stop,
-      );
-      return;
-    }
-    progress.textContent = 'กำลังค้นรายละเอียดสถานที่…';
-    const payload = {
-      city,
-      stop: {
-        id: stop.id,
-        n,
-        k,
-        ll: stop.ll,
-        note: stop.note,
-        query: stop.query,
-        aliases: stop.aliases,
-        place: { query: stop.place?.query, aliases: stop.place?.aliases },
-      },
-    };
-    const result = await post('/api/place-info', payload, ctrl.signal, (value) => {
-      if (!ctrl.signal.aborted) progress.textContent = value;
-    });
-    if (!ctrl.signal.aborted && dialog.open) presentFacts(content, result.info || {}, stop);
-  } catch (error) {
-    if (!ctrl.signal.aborted)
-      content.append(element('p', plain(error.message) || 'ค้นข้อมูลสถานที่ไม่ได้', 'feedback'));
-  } finally {
-    progress.remove();
-    dialog.removeEventListener('close', abort);
-    if (sheets.get(dialog) === ctrl) sheets.delete(dialog);
-  }
 }
 export function candidateQuestions(result) {
   if (Array.isArray(result?.questions))

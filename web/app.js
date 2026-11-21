@@ -1,6 +1,7 @@
+import { openPlaceSheet } from './place-details.js';
 import { attachLocationSuggestions } from './location-suggest.js';
 import { bindWorkspace, renderPeople } from './workspace-controls.js';
-import { installSetupExtras, openPlaceSheet, chooseCandidates } from './setup-extras.js';
+import { installSetupExtras, chooseCandidates } from './setup-extras.js';
 import { createForecast } from './forecast.js';
 import { drawMap } from './map.js';
 import { readEvents } from './stream.js';
@@ -120,6 +121,7 @@ async function checkHealth() {
   }
   return readiness;
 }
+const hasLiveService = () => readiness?.ai === true && readiness.provider !== 'fake';
 let pendingVotes = null;
 const forecast = createForecast({
   getState: () => state,
@@ -219,7 +221,7 @@ function render() {
   $('#views').hidden = !plan;
   $('#plan-panel').hidden = view !== 'plan';
   $('#book-panel').hidden = view !== 'book';
-  document.querySelector('.actions').hidden = !plan || view !== 'plan';
+  document.querySelector('.command-panel').hidden = !plan;
   $('#plan-tab').setAttribute('aria-selected', String(view === 'plan'));
   $('#book-tab').setAttribute('aria-selected', String(view === 'book'));
   $('#whole-map').textContent = allDays ? 'ดูแผนที่ของวันที่เลือก' : 'ดูแผนที่ทั้งทริป';
@@ -291,6 +293,10 @@ function render() {
         );
       const row = node('article', null, 'stop');
       row.tabIndex = 0;
+      row.dataset.stopId = stop.id;
+      row.addEventListener('click', (event) => {
+        if (!event.target.closest('button, a, input')) place(stop);
+      });
       row.dataset.focused = String(stop.id === focusedStop);
       row.setAttribute('aria-label', stop.name + ' รายละเอียด');
       row.addEventListener('keydown', (event) => {
@@ -422,8 +428,7 @@ function render() {
   }
   forecast.renderStrip($('#alerts'), plan, state.selected);
   renderTripIntegrations($('#reservations'), state);
-  if (view === 'plan')
-    drawMap(
+  drawMap(
       allDays ? plan.days : [day],
       { ...state.routes, ...preview?.routes },
       place,
@@ -477,14 +482,25 @@ $('#reset-plan').onclick = () => {
 const detailContent = $('#detail-content');
 $('#detail-close').addEventListener('click', () => detail.close());
 function place(stop) {
+  const plan = preview?.plan || state.plan;
+  const index = plan.days.findIndex(day => day?.stops?.some(item => item.id === stop.id));
+  if (index >= 0) state.selected = index;
+  if (view !== 'plan') view = 'plan';
   focusedStop = stop.id;
   render();
+  document.querySelector('.stop[data-focused="true"]')?.scrollIntoView({ block: 'nearest' });
   return openPlaceSheet({
     dialog: detail,
     content: detailContent,
     stop,
-    city: state.plan.city,
+    city: plan.city,
+    day: plan.days[state.selected],
+    setup: state.setup,
+    stay: plan.flags?.stay,
+    bookingStatus: state.bookings[stop.id]?.state,
+    opener: [...document.querySelectorAll('[data-stop-id]')].find(row => row.dataset.stopId === stop.id),
     sample: state.sample === true,
+    liveResearch: hasLiveService(),
   });
 }
 async function demo() {
@@ -761,6 +777,7 @@ setupForm.addEventListener('submit', (event) => {
         return;
       }
       activePlanning = new AbortController();
+      status.textContent = 'กำลังอ่านข้อมูลทริปและความต้องการของสมาชิก…';
       $('#cancel-plan').hidden = false;
       const start = Date.now();
       timer = setInterval(() => {
@@ -851,6 +868,7 @@ function applyOption(option, routes) {
     ...state,
     plan: option.plan,
     setup: option.plan.setup,
+    ...(option.usage?.provider && option.usage.provider !== 'fake' ? { demo: false, sample: false, usage: option.usage } : {}),
     routes: { ...state.routes, ...routes },
     bookings,
     cancellations,
@@ -870,15 +888,17 @@ async function adjust(command, day = state.selected) {
   const pinnedPlan = structuredClone(state.plan);
   for (const stop of pinnedPlan.days.flatMap((d) => d.stops))
     if (state.bookings[stop.id]?.state === 'done') stop.res = { ...stop.res, done: true };
-  const input = { plan: pinnedPlan, setup: state.setup, command, day, demo: state.demo };
+  const offlineSample = state.sample && !hasLiveService();
+  const input = { plan: pinnedPlan, setup: state.setup, command, day, demo: Boolean(offlineSample) };
+  status.textContent = 'กำลังปรับแผนตามคำขอของคุณ…';
   if (
-    state.sample &&
+    offlineSample &&
     !/ฝน|น้ำตก|ร้าน.*(?:เต็ม|ปิด)|(?:เต็ม|ปิด).*ร้าน|ดีเลย์|เที่ยวบิน.*(?:ช้า|เลื่อน)/.test(command)
   ) {
     status.textContent = 'ลองพิมพ์ ฝนตก ร้านปิด ร้านเต็ม เที่ยวบินดีเลย์ หรือตัดน้ำตกออก';
     return;
   }
-  const result = state.sample
+  const result = offlineSample
     ? await (
         await import('/assets/sample-replan.js')
       ).replan(input, {
@@ -890,6 +910,7 @@ async function adjust(command, day = state.selected) {
         emit() {},
       })
     : await api('/api/replan', input);
+  for (const option of result.options || []) option.usage = result.usage;
   status.textContent = result.summary;
   if (!result.needs_vote) {
     applyOption(result.options[0], result.routes);

@@ -50,10 +50,12 @@ let map,
   loading,
   library,
   pending,
-  markers = [];
+  markers = [],
+  previousCamera;
 function paint() {
   if (!map?.isStyleLoaded() && !map?.getSource('trip')) return;
   const { days, routes, before, open, focusedStop } = pending;
+  let focusPoint;
   const points = [],
     features = [],
     modesUsed = new Set();
@@ -61,6 +63,7 @@ function paint() {
   markers = [];
   function pin(stop, p, index, ghost) {
     points.push(p);
+    if (stop.id === focusedStop) focusPoint = p;
     const el = document.createElement('button');
     el.className = 'map-pin' + (ghost ? ' removed' : '');
     el.type = 'button';
@@ -126,9 +129,14 @@ function paint() {
   document.querySelector('#leg-label').textContent =
     [...modesUsed].map((m) => labels[m] || m).join(' · ') +
     (features.some((f) => f.properties.approx) ? ' · เส้นประโดยประมาณ' : '');
-  if (points.length) {
+  map.resize();
+  const camera = JSON.stringify([focusedStop, days.map(d => d?.stops?.map(s => [s.id, s.ll]))]);
+  if (camera === previousCamera) return;
+  previousCamera = camera;
+  if (focusPoint) {
+    map.easeTo({ center: focusPoint, zoom: Math.max(map.getZoom(), 14), duration: 220 });
+  } else if (points.length) {
     const bounds = points.reduce((box, p) => box.extend(p), new library.LngLatBounds(points[0], points[0]));
-    map.resize();
     map.fitBounds(bounds, { padding: 35, maxZoom: 14, duration: 0 });
   }
 }

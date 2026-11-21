@@ -104,7 +104,7 @@ async function stream(response, signal, work) {
     if (!signal.aborted) response.write(JSON.stringify(event) + '\n');
   };
   const step = (text) => emit({ type: 'step', text });
-  const heartbeat = setInterval(() => step('Bop กำลังจัดเวลาให้ทันเวลาเปิด–ปิด'), 15_000);
+  const heartbeat = setInterval(() => emit({ type: 'heartbeat' }), 15_000);
   try {
     emit({ ...(await work({ signal, emit, step, usage: {} })), type: 'done' });
   } catch (error) {
