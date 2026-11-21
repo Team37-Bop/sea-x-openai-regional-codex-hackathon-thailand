@@ -147,7 +147,7 @@ export async function handleRequest(request, response) {
     if (request.method === 'GET' && saved) {
       const stored = await readLocalTrip(request, saved[1]);
       if (!stored) return json(response, { error: 'not_found' }, 404);
-      const trip = validateSavedPositions(stored);
+      const trip = await validateSavedPositions(stored);
       if (saved[2] === undefined) return json(response, { ...trip, summary: splitStopNote(trip.summary).text });
       const day = Number(saved[2]);
       if (!trip.plan.days[day]) return json(response, { error: 'not_found' }, 404);
@@ -164,16 +164,16 @@ export async function handleRequest(request, response) {
       return stream(response, abort.signal, async (ctx) => {
         const input = await body(request);
         if (id && input.action === undefined) {
-          return resolveLocalLodging(request, id, (saved) => needsAutoLodging(saved.plan)
-            ? resolveAutoLodging(validateSavedPositions(saved), ctx) : saved);
+          return resolveLocalLodging(request, id, async (saved) => needsAutoLodging(saved.plan)
+            ? resolveAutoLodging(await validateSavedPositions(saved), ctx) : saved);
         }
         const { action, optionId } = input;
         if (!['options', 'choose', 'recommend'].includes(action) || (action === 'choose' && (typeof optionId !== 'string' || !optionId.trim() || optionId.length > 1500)))
           throw bad('กรุณาเลือกวิธีเลือกที่พัก');
         if (!id) return statelessLodging(input, ctx);
-        const offer = await localLodgingOffers(request, id, (saved) => lodgingOffers(validateSavedPositions(saved), ctx));
+        const offer = await localLodgingOffers(request, id, async (saved) => lodgingOffers(await validateSavedPositions(saved), ctx));
         if (action === 'options') return offer;
-        const apply = (saved) => applyLodgingOffer(validateSavedPositions(saved), offer, action, optionId, ctx);
+        const apply = async (saved) => applyLodgingOffer(await validateSavedPositions(saved), offer, action, optionId, ctx);
         return resolveLocalLodging(request, id, apply, action + '-' + (optionId || ''));
       });
     }

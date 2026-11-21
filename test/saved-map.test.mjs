@@ -9,7 +9,7 @@ import { plannedVisit } from '../web/place-details.js';
 const cache = await mkdtemp(join(tmpdir(), 'bop-saved-map-'));
 process.env.BOP_CACHE_DIR = cache;
 const { recoverSavedDay, validateSavedPositions } = await import('../server/saved-map.mjs');
-const { findSavedVenue } = await import('../server/geo.mjs');
+const { findPlace, findSavedVenue } = await import('../server/geo.mjs');
 const { matchesPick } = await import('../server/pick-match.mjs');
 const { schedule } = await import('../server/schedule.mjs');
 const { validatePlan } = await import('../server/plan.mjs');
@@ -72,6 +72,37 @@ test('archived geocoding requires the street, house number and business identity
   assert.deepEqual(await findSavedVenue({query}, first, signal, {remaining:0}), cafe);
 });
 
+test('a station branch cannot use a brand-only cache hit or a different street with the same brand', async t => {
+  const brand = 'Acorn Coffee', stop = { id:'coffee', name:brand + ' — East Station Main Concourse', kind:'food',
+    query:brand + ' East Station Main Concourse, 12 A Station Road, Test City', place:{source:'geocoded'}, ll:cafe };
+  const setup = {city:'Test City', cityLL:first, startDate:'2026-11-26', days:1, members:[{id:'a'}]};
+  const signal = new AbortController().signal;
+  let street = 'Other Road', house = '12A';
+  const queried = [];
+  t.mock.method(globalThis, 'fetch', async url => {
+    queried.push(url.searchParams.get('q'));
+    const hit = {properties:{name:brand, street, housenumber:house, osm_key:'amenity', osm_value:'cafe'},
+      geometry:{coordinates:[cafe[1],cafe[0]]}};
+    return new Response(JSON.stringify(url.hostname.includes('photon') ? {features:[hit]} : []));
+  });
+  await findPlace(brand, first, 40, signal);
+  const saved = {plan:{setup,days:[{stops:[stop,{id:'next',leg:{key:'from-coffee'}}]}]},routes:{'from-coffee':{geom:[]}}};
+  const safe = await validateSavedPositions(saved);
+  assert.equal(safe.plan.days[0].stops[0].ll,null);
+  assert.equal(safe.plan.days[0].stops[1].leg.unlocated,true);
+  assert.deepEqual(safe.routes,{});
+  assert.deepEqual(saved.plan.days[0].stops[0].ll,cafe);
+  queried.length = 0;
+  const generated = await schedule({stops:[stop]},0,setup,{signal},[],new Set());
+  assert.equal(generated.day.stops[0].place.fallback,true);
+  assert.ok(queried.length && !queried.includes(brand));
+  street = 'Station Road'; house = '12B';
+  assert.equal(await findSavedVenue(stop,first,signal,{remaining:0}),null);
+  house = '12A';
+  assert.deepEqual(await findSavedVenue(stop,first,signal,{remaining:0}),cafe);
+  assert.equal(await validateSavedPositions(saved),saved);
+});
+
 test('unknown inbound distance is exposed when the archived stop or its neighbour lacks a position', () => {
   const {plan} = sample(), day = plan.days[0], stop = day.stops[1];
   const text = plannedVisit({stop,day,setup:{members:[]}}).legText;
@@ -91,7 +122,7 @@ test('replanning cannot assign a nearby museum pick to a placeholder hotel or re
   ]);
 });
 
-test('opening an archive removes only incompatible exact survey-coordinate assignments and their legs', () => {
+test('opening an archive removes only incompatible exact survey-coordinate assignments and their legs', async () => {
   const pick = { id:'venue', name:'Named Gallery', kind:'sight', ll:first };
   const misplaced = {id:'lunch',name:'Another business',kind:'food',ll:first,place:{source:'pick'}};
   const saved = {plan:{setup:{picks:{must:[pick]}},days:[{stops:[
@@ -100,7 +131,7 @@ test('opening an archive removes only incompatible exact survey-coordinate assig
     {...misplaced,id:'confirmed',place:{source:'geocoded'},leg:{key:'keep'}},
     {...misplaced,id:'pinned',pinned:true},
   ]}]},routes:{'from-lunch':{},keep:{geom:[]}}};
-  const safe = validateSavedPositions(saved), stops = safe.plan.days[0].stops;
+  const safe = await validateSavedPositions(saved), stops = safe.plan.days[0].stops;
   assert.deepEqual(stops.map(stop=>Boolean(stop.place.fallback)),[true,true,false,false,false]);
   assert.deepEqual(Object.keys(safe.routes),['keep']);
   assert.equal(stops[2].leg.unlocated,true);

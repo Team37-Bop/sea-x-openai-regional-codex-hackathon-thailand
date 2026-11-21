@@ -163,7 +163,7 @@ The map SHALL exclude synthetic city or neighbour coordinates marked as location
 #### Scenario: Geocoding an overseas stop for a Thai-language trip
 
 - **WHEN** the plan has a localized city name and an address or venue name in its own language
-- **THEN** search uses the original query, with the trip coordinates as its geographic bias, and can retry a shorter venue name or alias. A failed search does not permanently block future lookups. If an endpoint remains unresolved, its itinerary row remains accessible and the planner does not route to its placeholder coordinate.
+- **THEN** search uses the original query, with the trip coordinates as its geographic bias, and can retry a shorter venue name or alias. A branch with a recorded street address and building number requires branch or address evidence. A saved coordinate traced only to a generic brand lookup is hidden until the branch is verified. A failed search does not permanently block future lookups. If an endpoint remains unresolved, its itinerary row remains accessible and the planner does not route to its placeholder coordinate.
 
 #### Scenario: Opening a saved day with unconfirmed locations
 - **WHEN** an archived itinerary contains named venues whose geocoding failed

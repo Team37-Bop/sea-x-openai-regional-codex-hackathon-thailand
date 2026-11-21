@@ -60,7 +60,7 @@ The setup SHALL describe each direction as `arrive`/`depart` with `by` in flight
 - **THEN** the choice is kept (id, by, carrier, code, from, to, times, THB price, source, `checked`) and is used without a new search
 
 ### Requirement: Stay mode
-The setup SHALL carry `stay` as `{ mode: 'auto' }` or `{ mode: 'booked', stays: [{ name, nights }] }`, defaulting to auto, and SHALL accept the older `{ mode: 'booked', name }` shape as one stay for every night. The independent legacy `hotelArea` string is an area hint. A booked stay requires `stay.mode = booked`. Stays SHALL be in trip order, the first starting on night 1, and their nights SHALL add up to the trip's nights (days - 1).
+The setup SHALL carry `stay` as `{ mode: 'auto' }` or `{ mode: 'booked', stays: [{ name, nights }] }`, defaulting to auto, and SHALL accept the older `{ mode: 'booked', name }` shape as one stay for every night. The independent legacy `hotelArea` string is an area hint. Named legacy stays without a mode are treated as booked. An explicit auto mode uses Bop recommendations. Stays SHALL be in trip order, the first starting on night 1, and their nights SHALL add up to the trip's nights (days - 1).
 
 #### Scenario: Choosing how to arrange accommodation
 - **WHEN** the organizer opens trip setup

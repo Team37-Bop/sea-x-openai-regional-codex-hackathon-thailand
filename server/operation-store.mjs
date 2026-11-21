@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, writeFile, unlink } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const day = 86400;
@@ -31,8 +31,7 @@ async function execute(command, input) {
 
 // Serializing the whole read/modify/rename prevents lost changes between local requests.
 let pending = Promise.resolve();
-function local(edit, write = true) {
-  const path = file();
+function local(edit, write = true, path = file()) {
   const run = pending.then(async () => {
     let rows;
     try {
@@ -73,6 +72,23 @@ export function createOperationStore(send = execute) {
       ? (await command('Get', { Key: key(record_key), ConsistentRead: true })).Item
       : local((rows) => rows[record_key], false);
   const getTrip = (id) => get(tripKey(id));
+  const hotelCache = () => join(process.env.BOP_CACHE_DIR || fileURLToPath(new URL('./.cache', import.meta.url)), 'hotel-surveys.json');
+  async function rememberHotelSurvey(scope, options) {
+    const ref = randomUUID();
+    const item = { ...key('HOTEL_SURVEY#' + ref), scope, options, expires_at: now() + 2 * 3600 };
+    if (table()) await command('Put', { Item: item });
+    else await local(rows => {
+      for (const [id, row] of Object.entries(rows)) if (row.expires_at <= now()) delete rows[id];
+      rows[item.record_key] = item;
+    }, true, hotelCache());
+    return ref;
+  }
+  async function readSurveyHotel(ref, scope, id) {
+    if (!/^[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}$/i.test(ref)) return;
+    const pk = 'HOTEL_SURVEY#' + ref;
+    const item = table() ? await get(pk) : await local(rows => rows[pk], false, hotelCache());
+    if (item?.scope === scope && item.expires_at > now()) return item.options.find(row => row.id === id);
+  }
   const transaction = (TransactItems) =>
     send('TransactWrite', {
       TransactItems: TransactItems.map(([op, data]) => ({ [op]: { TableName: table(), ...data } })),
@@ -438,6 +454,8 @@ export function createOperationStore(send = execute) {
     }
   }
   return {
+    rememberHotelSurvey,
+    readSurveyHotel,
     getTrip,
     groupTrip,
     createTrip,

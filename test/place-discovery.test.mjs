@@ -565,11 +565,16 @@ test('tops up sparse London choices once, with distinct supported places and app
   const places = {
     food: ['Dishoom Covent Garden', 'Padella Borough', 'St John Smithfield', 'Brat Shoreditch'],
     sight: ['Tate Modern', 'National Gallery', 'British Museum', 'Tower of London'],
-    stay: ['Bloomsbury', 'South Bank', 'Kensington', 'Marylebone'],
+    stay: ['Waterloo Example Hotel', 'South Bank Example Inn', 'Waterloo Riverside Hotel', 'Waterloo Station Hotel'],
   };
   const href = name => 'https://venues.example/' + encodeURIComponent(name);
   const option = name => ({ name, query: name, photoPage: href(name), src: { url: href(name), checked: 'web' } });
-  const group = (kind, names) => ({ kind, options: names.map(option) });
+  const group = (kind, names) => ({ kind, options: names.map((name, i) => ({
+    ...option(name), ...(kind === 'stay' && {
+      kind: 'hotel', address: (10 + i) + ' Test Road, Waterloo, London', ll: [51.503 + i / 1000, -.11],
+      priceNight: i ? 0 : 3500,
+    }),
+  })) });
   let rounds, mode;
   t.mock.method(globalThis, 'fetch', async (input, init) => {
     const url = new URL(input);
@@ -583,10 +588,10 @@ test('tops up sparse London choices once, with distinct supported places and app
       if (data.gaps && mode === 'fail') return Response.json({ error: { code: 'invalid_api_key' } }, { status: 401 });
       let questions;
       if (data.gaps) {
-        questions = kinds.map(kind => group(kind, [...places[kind], 'Invented option']));
+        questions = kinds.map(kind => group(kind, [...places[kind], 'Invented option'])).reverse();
         questions.push(group('stay', ['Hotel nobody requested']));
       } else {
-        questions = kinds.map(kind => group(kind, full ? places[kind] : places[kind].slice(0, kind === 'food' ? 2 : 1)));
+        questions = kinds.map(kind => group(kind, full ? places[kind] : places[kind].slice(0, kind === 'food' ? 2 : 1))).reverse();
         if (!kinds.includes('stay')) questions.push(group('stay', ['Hotel nobody requested']));
       }
       const records = Object.values(places).flat().map(name => ({ url: href(name) }));
@@ -601,11 +606,17 @@ test('tops up sparse London choices once, with distinct supported places and app
     }] });
     throw Error('Unexpected request: ' + url);
   });
-  const base = { city: 'London', cityLL: [51.5,-0.1], country:'GB', startDate:'2026-11-22', members:[{ name:'A', avoid:'กุ้ง' }] };
-  for (const [days, stay, expected] of [[1, {mode:'auto'}, ['food','sight']], [5, {mode:'auto'}, ['food','sight','stay']], [5, {mode:'booked', stays:[{name:'Booked hotel', nights:4}]}, ['food','sight']]]) {
+  const base = { city: 'London', cityLL: [51.5,-0.1], country:'GB', hotelArea: 'Waterloo', startDate:'2026-11-22', members:[{ name:'A', avoid:'กุ้ง' }] };
+  for (const [days, stay, expected] of [
+    [1, {mode:'auto'}, ['food','sight']],
+    [5, {mode:'auto'}, ['stay','food','sight']],
+    [5, {mode:'booked', name:'A Booked Hotel'}, ['food','sight']],
+    [5, {stays:[{name:'First Booked Hotel',nights:2},{name:'Next Booked Hotel',nights:2}]}, ['food','sight']],
+  ]) {
     mode = 'sparse'; rounds = [];
     const result = await candidates(normalize({ ...base, days, stay }), context());
     assert.deepEqual(rounds.map(round => round.budget), [3,2]);
+    assert.deepEqual(rounds[0].data.categories, expected);
     assert.deepEqual(rounds[1].data.gaps.map(g => g.needed), expected.map(k => k === 'food' ? 2 : 3));
     assert.ok(rounds[1].data.existing.includes(places.food[0]));
     assert.equal(rounds[1].data.restrictions[0].avoid, 'กุ้ง');
@@ -615,6 +626,29 @@ test('tops up sparse London choices once, with distinct supported places and app
     for (const q of result.questions) {
       assert.deepEqual(q.options.map(o => o.name), places[q.kind]);
       assert.ok(q.options.every(o => o.src.checked === 'web' && o.photo.credit));
+      if (q.kind === 'stay') {
+        assert.equal(q.multi, false);
+        assert.ok(q.options.every(o => o.kind === 'hotel' && o.query.includes(o.address) && o.surveyRef && o.ll.length === 2));
+        assert.equal(q.options[0].priceNight, 3500);
+        assert.equal(q.options[1].priceNight, null);
+        // A second worker can restore server-issued evidence and pricing even if the browser alters the pick.
+        const { resolveSurveyPicks } = await import('../server/candidates.mjs?case=cold-hotel-worker');
+        const pick = q.options[0];
+        const restored = await resolveSurveyPicks({ ...base, days, picks: { must: [{...pick, priceNight:1, ll:[0,0], src:{checked:'web',url:'https://wrong.example/'} }] } });
+        assert.equal(restored.must[0].priceNight, 3500);
+        assert.deepEqual(restored.must[0].ll, pick.ll);
+        assert.equal(restored.must[0].src.url, pick.src.url);
+        const warm = await import('../server/candidates.mjs');
+        const otherDates = await warm.resolveSurveyPicks({...base, days, startDate:'2026-11-25', picks:{must:[pick]}});
+        assert.equal(otherDates.must[0].src, undefined);
+        assert.equal(otherDates.must[0].priceNight, undefined);
+        const later = Date.now() + 3 * 3600 * 1000;
+        const clock = t.mock.method(Date, 'now', () => later);
+        try {
+          const expired = await warm.resolveSurveyPicks({...base, days, picks:{must:[pick]}});
+          assert.equal(expired.must[0].src, undefined);
+        } finally { clock.mock.restore(); }
+      }
     }
   }
   for (const scenario of ['full','fail']) {
@@ -643,4 +677,22 @@ test('tops up sparse London choices once, with distinct supported places and app
   const exhausted = await candidates(setup, context(), { kind: 'food', exclude: places.food });
   assert.deepEqual(exhausted.questions, []);
   await assert.rejects(candidates(setup, context(), { kind: 'stay', exclude: [] }), /เลือกหมวด/);
+  rounds = [];
+  const hotels = await candidates(normalize({ ...base, days: 3 }), context(), { kind:'stay', exclude:places.stay.slice(0,2) });
+  assert.deepEqual(rounds[0].data.categories,['stay']);
+  assert.equal(rounds[0].data.setup.hotelArea,'Waterloo');
+  assert.deepEqual(hotels.questions[0].options.map(o => o.name), places.stay.slice(2));
+  assert.ok(hotels.questions[0].options.every(o => o.kind === 'hotel'));
+});
+
+test('a hotel question removes neighborhoods, generic lodging and hotels without a checked branch source', () => {
+  const src = { url:'https://lodging.example/waterloo', checked:'web' };
+  const property = {kind:'hotel',name:'Waterloo Example Hotel',address:'18 Test Road, Waterloo, London',ll:[51.50,-0.11],src};
+  const [question] = normalizeQuestions({ verified: new Set([src.url]), value:{questions:[{kind:'stay',options:[
+    {name:'Bloomsbury',query:'Bloomsbury, London',src}, {...property,name:'Waterloo'}, {...property,name:'Hotel'},
+    {...property,name:'Hotel near Waterloo'}, {...property,address:'',query:''},
+    {...property,name:'Unverified Hotel',src:{...src,url:'https://invented.example/'}}, property,
+  ]}]} },1,new Set(),{city:'London',hotelArea:'Waterloo'});
+  assert.deepEqual(question.options.map(entry => entry.option.name),[property.name]);
+  assert.equal(question.options[0].stop.k,'hotel');
 });

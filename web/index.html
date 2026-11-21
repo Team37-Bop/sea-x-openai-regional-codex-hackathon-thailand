@@ -181,10 +181,6 @@
             <section id="plan-summary" class="summary-note" aria-label="สรุปแผนจาก Bop" hidden>
               <p></p>
             </section>
-            <section id="lodging-notice" class="summary-note" aria-label="ที่พักสำหรับทริป" hidden>
-              <p role="status"></p>
-              <button class="quiet" type="button" hidden></button>
-            </section>
             <section class="checks panel">
               <div class="panel-heading">
                 <span class="tile-icon warm">
@@ -346,11 +342,11 @@
                   <div class="place-options">
                     <label class="preference-option">
                       <input type="radio" name="autonomy" value="auto" checked />
-                      <span>ไม่ต้องถาม จัดแผนเลย<small>ให้ Bop เลือกร้านและที่เที่ยวให้ แก้แผนทีหลังได้</small></span>
+                      <span>ไม่ต้องถาม จัดแผนเลย<small id="autonomy-auto-hint">ให้ Bop เลือกร้านอาหาร ที่เที่ยว และโรงแรมให้ แก้แผนทีหลังได้</small></span>
                     </label>
                     <label class="preference-option">
                       <input type="radio" name="autonomy" value="ask" />
-                      <span>ให้ Bop ถามก่อน<small>ดูร้านและที่เที่ยวที่ Bop แนะนำ แล้วเลือกที่สนใจก่อนจัดแผน</small></span>
+                      <span>ให้ Bop ถามก่อน<small id="autonomy-ask-hint">เลือกร้านอาหาร ที่เที่ยว และโรงแรมที่สนใจก่อนจัดแผน</small></span>
                     </label>
                   </div>
                 </fieldset>

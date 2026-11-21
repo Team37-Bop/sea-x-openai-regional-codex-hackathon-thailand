@@ -44,3 +44,18 @@ export const boundedStrings = (values, limit, length) =>
     .map((v) => placeText(v, length))
     .filter(Boolean)
     .slice(0, limit);
+
+export const plainAddress = value => String(value || '').normalize('NFKD').toLowerCase()
+  .replace(/[\u0300-\u036f]/g, '').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+const streetNumber = /^(\d+(?:\s+[a-z](?=\s)|[\p{L}]?)(?:\s*[-–]\s*\d+[\p{L}]?)?)\s+(.+)$/iu;
+export function numberedStreet(parts) {
+  return parts.slice(1).map(part => part.trim().match(streetNumber)).find(Boolean);
+}
+export function addressedBranch(stop) {
+  if (typeof stop.query !== 'string' || !['food', 'cafe', 'restaurant', 'hotel', 'stay'].includes(stop.kind || stop.k)) return;
+  const [brand, branch] = String(stop.name || stop.n || '').split(/\s+[—–]\s+/);
+  if (!branch) return;
+  const parts = stop.query.split(',');
+  const name = plainAddress(parts[0]);
+  if ((name === plainAddress(brand) || name === plainAddress(brand + ' ' + branch)) && numberedStreet(parts)) return brand;
+}

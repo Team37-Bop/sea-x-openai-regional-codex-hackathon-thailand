@@ -146,10 +146,10 @@ The plan SHALL set `plan.flags.stay = { area, why, booked?, examples[] }`; in au
 - **AND** the recommendation requires a usable location plus a selected property, corroborated venue identity, or a hotel source cited in the actual search. A missing or unverifiable result remains retryable. Model-provided coordinates remain marked as estimates. A source for a hotel’s identity does not establish room availability or a verified price.
 - **AND** the same hotel name and position apply to luggage, check-in, morning departures, nightly returns and checkout. Directions without a confirmed room price identify that cost as unknown. The booking screen identifies the suggestion separately from a reservation.
 
-#### Scenario: Present the overnight options with the finished itinerary
-- **WHEN** an overnight plan with automatic lodging is ready and the group has not chosen a property
-- **THEN** Bop presents the available hotels with the itinerary. Each option identifies the property, the room rate when known and an available source. The planner may use a provisional hotel to calculate the proposed route.
-- **AND** the traveler can select a property, accept Bop’s recommendation or dismiss the choices and return from an unresolved lodging stop. Choosing a property updates the trip without making a booking. Day trips and travelers who have already supplied a hotel skip this choice.
+#### Scenario: Use the hotel selected in the candidate survey
+- **WHEN** the traveler chooses a named hotel in the same pre-plan survey as restaurants and sights
+- **THEN** Bop uses that property for the overnight itinerary, including hotel departures and returns. The booking view lists it as the proposed accommodation. This choice does not reserve a room.
+- **AND** when the traveler skips the hotel question or requests direct planning, Bop can choose a verified recommendation. Finishing a plan opens the itinerary directly. Booked accommodation retains its original property and night assignments.
 
 #### Scenario: Open an older trip with a neighborhood and no selected hotel
 - **WHEN** lodging recommendations are enabled for that saved trip

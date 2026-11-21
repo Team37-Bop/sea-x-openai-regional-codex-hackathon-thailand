@@ -85,9 +85,88 @@ test('fresh overnight planning replaces a design that only named the area with t
   const stay=plan.flags.stay.stays[0];
   assert.deepEqual([stay.name,stay.cost,stay.checkIn,stay.checkOut],[venue.name,1200,setup.startDate,setup.endDate]);
   assert.equal(plan.flags.stay.booked,false);
-  assert.equal(plan.flags.stay.selection,'provisional');
+  assert.equal(plan.flags.stay.selection,'recommended');
   assert.equal(plan.flags.stay.recommendedId, plan.flags.stay.options[0].id);
   assert.deepEqual(plan.days.flatMap(d=>d.stops.map(s=>s.name)),[venue.name,venue.name]);
+});
+
+test('an offered hotel reaches itinerary design, overrides another suggested branch and anchors every stay without a lodging lookup', async t => {
+  const { operationalStore } = await import('../server/operation-store.mjs');
+  const other = { ...venue, name:'Different Suggested Hotel', ll:[51.509,-.12] };
+  const id = 'survey-hotel';
+  const offered = { id, kind:'hotel', name:venue.name, query:venue.query, address:'Example Street, Waterloo, London',
+    ll:venue.ll, priceNight:2800, src:{...venue.src,checked:'web'}, why:venue.why };
+  const ref = await operationalStore.rememberHotelSurvey(JSON.stringify([setup.city, '', setup.startDate, setup.days]), [offered]);
+  const ops = [];
+  t.mock.method(globalThis,'fetch',async (input, init) => {
+    const url = new URL(input);
+    if (url.hostname !== 'api.openai.com') return Response.json(url.hostname.includes('photon') ? {features:[]} : []);
+    const body = JSON.parse(init.body), op = body.text.format.name;
+    ops.push(op);
+    assert.ok(['bop_design','bop_repair'].includes(op),op);
+    if (op === 'bop_design') {
+      const data = JSON.parse(body.input[0].content.split('ข้อมูล JSON:\n').at(-1));
+      assert.equal(data.stayPlan[0].end, offered.name);
+      assert.deepEqual(data.stayPlan[1].startLL, offered.ll);
+    }
+    const value = op === 'bop_repair' ? {edits:[]} : {stay:{area:'Elsewhere',examples:[other]}, days:[
+      {stops:[stop('bags','hotel','ฝากกระเป๋าที่ '+other.name,other.ll), stop('bed','hotel',other.name,other.ll)]},
+      {stops:[stop('out','hotel',other.name,other.ll)]},
+    ]};
+    const response = {type:'response.completed',response:{status:'completed',output:[{type:'message',content:[
+      {type:'output_text',text:JSON.stringify(value),annotations:[]},
+    ]}]}};
+    return new Response('event: response.completed\ndata: '+JSON.stringify(response)+'\n\n');
+  });
+  const { plan } = await planTrip({...structuredClone(setup), picks:{must:[{ ...offered, surveyRef:ref, priceNight:1, src:{checked:'web',url:'https://wrong.example/'} }]}},ctx());
+  assert.ok(ops.includes('bop_design'));
+  assert.equal(plan.flags.stay.selection,'chosen');
+  assert.equal(plan.flags.stay.booked,false);
+  const stay = plan.flags.stay.stays[0];
+  assert.deepEqual([stay.name,stay.address,stay.priceNight,stay.cost,stay.url],[offered.name,offered.address,2800,1400,venue.src.url]);
+  const anchors = plan.days.flatMap(day => day.stops.filter(row => row.kind === 'hotel'));
+  assert.equal(anchors.length,3);
+  for (const row of anchors) {
+    assert.equal(row.name,offered.name);
+    assert.deepEqual(row.ll,offered.ll);
+    assert.equal(row.src.url,venue.src.url);
+    assert.equal(row.res?.done,undefined);
+  }
+});
+
+test('automatic lodging excludes rejected hotels while a legacy neighborhood is a search preference', async t => {
+  const rejected = { ...venue, name:'Rejected Example Hotel' };
+  const requests = mockHotel(t,true,[rejected,venue]);
+  const result = await selectLodging({ ...setup, picks:{
+    must:[{kind:'stay',name:'South Bank',ll:[51.51,-.12]}], avoid:[{kind:'hotel',name:rejected.name}],
+  } }, {area:'Elsewhere'}, [],ctx(),true);
+  assert.equal(requests[0].area,'South Bank');
+  assert.deepEqual(requests[0].exclude,[rejected.name]);
+  assert.deepEqual(result.options.map(o => o.name),[venue.name]);
+});
+
+test('day trips and existing named stays never run a hotel search', async t => {
+  const requests = mockHotel(t,true,venue,{
+    bop_design:{stay:{examples:[venue]},days:[0,1].map(i => ({stops:[stop('visit'+i,'sight','Gallery',venue.ll)]}))},
+    bop_repair:{edits:[]},
+  });
+  const second = {name:'Second Booked Hotel',ll:[51.501,-.113],nights:1};
+  for (const [days, stay, names] of [
+    [1, {mode:'auto'}, []],
+    [2, {name:venue.name,ll:venue.ll}, [venue.name]],
+    [2, {mode:'booked',stays:[{name:second.name,ll:second.ll,nights:1}]}, [second.name]],
+  ]) {
+    const draft = normalize({ city:'London', cityLL:setup.cityLL, country:'GB', startDate:setup.startDate,
+      members:[{name:'Test guest'}], stay, days });
+    const {plan} = await planTrip(draft,ctx());
+    assert.deepEqual(plan.flags.stay.stays.map(row => row.name),names);
+    assert.deepEqual(plan.flags.stay.examples,[]);
+    assert.equal(plan.flags.stay.selection,undefined);
+  }
+  assert.deepEqual(requests,[]);
+  const multiple = normalize({city:'London',startDate:setup.startDate,members:[{name:'Test guest'}],days:4,
+    stay:{stays:[{name:venue.name,ll:venue.ll,nights:1},second]}});
+  assert.deepEqual(multiple.stay.stays.map(row => [row.name,row.nights]),[[venue.name,1],[second.name,2]]);
 });
 
 test('presenting verified branches leaves the saved itinerary untouched, and choosing an alternative switches each hotel anchor', async t => {

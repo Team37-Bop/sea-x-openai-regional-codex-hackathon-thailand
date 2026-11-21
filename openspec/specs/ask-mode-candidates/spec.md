@@ -7,9 +7,9 @@ Ask mode collects group preferences before itinerary design. The candidate servi
 ## Requirements
 
 ### Requirement: Candidates request
-`POST /api/plan/candidates` SHALL accept `{ setup }`, use at most five web searches across the first discovery call (up to three) and an optional supplementary call (up to two), and end with `done.questions` of at most 3 questions `{ id, kind: 'food'|'sight'|'stay', title, multi: true, options }` with at most 6 options each.
+`POST /api/plan/candidates` SHALL accept `{ setup }`, use at most five web searches across the first discovery call (up to three) and an optional supplementary call (up to two), and end with `done.questions` of at most 3 questions `{ id, kind: 'food'|'sight'|'stay', title, multi: boolean, options }` with at most 6 options each.
 
-Discovery SHALL aim for four distinct places per relevant question and can offer up to six. Restaurants and sights are alternatives even on a one-day trip. Staying overnight can add a lodging question when accommodation has not already been booked. The options SHALL respect dates, budget, mobility, food restrictions and expressed interests.
+Discovery SHALL aim for four distinct places per relevant question and can offer up to six. Restaurants and sights are alternatives even on a one-day trip. On an overnight trip with accommodation left to Bop, the first available question offers named hotels. Food and sightseeing follow in the same survey. A booked stay or a day trip omits the hotel question. The options SHALL respect dates, budget, mobility, food restrictions and expressed interests.
 
 #### Scenario: Too few matching places
 - **WHEN** a relevant question starts with fewer than four unique options or is missing
@@ -38,7 +38,7 @@ Option coordinates SHALL be geocoded with the same rules as plan stops, in paral
 - **THEN** its `ll` is the OSM point
 
 ### Requirement: Candidate photos
-Each option SHALL get at most one https photo `{ url, credit, page, match }` in confidence order: Wikimedia exact match; og:image of the place's own `photoPage`; og:image of its source page (pass 1, capped at 15 s); Commons files within 300 m (capped at 10 s); then one cheap fast-model page search per option still missing a photo (6 at a time, capped at 60 s), where stay areas search the area itself.
+Each option SHALL get at most one https photo `{ url, credit, page, match }` in confidence order: Wikimedia exact match; og:image of the place's own `photoPage`; og:image of its source page (pass 1, capped at 15 s); Commons files within 300 m (capped at 10 s); then one cheap fast-model page search per option still missing a photo (6 at a time, capped at 60 s), where a hotel photo identifies the named property or branch.
 
 #### Scenario: Small restaurant without Wikimedia
 - **WHEN** no Wikimedia or Commons image matches
@@ -50,6 +50,15 @@ Each option SHALL get at most one https photo `{ url, credit, page, match }` in 
 
 ### Requirement: Answering in the UI
 Once candidates are ready, the UI SHALL present one question at a time in a native modal over the planning map, centered on desktop and attached to the viewport bottom on narrow screens. Focus SHALL move to the question heading on opening and on advancing. Each option can be answered สนใจ, ไม่เอา or ไม่แน่ใจ. The next planning request SHALL send `picks = { must: [full option objects answered สนใจ], avoid: [named references answered ไม่เอา] }`. Skipped questions and uncertain options contribute no picks.
+
+#### Scenario: Choose a hotel before selecting restaurants and sights
+- **WHEN** the hotel question is available
+- **THEN** the same card grid presents each named property, a matched photo and credit when available, its location, the reason for recommending it, a source link and any known room rate per night. An unknown nightly rate is identified explicitly.
+- **AND** the traveler can mark สนใจ on one hotel. Choosing another transfers that answer. The ไม่เอา and ไม่แน่ใจ answers, map preview and search for more options work in the same question. Food and sightseeing retain their multiple selections.
+
+#### Scenario: The group already has accommodation
+- **WHEN** the group supplied its booked accommodation or the trip has no overnight stay
+- **THEN** Bop continues directly to food and sightseeing choices and omits hotel discovery and its question.
 
 #### Scenario: Skip to auto
 - **WHEN** the organizer presses Escape in the ask dialog
@@ -114,6 +123,6 @@ The server SHALL remember each option’s name, query, resolved coordinates and 
 
 #### Scenario: Discover more options without leaving a question
 
-- **WHEN** a traveler requests more choices on a food, sight or lodging-area question
+- **WHEN** a traveler requests more choices on a food, sight or hotel question
 - **THEN** Bop searches the active category using the same trip preferences and excludes places already shown. New options require a corroborating web source and appear in the same question. Existing answers remain available for the plan.
 - **AND** while searching, the traveler can inspect the map, advance or start planning. An empty result or error keeps the current options and answers available, and a late response cannot replace the next question.
