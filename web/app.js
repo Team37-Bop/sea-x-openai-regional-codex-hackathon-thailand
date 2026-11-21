@@ -1101,7 +1101,7 @@ $('#chat-dismiss').onclick = () => {
   clearChat();
   $('#command').focus();
 };
-function applyOption(option, routes, summary = '', fromLineVote = false) {
+function applyOption(option, routes, { summary = '', fromLineVote = false, selected = state.selected } = {}) {
   closePlaceSheet($('#place-panel'), { restoreFocus: false });
   preview = null;
   history.push(structuredClone(state));
@@ -1131,6 +1131,7 @@ function applyOption(option, routes, summary = '', fromLineVote = false) {
   }
   state = {
     ...state,
+    selected,
     plan: option.plan,
     setup: option.plan.setup,
     ...(option.usage?.provider && option.usage.provider !== 'fake' ? { demo: false, sample: false, usage: option.usage } : {}),
@@ -1196,11 +1197,12 @@ async function adjust(command, day = state.selected) {
     if (activeReplan === ctrl) activeReplan = null;
   }
   for (const option of result.options) option.usage = result.usage;
-  if (Number.isInteger(result.day)) state.selected = result.day;
+  const selected = Number.isInteger(result.day) ? result.day : state.selected;
   if (!result.needs_vote) {
-    applyOption(result.options[0], result.routes, result.summary);
+    applyOption(result.options[0], result.routes, { summary: result.summary, selected });
     return;
   }
+  state.selected = selected;
   pendingVotes = result;
   preview = { plan: result.options[0].plan, routes: result.routes };
   render();
@@ -1225,7 +1227,7 @@ async function adjust(command, day = state.selected) {
     choosingLocal = true;
     const confirmed = await syncChoice?.(option);
     if (pendingVotes !== result) return;
-    applyOption(confirmed || option, result.routes, '', Boolean(confirmed));
+    applyOption(confirmed || option, result.routes, { fromLineVote: Boolean(confirmed) });
     setBusy(false);
   }
   for (const option of result.options) {
@@ -1254,7 +1256,7 @@ async function adjust(command, day = state.selected) {
     for (const show of localActions) show();
     local.hidden = false;
   };
-  if (!renderLineVote(area, state, result, (option) => applyOption(option, result.routes, '', true), showLocalVote))
+  if (!renderLineVote(area, state, result, (option) => applyOption(option, result.routes, { fromLineVote: true }), showLocalVote))
     showLocalVote();
   area.append(local);
   local.append(button('คงแผนเดิม', () => {
