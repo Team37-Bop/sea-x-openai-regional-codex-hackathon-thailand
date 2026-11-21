@@ -31,7 +31,23 @@ The model prompt SHALL request a vote for a broken member constraint, a cost inc
 
 #### Scenario: Group vote
 - **WHEN** `needs_vote` is true
-- **THEN** the UI shows the options, a LINE-style message per option (starting "Bop: ") and the members' votes, and the organizer breaks a tie
+- **THEN** the UI asks the group to choose, shows the reason, alternatives and a LINE-style message per option (starting "Bop: "), and keeps the existing trip until a choice is applied. The organizer breaks a tie.
+
+### Requirement: Observable progress in “คุยกับ Bop”
+
+The conversation SHALL retain the organizer's request and the public Thai progress steps for that request in chronological order. The server and bundled sample SHALL report the operations they perform, including reviewing the itinerary, checking the proposed options' times, costs and constraints, and the check result per option. Progress SHALL use the existing `step` event or local callback. Private model reasoning SHALL stay out of the conversation.
+
+#### Scenario: A routine edit completes
+- **WHEN** the organizer asks for a specific change with one applicable option
+- **THEN** the organizer can see what Bop is checking while the request runs. On completion the conversation identifies the applied change and the organizer can undo it.
+
+#### Scenario: A trade-off needs a decision
+- **WHEN** the completed request returns two or three options with `needs_vote: true`
+- **THEN** the conversation shows what the group must decide. If the model omits an explanation, the question names the actual choices. Previewing an option keeps the committed itinerary and reservation tasks until the organizer selects an option or the group vote resolves.
+
+#### Scenario: A request fails
+- **WHEN** the service fails before returning valid options
+- **THEN** the conversation reports the failure and the committed itinerary remains available.
 
 ### Requirement: Option output
 Each option SHALL carry `key`, `title`, `head`, `line` (2-4 short Thai lines for the group chat, with the cost change per person and who has a new task) and a full scheduled `plan`; the `done` event SHALL also carry `summary`, `day` (0-based, most affected), `routes` for every leg of every option, `ms` and `repaired`.
@@ -81,7 +97,7 @@ Without a usable model on the sample plan, the UI SHALL run pre-built scenarios 
 
 #### Scenario: Offline rain
 - **WHEN** the model is unavailable and the organizer types "ถ้าฝนตกล่ะ"
-- **THEN** the rain scenario runs locally with simulated votes
+- **THEN** the rain scenario runs locally and asks the group to choose between its proposed alternatives.
 
 ### Requirement: Bad input
 The endpoint SHALL end with `bad_request` when the plan is invalid (no days, a stop without string id, array `ll` or `HH:MM` times) or the command is empty.

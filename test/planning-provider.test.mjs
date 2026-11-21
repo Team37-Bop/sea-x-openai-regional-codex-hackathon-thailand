@@ -121,6 +121,13 @@ test('replan obeys model vote decision with independent candidate plans, even fo
   assert.equal(result.options[1].plan.days[0].stops[1].start, '18:00');
   assert.equal(result.setup, undefined);
   assert.equal(result.vote_reason, answer.vote_reason);
+  answer.vote_reason = ' ';
+  const undecided = await replan({ plan: base, setup, command: 'เลือกมื้อที่จะเลื่อน' }, ctx());
+  for (const option of undecided.options) {
+    assert.ok(undecided.vote_reason.includes(option.title));
+    assert.equal(option.vote_reason, undecided.vote_reason);
+  }
+  assert.match(undecided.summary, /ให้กลุ่มตัดสินใจ/);
   answer.needs_vote = false;
   answer.options[0].edits = [{ op: 'replace', id: 'a', stop: { cost: 1000 } }];
   const second = await replan({ plan: base, setup, command: 'เลือกแผนเดียว' }, ctx());
@@ -128,6 +135,7 @@ test('replan obeys model vote decision with independent candidate plans, even fo
   assert.equal(second.options.length, 1);
   assert.equal(second.vote_reason, undefined);
   assert.equal(second.options[0].vote_reason, undefined);
+  assert.equal(second.summary, second.options[0].title);
 });
 test('a booked choice bypasses search, new transport uses the fitting estimated price and retimes the endpoints', async (t) => {
   const requests = [];

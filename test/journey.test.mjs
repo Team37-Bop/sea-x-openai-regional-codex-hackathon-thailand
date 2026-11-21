@@ -92,9 +92,13 @@ test('removes an offline stop without altering unrelated days and rejects empty 
   assert.equal(demo.plan.city, 'เชียงใหม่');
   assert.equal(demo.plan.setup.title, 'ทริปของเรา');
   assert.equal(demo.plan.setup.members.length, 4);
-  const result = (
-    await stream('/api/replan', { plan: demo.plan, command: 'ตัดน้ำตกบัวตองออก', day: 1, demo: true })
-  ).last;
+  const { events, last: result } = await stream('/api/replan', {
+    plan: demo.plan, command: 'ตัดน้ำตกบัวตองออก', day: 1, demo: true,
+  });
+  const steps = events.filter((event) => event.type === 'step').map((event) => event.text);
+  assert.match(steps[0], /แผนเดิม/);
+  assert.match(steps[1], /ตรวจเวลา.*1 ทางเลือก/);
+  assert.match(steps.at(-1), /ทางเลือก A.*฿/);
   assert.equal(result.type, 'done');
   assert.equal(result.needs_vote, false);
   const revised = result.options[0].plan;

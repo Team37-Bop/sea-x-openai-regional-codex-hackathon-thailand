@@ -707,14 +707,14 @@ export async function replan(input, ctx) {
     offline = input.demo === true || provider === 'fake';
   const previous = checks(original, setup),
     timing = {};
-  ctx.step('Bop กำลังปรับเฉพาะจุดที่ได้รับผลกระทบ');
+  ctx.step('กำลังดูคำขอและหาจุดที่ต้องปรับในแผนเดิม');
   let answer,
     verified = new Set(),
     history;
   if (offline) answer = offlineAnswer(original, command, day);
   else {
     const result = await model(
-      'เสนอ edits เท่านั้น เปลี่ยนเฉพาะจุดที่ได้รับผลกระทบ รักษา res.done ถ้าทำได้. เมื่อผิดข้อจำกัดสมาชิก ค่าใช้จ่ายเพิ่มเกิน 300 บาทต่อคน หรือเสียสถานที่ star ให้ needs_vote:true และเสนอ 2–3 ทาง นอกนั้นทางเดียว. คืน {summary,day,needs_vote,vote_reason,transport?,options:[{title,head,line,edits}]}. line ขึ้นต้น Bop: และเขียน 2–4 บรรทัด ระบุส่วนต่างราคาและคนรับงาน. ' +
+      'เสนอ edits เท่านั้น เปลี่ยนเฉพาะจุดที่ได้รับผลกระทบ รักษา res.done ถ้าทำได้. เมื่อผิดข้อจำกัดสมาชิก ค่าใช้จ่ายเพิ่มเกิน 300 บาทต่อคน หรือเสียสถานที่ star ให้ needs_vote:true และเสนอ 2–3 ทาง นอกนั้นทางเดียว. ถ้าต้องโหวต ให้ summary อธิบายข้อเสนอที่ยังรอเลือก และ vote_reason ระบุสิ่งที่กลุ่มต้องตัดสินใจ. คืน {summary,day,needs_vote,vote_reason,transport?,options:[{title,head,line,edits}]}. line ขึ้นต้น Bop: และเขียน 2–4 บรรทัด ระบุส่วนต่างราคาและคนรับงาน. ' +
         stopInstructions,
       { setup, plan: brief({ ...original, setup }), command, day },
       { ...ctx, operation: 'replan', searches: 2 },
@@ -728,6 +728,15 @@ export async function replan(input, ctx) {
   const needs_vote = answer.needs_vote === true && raw.length >= 2;
   if (!needs_vote) raw = raw.slice(0, 1);
   if (!raw.length) throw Error('No options');
+  const titles = raw.map((row, i) => str(row.title) || 'ทางเลือก ' + 'ABC'[i]);
+  let voteReason;
+  if (needs_vote) {
+    voteReason =
+      str(answer.vote_reason, 400) ||
+      raw.map((row) => str(row.vote_reason, 400)).find(Boolean) ||
+      str('กลุ่มอยากเลือกแผนไหน ระหว่าง' + titles.map((title) => '“' + title + '”').join(' หรือ '), 400);
+  }
+  ctx.step('กำลังตรวจเวลา ค่าใช้จ่าย และเงื่อนไขของสมาชิกสำหรับ ' + raw.length + ' ทางเลือก');
   const options = [],
     routes = {};
   let repaired = false,
@@ -752,6 +761,7 @@ export async function replan(input, ctx) {
     );
     if (!offline && (updated.errors.length || newFailures.length)) {
       const tRepair = performance.now();
+      ctx.step('กำลังแก้รายละเอียดของทางเลือก ' + 'ABC'[i] + ' แล้วตรวจเงื่อนไขอีกครั้ง');
       try {
         const result = await model(
           'ซ่อมข้อผิดพลาดเฉพาะจุด คืน edits ตามรูปแบบเดิม. ' + stopInstructions,
@@ -772,7 +782,7 @@ export async function replan(input, ctx) {
       timing.repair = (timing.repair ?? 0) + elapsed(tRepair);
     }
     const delta = Math.round(updated.plan.report.total - total(original));
-    const title = str(row.title) || 'ทางเลือก ' + 'ABC'[i],
+    const title = titles[i],
       head = str(row.head, 200) || title;
     const generated =
       'Bop: ' + title + '\nค่าใช้จ่าย ' + (delta >= 0 ? '+' : '−') + '฿' + Math.abs(delta) + '/คน\nผู้จัดทริปตรวจเวลาใหม่';
@@ -796,15 +806,16 @@ export async function replan(input, ctx) {
       head,
       line,
       plan: updated.plan,
-      ...(needs_vote ? { vote_reason: str(row.vote_reason ?? answer.vote_reason, 400) } : {}),
+      ...(needs_vote ? { vote_reason: str(row.vote_reason, 400) || voteReason } : {}),
     });
   }
   return {
     options,
     needs_vote,
-    ...(needs_vote ? { vote_reason: str(answer.vote_reason ?? options[0].vote_reason, 400) } : {}),
+    ...(needs_vote ? { vote_reason: voteReason } : {}),
     day: cutDay(Number.isInteger(answer.day) ? answer.day : day, original.days.length),
-    summary: str(answer.summary, 600) || 'ปรับแผนแล้ว',
+    summary:
+      str(answer.summary, 600) || (needs_vote ? 'มี ' + options.length + ' ทางเลือกให้กลุ่มตัดสินใจ' : titles[0]),
     routes,
     ...(changedSetup ? { setup: changedSetup } : {}),
     timing,
