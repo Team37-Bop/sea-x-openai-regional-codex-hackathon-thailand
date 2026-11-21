@@ -95,7 +95,6 @@
     </header>
     <main class="trip-page shell">
       <p id="status" class="status" role="status"></p>
-      <button class="quiet" id="cancel-plan" type="button" hidden>กลับไปแก้ข้อมูลทริป</button>
       <div class="empty-plan">
         <span class="tile-icon">
           <svg class="icon" aria-hidden="true"><use href="#i-map" /></svg>
@@ -141,6 +140,8 @@
             <button id="reset-plan" type="button" class="plain">กลับไปแผนแรก</button>
           </div>
         </div>
+      </section>
+      <div class="trip-board">
         <section id="chat-response" aria-labelledby="chat-state" hidden>
           <div class="chat-request-line">
             <p>คำขอของคุณ <strong id="chat-command"></strong></p>
@@ -149,10 +150,7 @@
           </div>
           <h2 id="chat-state" tabindex="-1" aria-live="polite"></h2>
           <p id="chat-description" hidden></p>
-          <details id="chat-progress" hidden>
-            <summary>ขั้นตอนการปรับแผน</summary>
-            <ol id="chat-steps" aria-live="polite" aria-relevant="additions"></ol>
-          </details>
+          <ol id="chat-steps" class="operation-trace" role="list" aria-label="ขั้นตอนการปรับแผน" aria-live="polite" aria-relevant="additions"></ol>
           <button type="button" id="chat-retry" class="quiet" hidden>ลองอีกครั้ง</button>
           <div id="options" aria-label="ทางเลือกในการปรับแผน"></div>
           <details id="chat-result" hidden>
@@ -160,8 +158,23 @@
             <div id="chat-review"></div>
           </details>
         </section>
-      </section>
-      <div class="trip-board">
+        <aside id="planning-progress" aria-labelledby="planning-phase" hidden>
+          <header class="draft-heading">
+            <p id="planning-context"></p>
+            <h2 id="planning-phase" tabindex="-1" aria-live="polite"></h2>
+          </header>
+          <ol id="planning-steps" class="operation-trace" role="list" aria-label="ขั้นตอนการจัดทริป" aria-live="polite" aria-relevant="additions"></ol>
+          <div id="planning-day-progress" hidden>
+            <p id="planning-day-count" aria-live="polite"></p>
+            <progress id="planning-day-meter" aria-labelledby="planning-day-count"></progress>
+            <ol id="planning-days" aria-label="วันที่จัดแผนแล้ว"></ol>
+          </div>
+          <p id="planning-error" role="alert" hidden></p>
+          <div class="planning-actions">
+            <button class="primary" id="planning-retry" type="button" hidden>ลองอีกครั้ง</button>
+            <button class="quiet" id="cancel-plan" type="button">กลับไปแก้ข้อมูลทริป</button>
+          </div>
+        </aside>
         <aside class="trip-sidebar" aria-label="รายละเอียดแผนการเดินทาง">
           <div class="tabs view-tabs" role="tablist" id="views" aria-label="มุมมองทริป" hidden>
             <button type="button" role="tab" id="plan-tab" aria-controls="plan-panel" aria-selected="true">
@@ -231,7 +244,7 @@
               <span class="tile-icon aqua">
                 <svg class="icon" aria-hidden="true"><use href="#i-map" /></svg>
               </span>
-              <h2>แผนที่ทริป</h2>
+              <h2 id="map-title">แผนที่ทริป</h2>
               <button id="whole-map" type="button" class="quiet">ดูแผนที่ทั้งทริป</button>
             </div>
             <div id="map" aria-label="แผนที่สถานที่และเส้นทาง">
@@ -405,9 +418,6 @@
         </footer>
       </form>
     </dialog>
-    <dialog id="detail" aria-label="รายละเอียดทริป">
-      <div id="detail-content"></div>
-      <button class="quiet" id="detail-close" type="button">ปิด</button>
-    </dialog>
+    <dialog id="planning-survey" class="candidate-survey" aria-labelledby="survey-question"></dialog>
   </body>
 </html>

@@ -108,7 +108,7 @@ function spreadPins() {
 
 function paint() {
   if (!map?.isStyleLoaded() && !map?.getSource('trip')) return;
-  const { days, routes, before, open, focusedStop } = pending;
+  const { days, routes, before, open, focusedStop, drafting, center } = pending;
   let focusPoint;
   const points = [],
     features = [],
@@ -119,14 +119,15 @@ function paint() {
   function pin(stop, p, index, ghost) {
     points.push(p);
     if (stop.id === focusedStop) focusPoint = p;
-    const el = document.createElement('button');
+    const el = document.createElement(open ? 'button' : 'span');
     el.className = 'map-pin' + (ghost ? ' removed' : '');
-    el.type = 'button';
-    el.setAttribute('role', 'button');
+    if (open) el.type = 'button';
     el.dataset.mapStop = stop.id;
     el.dataset.focused = String(stop.id === focusedStop);
-    el.textContent = ghost ? '−' : String(index + 1);
-    el.title = (ghost ? 'นำออก · ' : '') + stop.name;
+    const number = drafting && Number.isInteger(stop.ordinal) ? stop.ordinal : index + 1;
+    el.textContent = ghost ? '−' : String(number);
+    el.title = (ghost ? 'นำออก · ' : '') + (stop.name || stop.n) +
+      (drafting && stop.place?.source === 'model' ? ' · ตำแหน่งโดยประมาณ' : '');
     el.setAttribute('aria-label', el.title);
     const leader = document.createElement('span');
     leader.hidden = true;
@@ -142,7 +143,7 @@ function paint() {
       transformOrigin: 'left center',
     });
     el.append(leader);
-    el.onclick = (event) => {
+    if (open) el.onclick = (event) => {
       event.stopPropagation();
       previousCamera = undefined;
       open(stop);
@@ -154,12 +155,17 @@ function paint() {
   for (const day of days.filter(Boolean)) {
     const stops = day.stops || [];
     stops.forEach((stop, i) => {
+      if (drafting && stop.place?.fallback) return;
       const p = coordinates(stop.ll),
         a = coordinates(stops[i - 1]?.ll);
       if (p) pin(stop, p, i, false);
-      if (!p || !a || !stop.leg) return;
+      if (!p || !stop.leg) return;
       const mode = stop.leg.mode || stop.leg.m;
-      const line = segment(a, p, routes?.[stop.leg.key], mode);
+      const record = routes?.[stop.leg.key];
+      if (drafting && (stops[i - 1]?.place?.fallback || record?.approx || !Array.isArray(record?.geom) || record.geom.length < 2)) return;
+      if (!drafting && !a) return;
+      const line = segment(a || p, p, record, mode);
+      if (drafting && line.properties.approx) return;
       features.push(line);
       modesUsed.add(mode);
       if (stop.leg.km >= 100) points.push(...line.geometry.coordinates);
@@ -208,7 +214,7 @@ function paint() {
     (features.some((f) => f.properties.approx) ? ' · เส้นประโดยประมาณ' : '');
   map.resize();
   spreadPins();
-  const camera = JSON.stringify([focusedStop, days.map((d) => d?.stops?.map((s) => [s.id, s.ll]))]);
+  const camera = JSON.stringify([drafting, center, focusedStop, days.map((d) => d?.stops?.map((s) => [s.id, s.ll]))]);
   if (camera === previousCamera) return;
   previousCamera = camera;
   if (focusPoint) {
@@ -216,15 +222,17 @@ function paint() {
   } else if (points.length) {
     const bounds = points.reduce((box, p) => box.extend(p), new library.LngLatBounds(points[0], points[0]));
     map.fitBounds(bounds, { padding: 35, maxZoom: 14, duration: 0 });
+  } else if (drafting) {
+    map.jumpTo({ center: center || [0, 18], zoom: center ? 11 : 1.5 });
   }
 }
-export function drawMap(days, routes, open, before, focusedStop) {
-  pending = { days, routes, open, before, focusedStop };
+export function drawMap(days, routes, open, before, focusedStop, draft) {
+  pending = { days, routes, open, before, focusedStop, drafting: Boolean(draft), center: coordinates(draft?.cityLL) };
   if (map) {
     paint();
     return;
   }
-  if (loading || !days.some((day) => day?.stops?.length)) return;
+  if (loading || (!draft && !days.some((day) => day?.stops?.length))) return;
   loading = import('/assets/maplibre-gl.mjs?v=6.19.0')
     .then((lib) => {
       library = lib;
@@ -233,7 +241,8 @@ export function drawMap(days, routes, open, before, focusedStop) {
       container.replaceChildren();
       const dark = matchMedia('(prefers-color-scheme: dark)');
       const style = () => 'https://tiles.openfreemap.org/styles/' + (dark.matches ? 'dark' : 'positron');
-      map = new lib.Map({ container, style: style(), center: [100.5, 13.75], zoom: 5, scrollZoom: false });
+      const center = pending.center || coordinates(pending.days.find((day) => day?.stops?.length)?.stops[0]?.ll);
+      map = new lib.Map({ container, style: style(), center: center || [0, 18], zoom: center ? 11 : 1.5, scrollZoom: false });
       for (const event of ['zoom', 'rotate', 'pitch', 'resize', 'moveend']) map.on(event, spreadPins);
       let baseReady = false;
       map.on('error', () => {
@@ -269,6 +278,7 @@ export function drawMap(days, routes, open, before, focusedStop) {
       dark.addEventListener('change', () => map.setStyle(style()));
     })
     .catch(() => {
+      loading = null;
       document.querySelector('#map').textContent = 'เปิดแผนที่ไม่สำเร็จ ดูจุดแวะและเส้นทางในกำหนดการได้';
     });
 }

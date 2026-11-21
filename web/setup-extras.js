@@ -440,7 +440,7 @@ export function candidateQuestions(result) {
   }
   return [...grouped.values()];
 }
-export function chooseCandidates({ dialog, content, result, signal, partySize }) {
+export function chooseCandidates({ dialog, result, signal, partySize, onQuestion, onEdit }) {
   const questions = candidateQuestions(result),
     picks = { must: [], avoid: [] };
   if (!questions.length) return Promise.resolve(picks);
@@ -455,19 +455,26 @@ export function chooseCandidates({ dialog, content, result, signal, partySize })
       answers = new Map();
     };
     const finish = (includeCurrent, aborted = false) => {
-      dialog.classList.remove('candidate-survey');
-      dialog.removeAttribute('aria-labelledby');
-      dialog.removeEventListener('close', close);
       signal?.removeEventListener('abort', abort);
+      dialog.removeEventListener('cancel', cancel);
+      dialog.removeEventListener('close', close);
       if (includeCurrent) collect();
       if (dialog.open) dialog.close();
+      dialog.replaceChildren();
       if (aborted) reject(signal.reason);
       else resolve(picks);
     };
-    const close = () => finish(true),
-      abort = () => finish(false, true);
+    const abort = () => finish(false, true);
+    const cancel = (event) => {
+      event.preventDefault();
+      finish(true);
+    };
+    const close = () => {
+      if (!dialog.open) finish(true);
+    };
     const draw = () => {
       const q = questions[index];
+      const cards = new Map();
       const head = element('header', null, 'survey-head');
       const progress = element('progress');
       progress.max = questions.length;
@@ -476,7 +483,8 @@ export function chooseCandidates({ dialog, content, result, signal, partySize })
       const title = element('h2', plain(q.title) || 'เลือกสถานที่ที่สนใจ');
       title.id = 'survey-question';
       title.tabIndex = -1;
-      head.append(
+      const tools = element('div', null, 'survey-tools');
+      tools.append(
         element(
           'p',
           ['คำถาม ' + (index + 1) + ' จาก ' + questions.length, partySize > 0 && 'กลุ่ม ' + partySize + ' คน']
@@ -484,14 +492,16 @@ export function chooseCandidates({ dialog, content, result, signal, partySize })
             .join(' · '),
           'muted',
         ),
-        progress,
-        title,
+        button('กลับไปแก้ข้อมูลทริป', onEdit),
       );
+      head.append(tools, progress, title);
       if (q.sub || q.why) head.append(element('p', plain(q.sub || q.why), 'muted'));
       const grid = element('div', null, 'candidate-grid');
-      content.replaceChildren(head, grid);
+      dialog.replaceChildren(head, grid);
       for (const option of q.options.filter((o) => o?.name)) {
         const row = element('article', null, 'question-option');
+        row.tabIndex = -1;
+        cards.set(option, row);
         const fig = photoFigure(option.photo, option.name);
         if (fig) row.append(fig);
         const body = element('div', null, 'candidate-body');
@@ -539,7 +549,7 @@ export function chooseCandidates({ dialog, content, result, signal, partySize })
         else answers = new Map();
         if (++index < questions.length) {
           draw();
-          content.querySelector('h2')?.focus();
+          dialog.querySelector('h2').focus({ preventScroll: true });
         } else finish(false);
       };
       const footer = element('footer', null, 'survey-footer');
@@ -548,19 +558,23 @@ export function chooseCandidates({ dialog, content, result, signal, partySize })
         button('ข้ามคำถามนี้', () => next(false)),
         button(index === questions.length - 1 ? 'เริ่มวางแผน' : 'ถัดไป', () => next(true), 'primary'),
       );
-      content.append(footer);
+      dialog.append(footer);
       dialog.scrollTop = 0;
+      onQuestion(q, (option) => {
+        const card = cards.get(option);
+        card?.focus({ preventScroll: true });
+        card?.scrollIntoView({ block: 'nearest' });
+      });
     };
     if (signal?.aborted) {
       abort();
       return;
     }
-    dialog.classList.add('candidate-survey');
-    dialog.setAttribute('aria-labelledby', 'survey-question');
     draw();
-    dialog.addEventListener('close', close, { once: true });
+    dialog.addEventListener('cancel', cancel);
+    dialog.addEventListener('close', close);
     signal?.addEventListener('abort', abort, { once: true });
-    if (!dialog.open) dialog.showModal();
-    content.querySelector('h2').focus({ preventScroll: true });
+    dialog.showModal();
+    dialog.querySelector('h2').focus({ preventScroll: true });
   });
 }

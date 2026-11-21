@@ -39,11 +39,15 @@ Each option SHALL get at most one https photo `{ url, credit, page, match }` in 
 - **THEN** the step "ได้ N คำถาม · M ตัวเลือก · มีรูป K" is emitted
 
 ### Requirement: Answering in the UI
-The UI SHALL show questions one at a time with each option answered สนใจ, ไม่เอา or ไม่แน่ใจ, and SHALL send `picks = { must: [full option objects answered สนใจ], avoid: [ids answered ไม่เอา] }`; ไม่แน่ใจ, skipped questions and "ให้ Bop เลือกที่เหลือเอง" SHALL add nothing.
+Once candidates are ready, the UI SHALL present one question at a time in a native modal over the planning map, centered on desktop and attached to the viewport bottom on narrow screens. Focus SHALL move to the question heading on opening and on advancing. Each option can be answered สนใจ, ไม่เอา or ไม่แน่ใจ. The next planning request SHALL send `picks = { must: [full option objects answered สนใจ], avoid: [ids answered ไม่เอา] }`. Skipped questions and uncertain options contribute no picks.
 
 #### Scenario: Skip to auto
 - **WHEN** the organizer presses Escape in the ask dialog
 - **THEN** planning starts directly with the original setup and the answers collected so far
+
+#### Scenario: Return to the trip draft
+- **WHEN** the organizer chooses กลับไปแก้ข้อมูลทริป in the survey
+- **THEN** the survey closes, planning is canceled, and the existing setup draft regains focus
 
 #### Scenario: Photo badge
 - **WHEN** an option photo has `match: 'likely'`

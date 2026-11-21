@@ -22,7 +22,17 @@ The web app SHALL open the organizer's trip setup and check model readiness and 
 
 ### Requirement: Planning progress and recovery
 
-The frontend SHALL show elapsed time and Thai progress, render completed days by their supplied indices, and commit a trip only after a terminal result supplies a nonempty days array. A superseded request SHALL have no effect on the current view.
+On valid setup submission the interactive map SHALL appear immediately, centered on the destination's known coordinates or updated when its lookup completes. The desktop layout SHALL put compact progress in the left itinerary rail with the map on the right. A narrow screen SHALL keep the map above the scrollable progress. The planning rail and the replan response SHALL show chronological, connected progress steps as they arrive with no disclosure action. The active operation has a spinner and completed operations have checkmarks. Waiting for a decision, completing, failing or canceling stops the animation. An interrupted operation SHALL be distinguished from a completed one. Reduced-motion settings SHALL use a static active indicator. A complete terminal itinerary commits the trip. A superseded request SHALL have no effect on the current view.
+
+#### Scenario: Group chooses places before planning
+
+- **WHEN** the organizer asks to review candidate places
+- **THEN** the interactive map and its planning status remain in the workspace during discovery. When answers are needed, a native dialog opens centered over the map on desktop and as a bottom sheet on narrow screens. The map remains underneath with known candidate coordinates. Answering or skipping returns to planning over that map, and retrying the final planning phase reuses the group's completed answers.
+
+#### Scenario: Days arrive out of order
+
+- **WHEN** day two arrives before day one and day two is later updated
+- **THEN** the progress view shows day one before day two with two distinct days ready. Intermediate map snapshots update pins without counting a completed day. Preview routes require resolved geometry, and synthetic fallback locations are excluded. An existing trip keeps its map until new geographic results arrive. Canceling restores the committed map and draft form.
 
 #### Scenario: Organizer edits during generation
 
