@@ -261,7 +261,7 @@ function menuSection(info, sample) {
   const dishes = dishList(info.dishes);
   const body = dishes || el('p', sample ? 'ยังไม่มีเมนูตัวอย่างของร้านนี้' : 'ยังไม่พบเมนูแนะนำของร้านนี้');
   const menu = section(sample ? 'ไอเดียมื้ออาหารในเดโม' : 'เมนูแนะนำ', body, 'pd-dishes');
-  const source = link('ดูเมนูจากเว็บไซต์ของร้าน', info.menuSource);
+  const source = link('ดูหน้าเมนูที่เผยแพร่', info.menuSource);
   if (source) menu.append(source);
   return menu;
 }

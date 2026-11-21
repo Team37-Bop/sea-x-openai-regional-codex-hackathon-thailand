@@ -104,6 +104,47 @@ test('reads Sunday dishes with listed prices from a branch’s public embedded m
   assert.equal(await publishedMenu({ ...stop, n: 'Other venue' }, [], signal()), null);
   assert.ok(requests.every(url => url.startsWith(base + '/')));
 });
+test('uses only the named restaurant’s linked menu on a multi-venue page', async (t) => {
+  const { publishedMenu } = await import('../server/menu-source.mjs');
+  const page = 'https://directory.example/alpha-restaurant/menu';
+  const item = name => ({ '@type': 'MenuItem', name });
+  const graph = [
+    { '@type': 'Restaurant', name: 'Beta Restaurant', hasMenu: { '@type': 'Menu', hasMenuItem: item('Beta special') } },
+    { '@type': 'Restaurant', name: 'Alpha Restaurant', hasMenu: { '@id': '#alpha-menu' } },
+    { '@type': 'Menu', '@id': '#alpha-menu', hasMenuItem: { '@id': '#alpha-special' } },
+    { ...item('Alpha special'), '@id': '#alpha-special' },
+    item('Unattributed special'),
+  ];
+  t.mock.method(globalThis, 'fetch', async () => new Response(
+    '<head><title>Alpha Restaurant and Gamma Restaurant menus</title></head>' +
+    '<script type="application/ld+json">' + JSON.stringify({ '@graph': graph }) + '</script>',
+    { headers: { 'content-type': 'text/html' } },
+  ));
+  const lookup = n => publishedMenu({ n }, [{ url: page }], signal());
+  assert.deepEqual((await lookup('Alpha Restaurant')).dishes.map(d => d.name), ['Alpha special']);
+  assert.equal(await lookup('Gamma Restaurant'), null);
+  graph[1].hasMenu = undefined;
+  assert.equal(await lookup('Alpha Restaurant'), null);
+});
+
+test('uses the visit weekday price for a dish listed in multiple menu sections', async (t) => {
+  const { publishedMenu } = await import('../server/menu-source.mjs');
+  const page = 'https://venue.example/alpha-restaurant/menu';
+  const section = (name, prices) => ({ '@type': 'MenuSection', name,
+    hasMenuItem: Object.entries(prices).map(([dish, price]) => ({ '@type': 'MenuItem', name: dish,
+      offers: { priceCurrency: 'GBP', price } })) });
+  const menu = { '@type': 'Menu', hasMenuSection: [
+    section('Monday specials', { Roast: 15 }), section('Mains', { Pasta: 10 }),
+    section('Sunday specials', { Roast: 20, Pasta: 12 }),
+  ] };
+  t.mock.method(globalThis, 'fetch', async () => new Response(
+    '<script type="application/ld+json">' + JSON.stringify(menu) + '</script>',
+    { headers: { 'content-type': 'text/html' } },
+  ));
+  const result = await publishedMenu({ n: 'Alpha Restaurant', date: '2026-11-22' }, [{ url: page }], signal());
+  assert.deepEqual(Object.fromEntries(result.dishes.map(d => [d.name, d.priceLocal.amount])), { Roast: 20, Pasta: 12 });
+});
+
 test('places confirmed citations first, converts local prices, bounds text and hides photo hints', () => {
   const verified = new Set(['https://one.example/', 'https://two.example/']);
   const value = {

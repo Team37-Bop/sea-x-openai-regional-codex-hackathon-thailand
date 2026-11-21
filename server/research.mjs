@@ -8,7 +8,7 @@ const researchPrompt =
   'ค้นหาสถานที่จริงให้ตรงชื่อ สาขา เมืองและพิกัด จากเว็บอย่างมากสามครั้ง สรุปเป็นภาษาไทย what, highlights, ราคา เวลาเปิด เรตติ้ง การจอง ที่อยู่ โทรศัพท์และเคล็ดลับตามหลักฐาน ' +
   'ร้านอาหารให้ค้นเมนูของสาขานี้ โดยเริ่มจากเว็บร้านและเมนูที่ตรงกับมื้อในแผน แนะนำ 3–6 จานเมื่อมีหลักฐาน บอกชื่อจานและเหตุผลสั้น ๆ เป็นภาษาไทย เก็บชื่อบนเมนูไว้ด้วย ' +
   'ถ้าเป็นเมนูตัวอย่างให้ระบุ ใช้ veg=true เฉพาะจานที่หลักฐานระบุว่ามังสวิรัติ คืนราคาของจานเป็น THB, priceLocal {amount,currency} และ rate จำนวนบาทต่อหนึ่งหน่วยท้องถิ่น ถ้าไม่มีราคาให้เว้นราคาได้ ' +
-  'ถ้ามี publishedMenu ให้ถือว่าเป็นรายการที่อ่านจากเมนูของสาขาโดยตรง ใช้ชื่อตามเมนู อธิบายเมนูและราคาชัดเจน หากไม่มีรายการให้เว้น dishes ไม่ต้องเล่าเรื่องการค้นไม่พบใน summary, highlights หรือ tips ' +
+  'ถ้ามี publishedMenu ให้ถือว่าเป็นรายการที่อ่านจากหน้าเมนูของสาขานี้ ใช้ชื่อตามเมนู อธิบายเมนูและราคาชัดเจน หากไม่มีรายการให้เว้น dishes ไม่ต้องเล่าเรื่องการค้นไม่พบใน summary, highlights หรือ tips ' +
   'แยกที่มาไว้ใน sources พร้อมชื่อหน้าและลิงก์ที่ค้นเจอจริง ไม่แทรกโดเมนหรือลิงก์ในข้อความ บอก confidence web เฉพาะเมื่อยืนยันได้ และระบุ photoPage ของสถานที่นี้โดยเฉพาะ ห้ามเดาข้อมูล';
 const lookups = new Map();
 
@@ -127,7 +127,7 @@ async function lookup(stop, city, ctx) {
   exact.catch(() => {});
   let knownMenu;
   if (provider !== 'fake' && stop.k === 'food' && stop.src) {
-    ctx.step('กำลังอ่านเมนูที่ร้านเผยแพร่');
+    ctx.step('กำลังอ่านหน้าเมนูที่เผยแพร่');
     knownMenu = await publishedMenu(stop, [], ctx.signal);
   }
   const input = { city, stop };
@@ -143,7 +143,7 @@ async function lookup(stop, city, ctx) {
   );
   if (provider !== 'fake') {
     const enrichMenu = stop.k === 'food' && (info.dishes.length < 3 || info.dishes.every(row => row.price == null && !row.priceLocal));
-    if (!knownMenu && enrichMenu && info.sources.length) ctx.step('กำลังอ่านเมนูที่ร้านเผยแพร่');
+    if (!knownMenu && enrichMenu && info.sources.length) ctx.step('กำลังอ่านหน้าเมนูที่เผยแพร่');
     const [photos, menu] = await Promise.all([
       collectPhotos(stop, [stop.src?.url, result.value.photoPage, ...info.sources.map((s) => s.url)], exact, ctx.signal),
       knownMenu || (enrichMenu && info.sources.length ? publishedMenu(stop, info.sources, ctx.signal) : null),
@@ -153,7 +153,7 @@ async function lookup(stop, city, ctx) {
       info.menuSource = menu.page;
       info.dishes = menu.dishes.map(row => dish(row, result.value.rate, result.value.currency));
       if (!info.sources.some(source => source.url === menu.page)) {
-        info.sources = [{ url: menu.page, title: 'เมนูจากเว็บไซต์ของร้าน', checked: 'web' }, ...info.sources].slice(0, 6);
+        info.sources = [{ url: menu.page, title: 'หน้าเมนูที่เผยแพร่', checked: 'web' }, ...info.sources].slice(0, 6);
       }
     }
   }

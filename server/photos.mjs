@@ -65,7 +65,7 @@ export function publicPage(value) {
   return href;
 }
 
-function containsName(text, stop) {
+export function containsName(text, stop) {
   const tokens = ' ' + words(text).join(' ') + ' ';
   return names(stop).some((name) => {
     const target = words(name).join(' ');
