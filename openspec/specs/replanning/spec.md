@@ -195,7 +195,7 @@ The UI SHALL distinguish a preview from an applied option. Applying an option sn
 
 ### Requirement: Review before applying a group option
 
-The organizer SHALL be able to inspect a proposed plan alongside the committed itinerary, including affected visits, changed times, changes to budget per traveler and newly failing checks. Copying the option summary SHALL require a user action.
+The organizer SHALL be able to inspect a proposed plan alongside the committed itinerary, including affected visits, changed times, changes to budget per traveler and newly failing checks. Previewing an option SHALL show its proposed LINE message. Applying an option SHALL show its message and the actual delivery status in the result card.
 
 #### Scenario: Resolving a local choice
 

@@ -66,6 +66,18 @@ Bop SHALL reply to a group join with instructions for sending the link code, acc
 - **WHEN** the trip is linked but the monthly push allowance has been consumed
 - **THEN** manual post and vote-start respond with `posted:false` and `quotaReached:true`, skip the supplier push, and retain any newly created vote. A plan update still returns its saved summary with `posted:false`.
 
+### Requirement: Send the applied change to the group
+
+The applied replan card SHALL display the selected option's exact group-facing text with line breaks. A linked trip SHALL send it once when an ordinary change is applied. A preview, re-render, undo or a result selected by a LINE vote SHALL not trigger a duplicate automatic post. The same group link SHALL follow a changed trip duration. The result card SHALL distinguish a pending request, a LINE-accepted post, an unlinked group, an unavailable channel, an exhausted quota and an unconfirmed delivery.
+
+#### Scenario: Apply an ordinary change
+- **WHEN** Bop applies a restaurant change for a trip linked to LINE
+- **THEN** the result card displays the message sent to the authenticated trip endpoint and confirms submission only after LINE accepts it. A retry after an uncertain response reuses the same retry key for this message and group.
+
+#### Scenario: Review a vote or an unlinked trip
+- **WHEN** a LINE vote selects an option
+- **THEN** the result card displays the selected summary and allows the organizer to send that summary separately. An unlinked trip displays the proposed text and, when the service is configured, offers access to group linking.
+
 ### Requirement: Open a vote and publish the choices
 
 `POST /api/trips/{id}/vote` SHALL require a linked trip and at least one option. It stores a new current vote with a UUID, status `OPEN`, capped reason (500 characters), up to three compact options, empty ballots, creation time and deadline. Deadline defaults to 120 minutes and is clamped to 5–1,440 minutes. The group receives a Flex carousel with each option's key, title, optional head and vote postback. An optional LIFF button deep-links to this trip. The result includes the vote and delivery state.

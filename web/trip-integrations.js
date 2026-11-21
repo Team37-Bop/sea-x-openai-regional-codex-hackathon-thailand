@@ -3,6 +3,7 @@ import { renderFlightPanels } from './flight-panel.js';
 
 let config;
 let current;
+let appliedMessage;
 const sessions = new Map();
 const storageKey = 'bop.line.organizer.v1';
 let saved = {};
@@ -11,9 +12,14 @@ try {
 } catch {
   /* Private browsing can disable storage. */
 }
-function remember(session) {
-  if (session.auth) saved[session.key] = session.auth;
-  else delete saved[session.key];
+function remember(session, localTripId = session.state?.localTripId) {
+  if (session.auth) {
+    saved[session.key] = session.auth;
+    if (localTripId) saved['trip/' + localTripId] = session.auth;
+  } else {
+    const oldId = saved[session.key]?.tripId;
+    for (const key of Object.keys(saved)) if (saved[key]?.tripId === oldId) delete saved[key];
+  }
   try {
     sessionStorage.setItem(storageKey, JSON.stringify(saved));
   } catch {
@@ -30,6 +36,10 @@ function keyFor(state) {
   ];
   if (data.title && data.title !== data.city && data.title !== 'ทริปของเรา') identity.push(data.title);
   return JSON.stringify(identity);
+}
+function lineSessionKey(state) {
+  const localKey = state.localTripId && 'trip/' + state.localTripId;
+  return state.lineSessionKey || (localKey && saved[localKey] ? localKey : keyFor(state));
 }
 function summary(state) {
   const plan = state.plan;
@@ -74,6 +84,7 @@ function startPolling(s) {
 }
 function drawLine(s) {
   if (!s.host) return;
+  if (appliedMessage?.session === s) appliedMessage.refresh();
   const host = s.host;
   host.replaceChildren(el('h3', 'กลุ่ม LINE'));
   s.output = message(host);
@@ -168,8 +179,28 @@ function drawLine(s) {
     ),
   );
 }
+async function loadLine(s) {
+  config ??= tripRequest('/api/config').catch((err) => {
+    config = null;
+    throw err;
+  });
+  s.enabled = (await config).enabled;
+  s.host.hidden = !s.enabled;
+  if (!s.enabled || !s.auth || s.trip) return;
+  s.loading ??= access(s).then((trip) => {
+    s.trip = trip;
+    drawLine(s);
+    startPolling(s);
+  }).catch((err) => {
+    if (err.code !== 'auth') throw err;
+    s.auth = null;
+    remember(s);
+    drawLine(s);
+  }).finally(() => { s.loading = null; });
+  await s.loading;
+}
 export function renderTripIntegrations(container, state) {
-  const key = keyFor(state);
+  const key = lineSessionKey(state);
   if (current?.key !== key) {
     if (current) {
       clearTimeout(current.linkTimer);
@@ -180,7 +211,7 @@ export function renderTripIntegrations(container, state) {
   }
   const s = current;
   s.state = state;
-  renderFlightPanels(container, state, key);
+  renderFlightPanels(container, state, keyFor(state));
   if (!state.plan?.days.every(Boolean)) return;
   if (!s.host) {
     s.host = el('article', null, 'alert');
@@ -188,33 +219,12 @@ export function renderTripIntegrations(container, state) {
   }
   (container.querySelector('[data-booking-line]') || container).append(s.host);
   s.host.hidden = !s.enabled;
-  config ??= tripRequest('/api/config').catch(() => {
-    config = null;
-    return { enabled: false };
-  });
-  config.then(async (value) => {
-    if (s !== current) return;
-    s.host.hidden = !value.enabled;
-    s.enabled = value.enabled;
-    if (!value.enabled || !s.auth || s.initialized) return;
-    s.initialized = true;
-    try {
-      s.trip = await access(s);
-      drawLine(s);
-    } catch (err) {
-      if (err.code === 'auth') {
-        s.auth = null;
-        remember(s);
-        drawLine(s);
-      } else s.output.textContent = err.message;
-    }
-    startPolling(s);
-  });
+  loadLine(s).catch((err) => { s.output.textContent = err.message; });
   if (s.auth && !s.trip?.linked) startPolling(s);
 }
 export function renderLineVote(container, state, result, apply) {
   const s = current;
-  if (!s || s.key !== keyFor(state) || !s.auth || !s.trip?.linked) return false;
+  if (!s?.enabled || s.key !== lineSessionKey(state) || !s.auth || !s.trip?.linked) return false;
   clearTimeout(s.voteTimer);
   const panel = el('div');
   container.append(panel);
@@ -265,7 +275,7 @@ export function renderLineVote(container, state, result, apply) {
       async () => {
         try {
           const data = await access(s, '/vote', {
-            reason: result.summary,
+            reason: result.vote_reason || result.summary,
             options: result.options.map(({ key, title, head, line }) => ({ key, title, head: head || line })),
           });
           voteId = data.vote.id;
@@ -281,7 +291,87 @@ export function renderLineVote(container, state, result, apply) {
   return true;
 }
 export function canNotifyWeather(state) {
-  return !!(current?.auth && current.trip?.linked && keyFor(state) === current.key);
+  return !!(current?.enabled && current.auth && current.trip?.linked && lineSessionKey(state) === current.key);
+}
+
+function groupMessage(text) {
+  const content = String(text || '').trim().replace(/^(?:Bop:\s*)+/i, '');
+  return content ? ('Bop: ' + content).slice(0, 5000) : '';
+}
+
+export function lineMessageBubble(text, title) {
+  const section = el('section', null, 'line-message');
+  section.append(el('h4', title), el('blockquote', groupMessage(text)));
+  return section;
+}
+
+export function renderAppliedLine(container, before, after, text, fromLineVote, showBooking) {
+  const s = current?.key === lineSessionKey(before) ? current : null;
+  if (s) {
+    // This is the same group trip even when the new itinerary ends on a different date.
+    after.lineSessionKey = s.key;
+    if (s.auth) remember(s, after.localTripId);
+  }
+  container.replaceChildren();
+  const body = groupMessage(text);
+  if (!body) return;
+  const panel = lineMessageBubble(body, 'ข้อความสำหรับกลุ่ม LINE');
+  const status = message(panel);
+  const controls = el('div', null, 'inline');
+  panel.append(controls);
+  container.append(panel);
+  let sent = false, sending = false;
+  const retryKey = globalThis.crypto?.randomUUID?.();
+  const active = () => container.contains(panel) && s === current;
+  async function send() {
+    if (!active() || sending || sent || !s?.enabled || !s?.auth || !s.trip?.linked) return;
+    sending = true;
+    controls.replaceChildren();
+    status.textContent = 'กำลังส่งเข้ากลุ่ม LINE…';
+    try {
+      const result = await access(s, '/post', { text: body, ...(retryKey && { retryKey }) });
+      sent = result.posted === true;
+      status.textContent = sent ? 'ส่งเข้ากลุ่ม LINE แล้ว'
+        : result.quotaReached ? 'ยังไม่ได้ส่ง · ครบโควตา LINE ของเดือนนี้' : 'ยังไม่ได้ส่งเข้ากลุ่ม LINE';
+    } catch (err) {
+      status.textContent = 'ยังยืนยันการส่งไม่ได้ · ' + err.message;
+      if (retryKey && active()) controls.append(action('ลองส่งอีกครั้ง', send));
+    } finally {
+      sending = false;
+    }
+  }
+  function showActions(autoSend = false) {
+    if (!active() || sent || sending) return;
+    controls.replaceChildren();
+    if (!s?.enabled) status.textContent = 'ยังไม่ได้ส่ง · ยังไม่ได้ตั้งค่าบริการ LINE';
+    else if (!s.trip?.linked || !s.auth) {
+      status.textContent = 'ยังไม่ได้ส่ง · ทริปนี้ยังไม่ได้เชื่อมกลุ่ม LINE';
+      controls.append(action('ไปเชื่อมกลุ่ม LINE', () => {
+        showBooking();
+        s.host.scrollIntoView({ block: 'center' });
+        s.host.querySelector('button')?.focus({ preventScroll: true });
+      }));
+    } else if (autoSend && !fromLineVote) void send();
+    else {
+      status.textContent = fromLineVote ? 'กลุ่มเลือกแผนผ่าน LINE แล้ว · ยังไม่ได้ส่งสรุปนี้' : 'พร้อมส่งเข้ากลุ่ม LINE';
+      controls.append(action('ส่งสรุปเข้ากลุ่ม LINE', send));
+    }
+  }
+  async function prepare() {
+    status.textContent = 'กำลังตรวจสอบการเชื่อมต่อ LINE…';
+    try {
+      if (s) await loadLine(s);
+      if (!s) status.textContent = 'ยังไม่ได้ส่ง · ทริปนี้ยังไม่ได้เชื่อมกลุ่ม LINE';
+      else if (active()) {
+        appliedMessage = { session: s, refresh: () => showActions() };
+        showActions(true);
+      }
+    } catch {
+      status.textContent = 'ยังไม่ได้ส่ง · ตรวจสอบการเชื่อมต่อ LINE ไม่สำเร็จ';
+      controls.replaceChildren(action('ลองตรวจสอบอีกครั้ง', prepare));
+    }
+  }
+  void prepare();
 }
 export async function notifyWeather(alert, state) {
   if (!canNotifyWeather(state)) return { posted: false };

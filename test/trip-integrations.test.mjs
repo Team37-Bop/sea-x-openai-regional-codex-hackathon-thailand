@@ -1,12 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Readable } from 'node:stream';
-import { createHmac, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomUUID } from 'node:crypto';
 import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { serveIntegrations } from '../server/integrations.mjs';
 import { operationalStore, createOperationStore } from '../server/operation-store.mjs';
+import { createLineService } from '../server/line-trips.mjs';
 
 async function call(method, path, body, token, extra = {}) {
   const bytes = Buffer.from(typeof body === 'string' ? body : JSON.stringify(body ?? {}));
@@ -75,6 +76,37 @@ const options = [
   { key: 'A', title: 'คาเฟ่' },
   { key: 'B', title: 'เดินเล่น' },
 ];
+
+test('an applied-plan post uses the exact summary, safely retries an accepted request and honors disabled credentials', async (t) => {
+  hooks(t, { LINE_CHANNEL_ACCESS_TOKEN: 'test-token', LINE_CHANNEL_SECRET: 'test-secret' });
+  const trip = { tripId: 'trip1', groupId: 'group1', organizerHash: createHash('sha256').update('organizer').digest('hex') };
+  let quota = 0;
+  const attempts = [];
+  const service = createLineService({
+    getTrip: async () => trip,
+    consumePush: async () => { quota++; return true; },
+  }, async (url, init) => {
+    assert.equal(url, 'https://api.line.me/v2/bot/message/push');
+    const key = init.headers['X-Line-Retry-Key'];
+    const duplicate = attempts.some((row) => row.key === key);
+    attempts.push({ key, ...JSON.parse(init.body) });
+    if (!duplicate) throw Error('connection closed after acceptance');
+    return new Response(null, { status: 409, headers: { 'x-line-accepted-request-id': 'prior-request' } });
+  });
+  const text = 'Bop: เปลี่ยนมื้อเย็นเป็นร้านใหม่\nค่าใช้จ่ายเท่าเดิม';
+  const input = { text, retryKey: randomUUID() };
+  const send = () => service.organizer(trip.tripId, 'organizer', 'post', input);
+  await assert.rejects(send(), /connection closed/);
+  assert.deepEqual(await send(), { posted: true });
+  assert.deepEqual(attempts[0], attempts[1]);
+  assert.deepEqual(attempts[0].messages, [{ type: 'text', text }]);
+  assert.equal(attempts[0].to, 'group1');
+  assert.match(attempts[0].key, /^[a-f\d-]{36}$/);
+  delete process.env.LINE_CHANNEL_SECRET;
+  await assert.rejects(send(), { code: 'no_key' });
+  assert.equal(quota, 2);
+  assert.equal(attempts.length, 2);
+});
 
 test('signed group linking, public views, LIFF identity, cross-channel ballots, closure and quota', async (t) => {
   const dir = await mkdtemp(join(tmpdir(), 'bop-trip-test-'));

@@ -1,4 +1,4 @@
-import { action, el } from './integration-ui.js';
+import { el } from './integration-ui.js';
 
 const currency = new Intl.NumberFormat('th-TH', {
   style: 'currency',
@@ -169,28 +169,6 @@ export function renderPlanReview(container, beforePlan, option) {
       list.append(el('li', issue));
     }
     review.append(list);
-  }
-  const shareText = option.line?.trim();
-  if (shareText) {
-    const note = el('small', '', 'muted');
-    note.setAttribute('role', 'status');
-    const clipboard = action('คัดลอกข้อความให้เพื่อน', async () => {
-      try {
-        await navigator.clipboard.writeText(shareText);
-        note.textContent = 'คัดลอกแล้ว';
-      } catch {
-        // Leave the group-facing message selectable when clipboard access is unavailable.
-        const field = el('textarea');
-        field.setAttribute('aria-label', 'ข้อความสำหรับเพื่อนร่วมทริป');
-        field.readOnly = true;
-        field.value = shareText;
-        clipboard.replaceWith(field);
-        field.focus();
-        field.select();
-        note.textContent = 'เลือกข้อความไว้แล้ว กดคัดลอกบนอุปกรณ์ของคุณ';
-      }
-    });
-    review.append(clipboard, note);
   }
   container.append(review);
   return diff;

@@ -68,13 +68,25 @@
   padding-inline-start: 1.2rem;
   margin: 0 0 6px;
 }
-.plan-review > small {
-  margin-left: 7px;
+.line-message {
+  margin: 12px 0 4px;
 }
-.plan-review > textarea {
-  display: block;
-  min-height: 68px;
-  margin-top: 8px;
+.line-message h4 {
+  margin: 0 0 4px;
+  font-size: 0.82rem;
+}
+.line-message blockquote {
+  margin: 0;
+  padding: 9px 12px;
+  background: var(--canvas);
+  border-inline-start: 3px solid var(--accent);
+  border-radius: 4px 8px 8px 4px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 0.9rem;
+}
+.line-message .feedback {
+  margin: 4px 0;
 }
 .repair-outcome {
   margin-block: 8px;

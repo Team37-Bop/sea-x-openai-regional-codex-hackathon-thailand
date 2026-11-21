@@ -11,6 +11,8 @@ import { readEvents } from './stream.js';
 import {
   renderTripIntegrations,
   renderLineVote,
+  renderAppliedLine,
+  lineMessageBubble,
   canNotifyWeather,
   notifyWeather,
 } from './trip-integrations.js';
@@ -1040,14 +1042,28 @@ setupForm.addEventListener('submit', (event) => {
     await generateTrip(input);
   });
 });
+function setChatExpanded(expanded) {
+  const toggle = $('#chat-toggle');
+  const phase = $('#chat-response').dataset.state;
+  const label = expanded ? 'ย่อแผงคุยกับ Bop' : phase === 'decision' ? 'ดูตัวเลือกจาก Bop'
+    : phase === 'running' ? 'ดูความคืบหน้าจาก Bop' : 'ดูผลจาก Bop';
+  $('#chat-content').hidden = !expanded;
+  toggle.setAttribute('aria-expanded', String(expanded));
+  toggle.setAttribute('aria-label', label);
+  toggle.title = label;
+  toggle.querySelector('span').textContent = expanded ? 'ย่อแผง' : label;
+}
+$('#chat-toggle').onclick = () => setChatExpanded($('#chat-content').hidden);
 function clearChat() {
   activeReplan?.abort();
   activeReplan = null;
   $('#chat-response').hidden = true;
+  setChatExpanded(true);
   $('#chat-steps').replaceChildren();
   $('#chat-retry').onclick = null;
   $('#chat-result').hidden = true;
   $('#chat-result').open = false;
+  $('#chat-line').replaceChildren();
   $('#chat-review').replaceChildren();
   $('#options').replaceChildren();
 }
@@ -1075,7 +1091,7 @@ $('#chat-dismiss').onclick = () => {
   clearChat();
   $('#command').focus();
 };
-function applyOption(option, routes, summary = '') {
+function applyOption(option, routes, summary = '', fromLineVote = false) {
   closePlaceSheet($('#place-panel'), { restoreFocus: false });
   preview = null;
   history.push(structuredClone(state));
@@ -1123,6 +1139,7 @@ function applyOption(option, routes, summary = '') {
   renderPlanReview($('#chat-review'), history.at(-1).plan, option);
   renderRepairOutcome($('#chat-review'), option.plan.repairOutcome);
   $('#chat-result').hidden = false;
+  renderAppliedLine($('#chat-line'), history.at(-1), state, option.line, fromLineVote, () => switchView('book'));
   if (document.activeElement !== $('#command')) $('#chat-state').focus({ preventScroll: true });
   render();
   forecast.refresh();
@@ -1203,6 +1220,7 @@ async function adjust(command, day = state.selected) {
     actions.append(compare);
     row.append(actions);
     renderPlanReview(row, state.plan, option);
+    if (option.line) row.append(lineMessageBubble(option.line, 'ข้อความ LINE หากเลือกแผนนี้'));
     renderRepairOutcome(row, option.plan.repairOutcome);
     choices.append(row);
     localActions.push(() => actions.append(button('ใช้แผน ' + option.key, () => {
@@ -1211,7 +1229,7 @@ async function adjust(command, day = state.selected) {
     }, 'primary')));
   }
   area.append(button('ดูแผนปัจจุบัน', () => showPreview(null)));
-  if (renderLineVote(area, state, result, (option) => applyOption(option, result.routes))) return;
+  if (renderLineVote(area, state, result, (option) => applyOption(option, result.routes, '', true))) return;
   for (const show of localActions) show();
   area.append(button('คงแผนเดิม', () => {
     pendingVotes = preview = null;
