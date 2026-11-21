@@ -26,6 +26,8 @@ import { requestedTripDays } from './trip-duration.mjs';
 import { bookedStays, concurrent, dayHotels, isHotel, isTransit, schedule } from './schedule.mjs';
 import { matchesPick, resolvePicks } from './candidates.mjs';
 import { searchFlights } from './flights.mjs';
+import { checkedHotelExamples as stayExamples, selectLodging } from './lodging.mjs';
+import { needsAutoLodging } from '../web/lodging-state.js';
 export { candidates } from './candidates.mjs';
 export { requestedTripDays };
 
@@ -181,27 +183,16 @@ function setTransport(setup, flags, dir, options, chosen) {
   leg.time = dir === 'go' ? chosen.arr : chosen.dep;
   flags.transport[dir] = { chosen: chosen.id, chosenOption: chosen, options, ...(!leg.choice && { requestedBy }) };
 }
-function stayExamples(stay, verified) {
-  return (Array.isArray(stay?.examples) ? stay.examples : [])
-    .filter((e) => str(e?.name))
-    .slice(0, 3)
-    .map((e) => ({
-      name: str(e.name),
-      ll: coordinates(e.ll) ? e.ll : undefined,
-      priceNight: Math.max(0, Number(e.priceNight) || 0),
-      ...source(e.src ?? e, (e.src?.checked ?? e.checked) === 'web' ? verified : []),
-    }));
-}
 function autoStays(setup, examples = [], previous) {
   const nights = setup.days - 1;
   const hotel = previous ?? examples.find((e) => coordinates(e.ll)) ?? examples[0];
   if (!hotel || !nights) return [];
   const nightlyCost = previous?.nights && Number.isFinite(previous.cost)
     ? previous.cost / previous.nights
-    : (hotel.priceNight || 0) / 2;
+    : hotel.priceNight > 0 ? hotel.priceNight / 2 : null;
   return [{
-    ...hotel, first: 0, nights, checkIn: setup.startDate, checkOut: dateAt(setup.startDate, nights),
-    locationSource: hotel.locationSource ?? 'model', cost: nightlyCost * nights,
+    ...hotel, recommended: true, first: 0, nights, checkIn: setup.startDate, checkOut: dateAt(setup.startDate, nights),
+    locationSource: hotel.locationSource ?? 'model', cost: nightlyCost === null ? null : nightlyCost * nights,
   }];
 }
 function makeDayHotels(setup, stays) {
@@ -372,7 +363,7 @@ export async function planTrip(input, ctx, demo = false) {
     const stayInstruction =
       setup.stay.mode === 'booked'
         ? 'ใช้ที่พักตาม stayPlan โดยไม่ค้นโรงแรม'
-        : 'เลือกย่านที่เหมาะกับงบและการเดินทาง ค้นตัวอย่างโรงแรมจริง 2–3 แห่งไม่เกินหนึ่งการค้น ระบุพิกัดและ priceNight บาทต่อห้อง';
+        : 'สำหรับทริปค้างคืน ให้เลือกชื่อและสาขาโรงแรมจริงหนึ่งแห่งในย่านที่สะดวกตามงบและย่านที่เลือก ใส่เป็นรายการแรกใน stay.examples พร้อมพิกัดโรงแรมจริง แหล่งข้อมูล และ priceNight บาทต่อห้องต่อคืน ถ้าเป็นไปได้เสนอทางเลือกเพิ่ม ใช้ชื่อโรงแรมเดียวกันกับจุดฝากกระเป๋า เช็กอิน ออกจากที่พัก และกลับมาพักให้ครบทุกคืน ไม่มีการจอง';
     const travelInstruction = [];
     for (const [dir, key] of [['go', 'arrivalSuggested'], ['back', 'departureSuggested']]) {
       const leg = transportLeg(setup, dir);
@@ -403,12 +394,25 @@ export async function planTrip(input, ctx, demo = false) {
     for (const url of verified) allUrls.add(url);
   }
   if (split) timing.skeleton = elapsed(tDesign);
-  const examples = setup.stay.mode === 'auto' ? stayExamples(design.stay, verified) : [];
-  if (setup.stay.mode === 'auto') stays = autoStays(setup, examples);
+  let examples = setup.stay.mode === 'auto' ? stayExamples(design.stay, verified) : [];
+  let lodging;
+  if (setup.stay.mode === 'auto' && setup.days > 1) {
+    try {
+      lodging = await selectLodging(setup, design.stay, examples, ctx, !offline && conf('BOP_SEARCH_PLAN', 5, 0, 8) > 0);
+    } catch (error) {
+      if (protectedError(error)) throw error;
+    }
+    if (lodging) {
+      examples = [lodging.hotel, ...examples.filter(e => e.name !== lodging.hotel.name)].slice(0, 3);
+      stays = autoStays(setup, [lodging.hotel]);
+      ctx.step('ที่พักที่ Bop เลือก · ' + lodging.hotel.name);
+    } else if (offline) stays = autoStays(setup, examples);
+    else ctx.step('ยังยืนยันชื่อโรงแรมไม่ได้');
+  }
   setup.stayPlan = makeDayHotels(setup, stays);
   flags.stay = {
     area: str(design.stay?.area) || stays[0]?.name || '',
-    why: str(design.stay?.why, 400),
+    why: lodging?.why || str(design.stay?.why, 400),
     booked: setup.stay.mode === 'booked',
     examples,
     stays,
@@ -671,6 +675,36 @@ export function validatePlan(input) {
       return s;
     });
   return plan;
+}
+
+export async function resolveAutoLodging(saved, ctx) {
+  const plan = validatePlan(saved.plan);
+  const setup = plan.setup;
+  const prior = plan.flags?.stay || {};
+  if (setup?.stay?.mode !== 'auto' || prior.booked || plan.days.length < 2)
+    throw bad('ทริปนี้ไม่ต้องเลือกที่พักเพิ่มเติม');
+  if (!needsAutoLodging(plan)) return { ...saved, plan };
+
+  const selection = await selectLodging(setup, prior, prior.examples || [], ctx, true);
+  if (!selection) throw bad('Bop ยังยืนยันโรงแรมในย่านนี้ไม่ได้ กรุณาลองเลือกที่พักอีกครั้ง');
+  const { hotel, why } = selection;
+  ctx.step('เลือก ' + hotel.name + ' · กำลังปรับจุดแวะและเส้นทาง');
+  const stays = autoStays(setup, [hotel]);
+  plan.flags ??= {};
+  plan.flags.stay = { ...prior, why, booked: false, stays,
+    examples: [hotel, ...(prior.examples || []).filter(e => e.name !== hotel.name)].slice(0, 3) };
+  setup.stayPlan = makeDayHotels(setup, stays);
+  const verified = new Set(hotel.checked === 'web' ? [hotel.url] : []);
+  const results = await concurrent(plan.days, 3, (day, i) =>
+    schedule(day, i, setup, ctx, stays, verified, { keep: true, offline: true, preResolved: true, savedRoutes: saved.routes }));
+  plan.days = results.map(result => result.day);
+  const firstStay = plan.days[0].stops.find(isHotel);
+  if (firstStay) firstStay.cost = stays[0].cost;
+  uniqueAcross(plan.days);
+  reportPlan(plan, setup);
+  delete plan.repairOutcome;
+  const routes = Object.assign({}, ...results.map(result => result.routes));
+  return { ...saved, plan, routes, summary: 'Bop เลือก ' + hotel.name + ' เป็นที่พักในแผนสำหรับ ' + stays[0].nights + ' คืน · ยังไม่ได้จอง', usage: ctx.usage };
 }
 function changeTrip(change, setup, base) {
   if (!['go', 'back'].includes(change?.dir)) return null;

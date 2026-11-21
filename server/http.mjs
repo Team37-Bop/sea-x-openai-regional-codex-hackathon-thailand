@@ -1,5 +1,6 @@
+import { needsAutoLodging } from '../web/lodging-state.js';
 import { splitStopNote } from '../web/stop-note.js';
-import { saveLocalTrip, readLocalTrip } from './local-showcase.mjs';
+import { saveLocalTrip, readLocalTrip, resolveLocalLodging } from './local-showcase.mjs';
 import { recoverSavedDay, validateSavedPositions } from './saved-map.mjs';
 import http from 'node:http';
 import { readFile } from 'node:fs/promises';
@@ -150,6 +151,24 @@ export async function handleRequest(request, response) {
       const day = Number(saved[2]);
       if (!trip.plan.days[day]) return json(response, { error: 'not_found' }, 404);
       return json(response, await recoverSavedDay(trip, day, abort.signal));
+    }
+    const lodging = /^\/api\/local-trips\/([0-9a-f-]{36})\/lodging$/.exec(url.pathname);
+    if (request.method === 'POST' && lodging) {
+      const saved = await readLocalTrip(request, lodging[1]);
+      if (!saved) return json(response, { error: 'not_found' }, 404);
+      if (!/^application\/json(?:\s*;|$)/i.test(request.headers['content-type'] || '')) {
+        request.resume();
+        return json(response, { error: 'bad_request' }, 415);
+      }
+      return stream(response, abort.signal, async (ctx) => {
+        await body(request);
+        return resolveLocalLodging(request, lodging[1], async (stored) => {
+          if (!needsAutoLodging(stored.plan)) return stored;
+          await requireReady();
+          const { resolveAutoLodging } = await import('./plan.mjs');
+          return resolveAutoLodging(validateSavedPositions(stored), ctx);
+        });
+      });
     }
     if (await serveIntegrations(request, response, url, abort.signal)) return;
     if (request.method === 'GET' && url.pathname === '/api/health')

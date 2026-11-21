@@ -1,3 +1,5 @@
+import { splitStopNote } from './stop-note.js';
+import { needsAutoLodging } from './lodging-state.js';
 import { action, el } from './integration-ui.js';
 import { mediaUrl } from './setup-extras.js';
 import { localTransport } from './transport-endpoints.js';
@@ -57,7 +59,7 @@ function panel(title) {
   card.append(el('h3', title));
   return card;
 }
-function addLodging(container, plan, setup) {
+function addLodging(container, plan, setup, actions) {
   const flag = plan.flags?.stay || {};
   const booked = flag.booked === true || setup.stay?.mode === 'booked';
   const card = panel(booked ? 'ที่พักที่จองไว้' : 'ที่พักสำหรับทริปนี้');
@@ -96,26 +98,34 @@ function addLodging(container, plan, setup) {
   }
   const area = flag.area || setup.hotelArea;
   if (area) card.append(el('p', 'ย่านที่พัก · ' + area));
-  if (flag.why) card.append(el('p', flag.why, 'muted'));
-  const examples = flag.examples || flag.options || [];
-  for (const stay of examples) {
+  const why = splitStopNote(flag.why).text;
+  if (why) card.append(el('p', why, 'muted'));
+  const chosen = flag.stays?.find(stay => stay.name);
+  const examples = (flag.examples || flag.options || []).filter(stay => stay.name && stay.name !== chosen?.name);
+  for (const stay of [chosen, ...examples].filter(Boolean)) {
     const row = el('div', null, 'booking-row');
     const source = stay.src || stay;
     const link = source.checked === 'web' ? sourceLink(source) : null;
     const price = Number(stay.priceNight ?? stay.price);
-    row.append(
-      el('h4', stay.name),
-      el('p', price > 0 ? '฿' + baht.format(price) + ' / ห้อง / คืน' : 'ยังไม่มีราคาต่อคืน'),
-    );
-    row.append(el('p', link ? 'ราคาจากแหล่งข้อมูลที่ตรวจแล้ว' : 'ข้อมูลประมาณ', 'muted'));
+    if (stay === chosen) row.append(el('span', 'Bop เลือกให้ · ยังไม่ได้จอง', 'booking-tag'));
+    row.append(el('h4', stay.name));
+    if (stay === chosen && stay.checkIn && stay.checkOut)
+      row.append(el('p', dayLabel(stay.checkIn) + ' – ' + dayLabel(stay.checkOut) + ' · ' + stay.nights + ' คืน'));
+    row.append(el('p', price > 0 ? 'ราคาประมาณ ฿' + baht.format(price) + ' / ห้อง / คืน' : 'ยังไม่มีราคาต่อคืนสำหรับวันเข้าพัก'));
     const links = el('div', null, 'booking-links');
     if (link) links.append(link);
     links.append(mapsLink(stay.name, setup.city), roomLink(stay.name, setup));
     row.append(links);
     card.append(row);
   }
-  if (examples.length) card.append(el('p', 'เลือกโรงแรมแล้วจองกับผู้ให้บริการโดยตรง', 'muted'));
-  if (!examples.length) {
+  if (!chosen && needsAutoLodging(plan) && actions.resolveLodging) {
+    const message = el('p', '', 'muted');
+    message.dataset.lodgingStatus = '';
+    message.setAttribute('role', 'status');
+    const retry = action('ให้ Bop เลือกที่พัก', actions.resolveLodging);
+    retry.dataset.lodgingRetry = '';
+    card.append(message, retry);
+  } else if (!chosen && !examples.length) {
     card.append(el('p', 'ยังไม่มีตัวอย่างโรงแรมหรือราคาต่อคืนในแผนนี้', 'muted'), roomLink(area || '', setup));
   }
 }
@@ -516,7 +526,7 @@ export function renderBookingTasks(container, state, actions) {
   for (const dir of ['go', 'back']) addDirection(selected, fallback, state.plan, setup, dir, actions);
   if (selected.childElementCount > 1) container.append(selected);
   if (!state.sample || state.plan.flags?.stay?.examples?.length || setup.stay?.mode === 'booked')
-    addLodging(container, state.plan, setup);
+    addLodging(container, state.plan, setup, actions);
   const pending = addCalls(container, state, actions);
   if (state.sample) sampleLedger(container, state, setup, actions.rerender);
   else {

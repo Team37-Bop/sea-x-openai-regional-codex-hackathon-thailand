@@ -1,5 +1,5 @@
 import { appendTrace } from './operation-trace.js';
-import { renderStopNote } from './stop-note.js';
+import { renderStopNote, splitStopNote } from './stop-note.js';
 import { visitCoordinates } from './map.js';
 import { legLabels, legMode, isScheduledService } from './leg-modes.js';
 import { loadPlaceImage, mediaUrl } from './setup-extras.js';
@@ -199,7 +199,7 @@ export function plannedVisit({ stop, day, setup, stay, bookingStatus }) {
     wish,
     legText,
     closure: latched ? 'ปิดในวันที่วางแผน' + (plain(latched.why) ? ' · ' + plain(latched.why) : '') : '',
-    why: lodging ? plain(stay?.why) : '',
+    why: lodging ? splitStopNote(stay?.why).text : '',
   };
 }
 function renderPhotos(host, photos, name, complete = false) {

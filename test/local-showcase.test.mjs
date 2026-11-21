@@ -34,3 +34,47 @@ test('local demo links survive restart and are readable only over loopback', asy
   process.env.AWS_LAMBDA_FUNCTION_NAME = 'bop-test';
   assert.equal(await readLocalTrip(req, ids.at(-1)), undefined);
 });
+
+test('one verified lodging revision is reused across local requests and restarts, retaining the original', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'bop-showcase-lodging-'));
+  const prior = { ...process.env };
+  Object.assign(process.env, { BOP_CACHE_DIR: root, BOP_LOCAL_DEMO: '1' });
+  delete process.env.AWS_LAMBDA_FUNCTION_NAME;
+  t.after(async () => {
+    for (const key of ['BOP_CACHE_DIR', 'BOP_LOCAL_DEMO', 'AWS_LAMBDA_FUNCTION_NAME']) {
+      if (prior[key] === undefined) delete process.env[key];
+      else process.env[key] = prior[key];
+    }
+    await rm(root, { recursive: true, force: true });
+  });
+  const { readFile } = await import('node:fs/promises');
+  const { readLocalTrip, saveLocalTrip, resolveLocalLodging } = await import('../server/local-showcase.mjs');
+  const { needsAutoLodging } = await import('../web/lodging-state.js');
+  const request = { socket: { remoteAddress: '127.0.0.1' }, headers: { host: 'localhost' } };
+  const plan = { setup: { stay: { mode: 'auto' } }, days: [{ stops: [] }, { stops: [] }], flags: { stay: { area: 'Waterloo' } } };
+  const original = { plan, routes: {} };
+  assert.ok(needsAutoLodging(plan));
+  for (const manual of [{ mode: 'booked' }, { mode: 'auto', name: 'My Place' }, { mode: 'auto', stays: [{ name: 'My Place' }] }])
+    assert.equal(needsAutoLodging({ ...plan, setup: { stay: manual } }), false);
+  assert.equal(needsAutoLodging({ ...plan, days: [plan.days[0]] }), false);
+  const id = await saveLocalTrip(request, original);
+  await assert.rejects(resolveLocalLodging(request, id, () => Promise.reject(Error('retry'))), /retry/);
+  assert.deepEqual(await readLocalTrip(request, id), original);
+  const upgraded = structuredClone(original);
+  upgraded.plan.flags.stay.stays = [{ name: 'Riverside Hotel', ll: [51.5, -0.1], recommended: true }];
+  assert.equal(needsAutoLodging(upgraded.plan), false);
+  let calls = 0, release;
+  const gate = new Promise(done => { release = done; });
+  const lookup = async () => { calls++; await gate; return upgraded; };
+  const jobs = [resolveLocalLodging(request, id, lookup), resolveLocalLodging(request, id, lookup)];
+  release();
+  assert.deepEqual(await Promise.all(jobs), [upgraded, upgraded]);
+  assert.equal(calls, 1);
+  const disk = JSON.parse(await readFile(join(root, 'showcase', id + '.json'), 'utf8'));
+  assert.deepEqual(disk.plan, original.plan);
+  assert.deepEqual(disk.lodgingRevision, upgraded);
+  const restarted = await import('../server/local-showcase.mjs?lodging-restart');
+  assert.deepEqual(await restarted.readLocalTrip(request, id), upgraded);
+  assert.deepEqual(await restarted.resolveLocalLodging(request, id, () => assert.fail('unexpected provider call')), upgraded);
+  assert.equal(await restarted.resolveLocalLodging({ ...request, headers: { host: 'elsewhere' } }, id, lookup), undefined);
+});

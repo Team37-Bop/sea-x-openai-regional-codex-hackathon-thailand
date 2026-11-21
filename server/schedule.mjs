@@ -17,27 +17,43 @@ export function dayHotels(stays, index, days) {
 function anchor(rows, index, stays, days) {
   const { start, end } = dayHotels(stays, index, days);
   if (!rows.length || !stays.length) return rows;
-  const usable = [start, end].filter((s) => coordinates(s?.ll));
-  const pin = (row, hotel) => ({
+  const usable = [start, end].filter((s) => s?.name);
+  const pin = (row, hotel) => {
+    const original = row.name || row.n || '';
+    const purpose = [];
+    if (hotel.recommended && original !== hotel.name) {
+      if (/เช[็็ค]+[กค]?เอา[ตท์]*|check[ -]?out/i.test(original)) purpose.push('เช็กเอาต์');
+      if (/เช[็็ค]+[กค]?อิน|check[ -]?in/i.test(original)) purpose.push('เช็กอิน');
+      if (/รับกระเป๋า|bag.*pick/i.test(original + ' ' + row.id)) purpose.push('รับกระเป๋า');
+      else if (/ฝากกระเป๋า|drop.*bag/i.test(original)) purpose.push('ฝากกระเป๋า');
+      else if (/กลับที่พัก/.test(original)) purpose.push('กลับที่พัก');
+    }
+    const stale = hotel.recommended && /ยังไม่(?:ได้เลือก|ทราบ|ระบุ)(?:ชื่อ|ที่อยู่|พิกัด)?(?:ของ)?(?:โรงแรม|ที่พัก)|สมมติว่า|จนกว่าจะทราบ(?:ที่อยู่|ที่พัก|พิกัด)|จุดเริ่มต้นสมมติ/.test(row.note || '');
+    const note = [purpose.join('และ'), stale ? (purpose.includes('ฝากกระเป๋า') ? 'สอบถามที่พักเรื่องเวลารับฝากกระเป๋า' : '') : row.note].filter(Boolean).join(' · ');
+    return {
     ...row,
     name: hotel.name,
     n: hotel.name,
+    query: hotel.query || hotel.name,
+    ...(hotel.recommended && { aliases: [], ...(hotel.checked === 'web' && { src: { url: hotel.url, title: hotel.title, checked: 'web' } }) }),
+    ...(note || stale ? { note } : {}),
     ll: hotel.ll,
     pinned: true,
-    place: { source: hotel.locationSource ?? 'pick', ...(hotel.locationFallback && { fallback: true }) },
-  });
+    place: { source: hotel.locationSource ?? 'pick', ...((hotel.locationFallback || !coordinates(hotel.ll)) && { fallback: true }) },
+    };
+  };
   for (const [i, row] of rows.entries()) {
     if (!isHotel(row)) continue;
     const byName = usable.find((h) => h.name === (row.name ?? row.n));
     const hotel =
       byName ??
       (i === 0 && start && usable.includes(start) ? start : null) ??
-      (coordinates(row.ll)
+      (coordinates(row.ll) && usable.every(hotel => coordinates(hotel.ll))
         ? [...usable].sort((a, b) => distance(row.ll, a.ll) - distance(row.ll, b.ll))[0]
         : usable.at(-1));
     if (hotel) rows[i] = pin(row, hotel);
   }
-  if (coordinates(start?.ll)) {
+  if (start?.name) {
     if (!isHotel(rows[0]) || rows[0].name !== start.name) {
       const t = clock(Math.max(360, minutes(normTime(rows[0].start) || '09:00') - 20));
       rows.unshift(
@@ -47,7 +63,7 @@ function anchor(rows, index, stays, days) {
     if (end && start.name !== end.name) rows[0].note = 'เช็กเอาต์ ขนกระเป๋าไป' + end.name;
     else if (index === days - 1) rows[0].note ||= 'เช็กเอาต์และนำสัมภาระ';
   }
-  if (coordinates(end?.ll)) {
+  if (end?.name) {
     if (!isHotel(rows.at(-1)) || rows.at(-1).name !== end.name) {
       const t = clock(Math.min(1410, minutes(normTime(rows.at(-1).end) || '18:00') + 30));
       rows.push(
@@ -226,7 +242,11 @@ export async function schedule(raw, index, setup, ctx, stays, verified, opts = {
       ? {}
       : { ...row.leg, min: row.legMin ?? row.leg?.min, minSrc: row.minSrc ?? row.leg?.minSrc };
     const unlocated = s.place.fallback || prev.place.fallback;
-    const road = unlocated
+    const stored = opts.savedRoutes && !moved && row.leg?.key && opts.savedRoutes[row.leg.key];
+    const reuse = stored?.geom?.length >= 2 && !unlocated && !isScheduledService(mode);
+    const road = reuse ? { key: row.leg.key, geom: stored.geom, geometry: stored.geom.map(([lng, lat]) => [lat, lng]),
+        real: row.leg.real === true && !stored.approx, km: row.leg.km, min: row.leg.min, via: 'cache' }
+      : unlocated
       ? { key: '', geom: [], geometry: [], real: false, km: 0, min: Math.max(0, Number(incoming.min) || 0), via: 'unlocated' }
       : await route(prev.ll, s.ll, mode, ctx.signal, offline, incoming);
     if (opts.onMap && pins[i - 1] && pins[i]) {
@@ -312,7 +332,7 @@ export async function schedule(raw, index, setup, ctx, stays, verified, opts = {
   }
   if (!keep && index === 0) {
     const hotel = placed.find(isHotel);
-    if (stays[0]?.cost && hotel) hotel.cost = stays[0].cost;
+    if (hotel && (stays[0]?.recommended || stays[0]?.cost)) hotel.cost = stays[0].cost;
   }
   const localized = new Date(date + 'T12:00:00Z').toLocaleDateString('th-TH', {
     weekday: 'short',

@@ -127,3 +127,15 @@ The daily rule evaluator SHALL calculate the weekday in UTC from the setup start
 #### Scenario: Departure rule eligibility
 - **WHEN** a final return time is missing or no final stop is present
 - **THEN** the timed departure-buffer rule is omitted. When present, the calculation uses the final stop's start time and the resolved travel mode.
+
+### Requirement: Explain group checks to travelers
+
+The trip summary SHALL show the count of passed checks and list outstanding conditions first. Each condition SHALL disclose its supporting evidence on demand using a place or meal name and the travel date when known. Internal stop identifiers and repair instructions SHALL stay out of the traveler-facing text. Saved plans SHALL use the same presentation as newly generated plans.
+
+#### Scenario: A visit falls outside opening hours
+- **WHEN** one visit starts after closing and another starts during opening hours but finishes after closing
+- **THEN** the organizer can distinguish arriving too late from staying too long, see the planned time and opening window for each visit, and review both places within the same condition.
+
+#### Scenario: A planned meal is late
+- **WHEN** a dinner is scheduled after the allowed meal window
+- **THEN** the explanation names the dinner and shows its scheduled start and the meal window. A date with no dinner reports the missing meal.

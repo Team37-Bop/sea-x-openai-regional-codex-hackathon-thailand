@@ -1,3 +1,5 @@
+import { needsAutoLodging } from './lodging-state.js';
+import { presentChecks } from './check-presentation.js';
 import { appendTrace, finishTrace } from './operation-trace.js';
 import { renderBookingTasks, reservationStatus, setReservationDone } from './booking-tasks.js';
 import { describePlanChange, renderPlanReview, renderRepairOutcome } from './plan-review.js';
@@ -92,7 +94,7 @@ const history = [];
 let state = { plan: null, routes: {}, setup: {}, selected: 0, demo: true, bookings: {}, cancellations: [] };
 let busy = false;
 let focusedStop;
-let archivedMap;
+let archivedMap, lodgingRequest;
 let menuScope;
 let original, preview, activePlanning, activeReplan;
 let allDays = false,
@@ -109,6 +111,8 @@ function updateTripLink() {
   if (state.localTripId) window.history.replaceState(null, '', '#trip=' + state.localTripId);
 }
 function newTrip() {
+  stopLodgingRequest();
+  lodgingRequest = null;
   archivedMap?.controller?.abort();
   archivedMap = null;
   bindTripIntegrations(state);
@@ -251,6 +255,76 @@ function dayTotals(day) {
     ((stop.leg?.mode ?? stop.leg?.m) === 'walk' ? Number(stop.leg.km || 0) : 0), 0);
   return 'เดิน ' + walk.toFixed(1) + ' กม. · ฿' + cash.format(cost);
 }
+function checkLabel(check) {
+  const label = node('span', check.label, 'check-label');
+  if (check.member) label.append(node('small', ' · ' + check.member, 'check-meta'));
+  return label;
+}
+function failedCheck(check) {
+  const { issues } = check;
+  const row = node(issues.length ? 'details' : 'div', null, 'check-failure');
+  const heading = node(issues.length ? 'summary' : 'div', null, 'check-summary');
+  const mark = node('span', '!', 'check-mark');
+  mark.setAttribute('aria-hidden', 'true');
+  const text = node('span', null, 'check-text');
+  const label = checkLabel(check);
+  if (issues.length > 1) label.append(node('small', ' · ' + issues.length + ' รายการ', 'check-meta'));
+  text.append(label);
+  if (issues.length) {
+    const first = issues[0];
+    const reason = first.detail.split(' · ')[0];
+    const preview = [reason, first.subject || first.when].filter(Boolean).join(' · ');
+    if (preview) text.append(node('small', preview, 'check-preview'));
+  }
+  heading.append(mark, text);
+  row.append(heading);
+  if (issues.length) {
+    const list = node('ul', null, 'check-issues');
+    for (const issue of issues) {
+      const entry = node('li');
+      if (issue.when) entry.append(node('small', issue.when));
+      if (issue.subject) entry.append(node('strong', issue.subject));
+      if (issue.detail) entry.append(node('p', issue.detail));
+      list.append(entry);
+    }
+    row.append(list);
+  }
+  return row;
+}
+let displayedCheckPlan;
+function renderChecks(plan) {
+  if (displayedCheckPlan === plan) return;
+  displayedCheckPlan = plan;
+  const container = $('#checks-list'), count = $('#checks-count');
+  container.replaceChildren();
+  count.textContent = '';
+  if (!plan) return;
+  const checks = presentChecks(plan, plan.setup ?? state.setup);
+  if (!checks.length) return;
+  const passed = checks.filter(check => check.pass), failed = checks.filter(check => !check.pass);
+  count.textContent = 'ผ่าน ' + passed.length + '/' + checks.length + ' ข้อ';
+  count.dataset.state = failed.length ? 'partial' : 'complete';
+  if (failed.length) {
+    container.append(node('h3', 'ต้องปรับ ' + failed.length + ' ข้อ', 'check-attention'));
+    const group = node('div', null, 'check-failures');
+    for (const check of failed) group.append(failedCheck(check));
+    container.append(group);
+  }
+  if (passed.length) {
+    const group = node('details', null, 'check-passed');
+    const title = node('summary', failed.length ? 'ดูเงื่อนไขที่ผ่านแล้ว' : 'ดูเงื่อนไขทั้งหมด');
+    const list = node('ul');
+    for (const check of passed) {
+      const item = node('li');
+      const mark = node('span', '✓', 'check-tick');
+      mark.setAttribute('aria-hidden', 'true');
+      item.append(mark, checkLabel(check));
+      list.append(item);
+    }
+    group.append(title, list);
+    container.append(group);
+  }
+}
 async function recoverDayMap(plan, index) {
   const archive = archivedMap;
   if (archive?.plan !== plan || archive.checked.has(index)) return;
@@ -281,6 +355,74 @@ async function recoverDayMap(plan, index) {
     if (archive.controller === controller) archive.pending = undefined;
   }
 }
+function updateLodgingNotice() {
+  const notice = $('#lodging-notice');
+  const chosen = state.plan?.flags?.stay?.stays?.find(stay => stay.name && state.setup?.stay?.mode === 'auto');
+  const canChoose = state.localTripId && needsAutoLodging(state.plan) && !preview;
+  const request = lodgingRequest?.plan === state.plan ? lodgingRequest : null;
+  const pending = request?.phase === 'running';
+  const text = request?.text || 'ยังไม่ได้เลือกโรงแรมสำหรับทริปนี้';
+  notice.hidden = Boolean(preview) || !(chosen || canChoose);
+  const button = notice.querySelector('button');
+  const description = chosen ? 'Bop เลือก ' + chosen.name + ' เป็นที่พัก · ยังไม่ได้จอง' : text;
+  if (notice.querySelector('p').textContent !== description) notice.querySelector('p').textContent = description;
+  button.hidden = !chosen && (!canChoose || pending);
+  button.textContent = chosen ? 'ดูรายละเอียดที่พัก' : 'ให้ Bop เลือกที่พัก';
+  button.onclick = chosen ? () => switchView('book') : chooseArchivedLodging;
+  for (const message of document.querySelectorAll('[data-lodging-status]'))
+    if (message.textContent !== text) message.textContent = text;
+  for (const retry of document.querySelectorAll('[data-lodging-retry]')) retry.hidden = pending;
+}
+function stopLodgingRequest() {
+  if (lodgingRequest?.phase !== 'running') return;
+  lodgingRequest.controller.abort();
+  lodgingRequest.phase = 'paused';
+  lodgingRequest.text = 'พักการเลือกที่พักไว้ สามารถให้ Bop เลือกต่อได้';
+  updateLodgingNotice();
+}
+async function chooseArchivedLodging() {
+  const id = state.localTripId, plan = state.plan;
+  if (!id || !needsAutoLodging(plan) || activePlanning || activeReplan || preview || pendingVotes) return;
+  if (lodgingRequest?.plan === plan && lodgingRequest.phase === 'running') return;
+  stopLodgingRequest();
+  const request = { plan, phase: 'running', controller: new AbortController(), text: 'Bop กำลังเลือกโรงแรมสำหรับทริปนี้…' };
+  lodgingRequest = request;
+  updateLodgingNotice();
+  try {
+    const result = await api('/api/local-trips/' + id + '/lodging', {}, undefined, {
+      signal: request.controller.signal,
+      onStep: text => {
+        if (request !== lodgingRequest || request.controller.signal.aborted) return;
+        request.text = text;
+        updateLodgingNotice();
+      },
+    });
+    if (request.controller.signal.aborted || state.plan !== plan || state.localTripId !== id || activeReplan || activePlanning || preview) return;
+    if (!result.plan || needsAutoLodging(result.plan)) throw Error('ยังยืนยันโรงแรมสำหรับทริปนี้ไม่ได้');
+    archivedMap?.controller?.abort();
+    state.plan = result.plan;
+    state.setup = result.plan.setup;
+    state.routes = result.routes || {};
+    archivedMap = { id, plan: result.plan, checked: new Set() };
+    lodgingRequest = null;
+    if (original?.localTripId === id) {
+      original.plan = structuredClone(state.plan);
+      original.setup = original.plan.setup;
+      original.routes = structuredClone(state.routes);
+    }
+    if (focusedStop && !$('#place-panel').hidden) {
+      const updated = state.plan.days.flatMap(day => day.stops).find(stop => stop.id === focusedStop);
+      if (updated) place(updated);
+      else closePlaceSheet($('#place-panel'), { restoreFocus: false });
+    }
+    render();
+  } catch (error) {
+    if (request.controller.signal.aborted || state.plan !== plan || lodgingRequest !== request) return;
+    request.phase = 'error';
+    request.text = error.message || 'ยังยืนยันโรงแรมสำหรับทริปนี้ไม่ได้';
+    updateLodgingNotice();
+  }
+}
 function render() {
   const plan = preview?.plan || state.plan;
   if (plan?.days.length) state.selected = Math.max(0, Math.min(state.selected, plan.days.length - 1));
@@ -305,11 +447,10 @@ function render() {
   const previousDate = dateStrip.dataset.activeDate;
   dateStrip.replaceChildren();
   $('#itinerary').replaceChildren();
-  $('#checks-list').replaceChildren();
+  renderChecks(plan);
   $('#plan-repair').replaceChildren();
   if (!preview) renderRepairOutcome($('#plan-repair'), plan?.repairOutcome);
   $('#totals').textContent = '';
-  $('#checks-count').textContent = '';
   if (!plan) {
     $('#itinerary').append(node('p', 'ยังไม่มีแผนทริป', 'empty'));
     return;
@@ -330,7 +471,8 @@ function render() {
   if (preview) $('#itinerary').append(node('p', 'กำลังดูตัวอย่างแผน · รอผลโหวต', 'preview-note'));
   const stops = plan.days.flatMap((row) => row?.stops ?? []);
   const total = stops.reduce((sum, stop) => sum + Number(stop.cost || 0) + Number(stop.leg?.cost || 0), 0);
-  $('#totals').textContent = '฿' + cash.format(total) + ' / คน';
+  const unknownRoomPrice = plan.flags?.stay?.stays?.some(stay => stay.recommended && !Number.isFinite(stay.cost));
+  $('#totals').textContent = '฿' + cash.format(total) + ' / คน' + (unknownRoomPrice ? ' · ยังไม่รวมค่าที่พัก' : '');
   const changes = new Map((preview ? describePlanChange(state.plan, plan).changes : []).map(change => [change.id, change]));
   const changedDays = new Set([...changes.values()].flatMap((change) => [change.before?.day, change.after?.day]));
   const dates = plan.days.map((item, i) => visitDate(item, i, plan.setup || state.setup));
@@ -424,7 +566,8 @@ function render() {
       const label = kind[kindId] || kindId || 'กิจกรรม';
       chip(label);
       if (!visitCoordinates(stop)) chip('ยังไม่ทราบพิกัด', 'warn');
-      if (Number.isFinite(stop.cost)) chip('฿' + cash.format(stop.cost) + ' / คน');
+      if (unknownRoomPrice && ['stay', 'hotel'].includes(stop.k ?? stop.kind) && !stop.cost) chip('ยังไม่ทราบค่าห้องพัก');
+      else if (Number.isFinite(stop.cost)) chip('฿' + cash.format(stop.cost) + ' / คน');
       const visit = availability.get(stop);
       if (visit.reason) chip('ปิดในวันที่วางแผน · ' + visit.reason, 'closed');
       else if (visit.weekRule) chip(visit.weekRule);
@@ -481,28 +624,16 @@ function render() {
       $('#itinerary').append(row);
     }
   }
-  const checks = plan.checks ?? [];
-  if (checks.length)
-    $('#checks-count').textContent =
-      checks.filter((item) => item.pass).length + ' / ' + checks.length + ' ผ่าน';
-  for (const item of checks) {
-    const row = node('div', null, 'check-row');
-    row.append(
-      node('b', item.pass ? '✓' : '!', item.pass ? '' : 'fail'),
-      document.createTextNode(item.label),
-    );
-    if (item.member) row.append(node('small', item.member, 'rule-member'));
-    for (const problem of item.problems || []) row.append(node('p', problem));
-    $('#checks-list').append(row);
-  }
   const todo = renderBookingTasks($('#reservations'), state, {
     run: task,
     rerender: render,
+    resolveLodging: state.localTripId ? chooseArchivedLodging : null,
     adjust: (command, day) => {
       switchView('plan');
       return adjust(command, day);
     },
   });
+  updateLodgingNotice();
   $('#booking-count').textContent = todo ? '(' + todo + ')' : '';
   if (todo) $('#itinerary').append(button('ดูรายการที่ต้องติดต่อ ' + todo + ' รายการ', () => switchView('book')));
   forecast.renderStrip($('#alerts'), plan, state.selected);
@@ -996,6 +1127,7 @@ $('#cancel-plan').onclick = editPlanningDraft;
 $('#planning-edit').onclick = editPlanningDraft;
 
 async function generateTrip(input) {
+  stopLodgingRequest();
   archivedMap?.controller?.abort();
   const ctrl = new AbortController();
   activePlanning = ctrl;
@@ -1246,6 +1378,7 @@ function applyOption(option, routes, { summary = '', fromLineVote = false, selec
   forecast.refresh();
 }
 async function adjust(command, day = state.selected) {
+  stopLodgingRequest();
   if (!state.plan) return;
   clearChat();
   preview = pendingVotes = null;
@@ -1447,6 +1580,7 @@ if (localTrip)
     archivedMap = { id: localTrip[1], plan: state.plan, checked: new Set() };
     presentSummary(saved.summary);
     render();
+    if (needsAutoLodging(state.plan)) void chooseArchivedLodging();
     forecast.refresh();
   });
 else setupDialog.showModal();
