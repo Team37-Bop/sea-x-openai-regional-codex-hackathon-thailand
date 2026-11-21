@@ -1081,7 +1081,6 @@ button[aria-pressed="true"] {
 .stop .stop-note { margin-top: 4px; }
 .day-tabs .day-notices { color: var(--red); }
 .leg .leg-detail { display: block; font-size: inherit; }
-.stop-note a { position: relative; z-index: 1; overflow-wrap: anywhere; }
 .leg {
   margin: 0 0 0 66px;
   padding: 2px 0 3px 20px;
