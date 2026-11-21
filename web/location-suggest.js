@@ -189,6 +189,15 @@ function mergeRows(...groups) {
   }
   return [...rows.values()].slice(0, 7);
 }
+function contextParams(kind, context) {
+  const params = new URLSearchParams({ kind });
+  if (context.city) params.set('city', String(context.city).slice(0, 120));
+  if (Array.isArray(context.center) && context.center.length === 2 && context.center.every(Number.isFinite)) {
+    params.set('lat', context.center[0].toFixed(3));
+    params.set('lon', context.center[1].toFixed(3));
+  }
+  return params;
+}
 export function locationTerm(value, caret = value.length, multiple = false) {
   if (!multiple) return { query: value.trim(), start: 0, end: value.length };
   const pos = Number.isInteger(caret) ? caret : value.length;
@@ -310,23 +319,22 @@ export function attachLocationSuggestions(
     }
     const context = getContext() ?? {};
     const local = localSuggestions(query, { kind, ...context });
-    const params = new URLSearchParams({ q: query, kind });
-    if (context.city) params.set('city', String(context.city).slice(0, 120));
-    if (
-      Array.isArray(context.center) &&
-      context.center.length === 2 &&
-      context.center.every(Number.isFinite)
-    ) {
-      params.set('lat', context.center[0].toFixed(3));
-      params.set('lon', context.center[1].toFixed(3));
-    }
+    const params = contextParams(kind, context);
+    const scope = params.toString();
+    params.set('q', query);
     const key = params.toString(),
       hit = cache.get(key);
     if (hit && hit.until > Date.now()) {
       render(mergeRows(local, hit.rows));
       return;
     }
-    render(local);
+    const cachedNames = [];
+    const prefix = folded(query);
+    for (const entry of cache.values()) {
+      if (entry.scope !== scope || entry.until <= Date.now()) continue;
+      for (const row of entry.rows) if (matchScore([row.name], prefix) <= 2) cachedNames.push(row);
+    }
+    render(mergeRows(local, cachedNames));
     if ([...query].length < 2 || query.length > 120) return;
     timer = setTimeout(async () => {
       if (seq !== sequence || doc.activeElement !== input) return;
@@ -342,11 +350,12 @@ export function attachLocationSuggestions(
           seq !== sequence ||
           doc.activeElement !== input ||
           term().query !== query ||
+          contextParams(kind, getContext() ?? {}).toString() !== scope ||
           !Array.isArray(data.suggestions)
         )
           return;
         if (cache.size >= 160) cache.delete(cache.keys().next().value);
-        cache.set(key, { rows: data.suggestions, until: Date.now() + 300000 });
+        cache.set(key, { scope, rows: data.suggestions, until: Date.now() + 300000 });
         render(mergeRows(local, data.suggestions));
       } catch {
         /* Manual input and local suggestions still work. */

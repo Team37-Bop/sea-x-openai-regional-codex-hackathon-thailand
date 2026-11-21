@@ -94,6 +94,19 @@ test('lodging search uses the destination bias and excludes wrong tags and far-a
     ['Novotel Danang Premier Han River', 'River Hotel Danang'],
   );
 });
+test('the same POI prefix stays within the selected destination across cached searches', async (t) => {
+  const features = [
+    ['Riverside market Bangkok', [100.5, 13.75]],
+    ['Riverside market Chiang Mai', [99, 18.79]],
+  ].map(([name, coordinates]) => ({ properties: { name, countrycode: 'TH' }, geometry: { coordinates } }));
+  const network = t.mock.method(globalThis, 'fetch', async () => Response.json({ features }));
+  const names = async (city) =>
+    (await lookupSuggestions('Riverside mar', { kind: 'place', city })).map((row) => row.name);
+  assert.deepEqual(await names('กรุงเทพฯ'), ['Riverside market Bangkok']);
+  assert.deepEqual(await names('เชียงใหม่'), ['Riverside market Chiang Mai']);
+  assert.deepEqual(await names('กรุงเทพฯ'), ['Riverside market Bangkok']);
+  assert.equal(network.mock.callCount(), 2);
+});
 test('invalid and cancelled searches never reach the service', async (t) => {
   const network = t.mock.method(globalThis, 'fetch', () => {
     throw Error('unexpected request');

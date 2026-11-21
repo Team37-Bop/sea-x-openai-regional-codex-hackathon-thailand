@@ -75,20 +75,26 @@ export async function lookupSuggestions(
   kind = normalizedKind(kind);
   if (typeof query !== 'string' || query.length > 120 || /[\u0000-\u001f\u007f]/.test(query))
     throw bad('ชื่อสถานที่ไม่ถูกต้อง');
-  if (typeof city !== 'string' || city.length > 120 || (center != null && !coordinates(center)))
+  if (
+    typeof city !== 'string' ||
+    city.length > 120 ||
+    /[\u0000-\u001f\u007f]/.test(city) ||
+    (center != null && !coordinates(center))
+  )
     throw bad('เมืองหรือพิกัดไม่ถูกต้อง');
   const q = safeString(query),
     contextCity = safeString(city);
   if (!q) return [];
   const local = localSuggestions(q, { kind, city: contextCity });
   if ([...q].length < 2 || local.length >= 7) return local;
+  const nearDestination = kind === 'stay' || kind === 'place';
   const focus = coordinates(center)
     ? center
-    : kind === 'stay' && contextCity
+    : nearDestination && contextCity
       ? localSuggestions(contextCity, { kind: 'city' })[0]?.ll
       : null;
   const url = new URL('https://photon.komoot.io/api/');
-  url.searchParams.set('q', kind === 'stay' && contextCity && !focus ? q + ' ' + contextCity : q);
+  url.searchParams.set('q', nearDestination && contextCity && !focus ? q + ' ' + contextCity : q);
   url.searchParams.set('limit', '10');
   if (kind === 'city') url.searchParams.append('layer', 'city');
   if (kind === 'stay') for (const type of hotelTypes) url.searchParams.append('osm_tag', 'tourism:' + type);
@@ -118,10 +124,10 @@ export async function lookupSuggestions(
     if (!Array.isArray(features)) return local;
     const rows = [...local];
     const remote = features.map((feature) => parseFeature(feature, kind)).filter(Boolean);
-    if (kind === 'stay' && focus) remote.sort((a, b) => distance(focus, a.ll) - distance(focus, b.ll));
+    if (nearDestination && focus) remote.sort((a, b) => distance(focus, a.ll) - distance(focus, b.ll));
     for (const item of remote) {
       if (rows.length >= 7) break;
-      if (kind === 'stay' && focus && distance(focus, item.ll) > 160) continue;
+      if (nearDestination && focus && distance(focus, item.ll) > 100) continue;
       if (!rows.some((row) => row.name === item.name && distance(row.ll, item.ll) < 0.8)) rows.push(item);
     }
     signal.throwIfAborted();
