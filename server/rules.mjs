@@ -1,4 +1,5 @@
 import { minutes, validTime, clock } from './domain.mjs';
+import { localTransport } from '../web/transport-endpoints.js';
 import { visitDate, visitAvailability, thaiWeekdays, foodRestriction, hasSuitableMeal } from '../web/itinerary-facts.js';
 
 const num = (value) => (Number.isFinite(Number(value)) ? Number(value) : 0);
@@ -151,7 +152,7 @@ export function checks(
   add('meals', 'มื้อกลางวัน–เย็นครบ', mealIssues);
   const end = plan.days.at(-1)?.stops.at(-1);
   const by = setup.depart?.by === 'undecided' ? plan.flags?.departureSuggested?.by : setup.depart?.by;
-  if (end && validTime(setup.depart?.time) && ['flight', 'train', 'bus'].includes(by)) {
+  if (end && validTime(setup.depart?.time) && !localTransport(setup, 'back') && ['flight', 'train', 'bus'].includes(by)) {
     const buffer = by === 'flight' ? 75 : 30;
     const spare = minutes(setup.depart.time) - minutes(first(end));
     const label =

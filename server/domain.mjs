@@ -89,7 +89,7 @@ export function direction(value, place) {
     });
   }
   const by = modes.includes(value.by) ? value.by : time ? 'flight' : 'undecided';
-  return { by, [place]: str(value[place]), ...(coordinates(value.placeLL) ? { placeLL: value.placeLL } : {}), time, auto: value.auto === true, ...(choice ? { choice } : {}) };
+  return { by, [place]: str(value[place]), ...(value.endpointDefault === true ? { endpointDefault: true } : {}), ...(coordinates(value.placeLL) ? { placeLL: value.placeLL } : {}), time, auto: value.auto === true, ...(choice ? { choice } : {}) };
 }
 export function normalize(input) {
   if (!isDate(input?.startDate)) throw bad('Bop ต้องการวันเริ่มเดินทางที่ถูกต้อง');

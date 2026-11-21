@@ -8,7 +8,17 @@ Find one-way travel to or from a trip and carry the selected option into the iti
 
 ### Requirement: Travel preferences for each direction
 
-The setup form SHALL provide separate visible outbound and return mode groups. Each defaults to “ให้ Bop เลือกให้” and offers flight, bus, train and driving. In recommendation mode, the organizer can enter the outbound origin or return destination and Bop compares services while planning. An empty location SHALL stay empty and skip service lookup for that direction.
+The setup form SHALL provide separate visible outbound and return mode groups. Each defaults to “ให้ Bop เลือกให้” and offers flight, bus, train and driving. An editable Bangkok starting point (BKK for flights) SHALL appear before submission. The return destination SHALL follow the outbound origin until the organizer supplies a separate return destination. Planning and direct transport lookup SHALL resolve previously saved blank endpoints the same way. A missing direction SHALL remain absent. The booking view SHALL identify the default endpoint used in the plan.
+
+#### Scenario: London with default travel preferences
+
+- **WHEN** the organizer leaves both recommendations at their defaults for a London trip
+- **THEN** Bop compares Bangkok to London and London to Bangkok independently and distinguishes supplier offers, web results and estimates.
+
+#### Scenario: Stay in the same city
+
+- **WHEN** the destination and the starting city refer to Bangkok, including BKK or DMK
+- **THEN** Bop plans local arrival or departure timing for that direction. The booking view shows the local guidance, and no intercity service lookup or ticket is produced for it.
 
 #### Scenario: Mix a recommendation with a fixed service
 

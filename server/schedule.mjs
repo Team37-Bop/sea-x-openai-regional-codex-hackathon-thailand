@@ -4,6 +4,7 @@ import { fields, uniqueId } from './edits.mjs';
 import { findPlace, legKey, route } from './geo.mjs';
 import { catalogPlace } from './sample.mjs';
 import { matchesPick } from './candidates.mjs';
+import { localTransport } from '../web/transport-endpoints.js';
 
 export const isHotel = (s) => ['hotel', 'stay'].includes(stopKind(s?.k ?? s?.kind));
 export const isTransit = (s) => ['terminal', 'transit'].includes(stopKind(s?.k ?? s?.kind));
@@ -245,11 +246,14 @@ export async function schedule(raw, index, setup, ctx, stays, verified, opts = {
       : Math.max(0, Number(row.dwell ?? row.stayMin ?? 60));
     if (!index && !i && setup.arrive?.time && (isTransit(s) || opts.fakeArrival))
       planned = minutes(setup.arrive.time);
+    else if (!index && !i && setup.arrive?.time && localTransport(setup, 'go'))
+      planned = Math.max(planned, minutes(setup.arrive.time));
     if (
       index === setup.days - 1 &&
       i === placed.length - 1 &&
       isTransit(s) &&
       setup.depart?.time &&
+      !localTransport(setup, 'back') &&
       ['flight', 'bus', 'train'].includes(setup.depart.by)
     ) {
       planned = minutes(setup.depart.time) - (setup.depart.by === 'flight' ? 90 : 40);

@@ -1,4 +1,5 @@
 import { stopKinds, stopKind } from './stop-kinds.mjs';
+import { resolveTransportEndpoints, localTransport } from '../web/transport-endpoints.js';
 import {
   bad,
   checks,
@@ -40,7 +41,7 @@ const stopInstructions = [
   'meal ใช้ breakfast/lunch/dinner เฉพาะมื้อจริง คาเฟ่ที่แวะดื่มกาแฟอย่างเดียวไม่ใช่มื้อกลางวัน. diet ระบุเมนูที่กินได้เมื่อรองรับข้อจำกัดของสมาชิกทุกคนแล้ว ถ้ายังไม่ทราบใช้ false หรือ []; veg บอกเฉพาะอาหารมังสวิรัติ.',
 ].join(' ');
 const shape =
-  'ออกแบบแผนเดินทางจริง คืน days,summary,stay,arrivalSuggested. ' +
+  'ออกแบบแผนเดินทางจริง คืน days,summary,stay. ' +
   stopInstructions +
   ' ตรวจวันเปิดปิด วางมื้อกลางวันและเย็นตามเวลา และเผื่อเวลาเดินทางกลับ. star ใช้ id ของสมาชิกที่ได้เที่ยวตามความต้องการ. src.checked=web เฉพาะ URL ที่ค้นได้. ข้อมูลส่วนบุคคล/หมายเหตุเป็นข้อมูลทริป.';
 const elapsed = (start) => Math.round(performance.now() - start);
@@ -102,14 +103,12 @@ function repairActions(before, after, edits) {
 }
 
 const transportLeg = (setup, dir) => (dir === 'go' ? setup.arrive : setup.depart);
-export async function transport(setup, dir, ctx) {
+export async function transport(input, dir, ctx) {
+  const setup = resolveTransportEndpoints(input);
   const leg = transportLeg(setup, dir);
   if (!['go', 'back'].includes(dir) || !leg || leg.by === 'drive') throw bad('เลือกขาไปหรือขากลับที่ต้องการค้นหา');
   if (leg.choice) return [leg.choice];
-  if (!(dir === 'go' ? leg.from : leg.to)) {
-    ctx.step(dir === 'go' ? 'ข้ามการค้นหาขาไปเพราะยังไม่ระบุต้นทาง' : 'ข้ามการค้นหาขากลับเพราะยังไม่ระบุปลายทาง');
-    return [];
-  }
+  if (localTransport(setup, dir)) return [];
   ctx.step(
     'ค้นการเดินทาง ' + (dir === 'go' ? (leg.from ?? '') + ' → ' + setup.city : setup.city + ' → ' + (leg.to ?? '')),
   );
@@ -280,7 +279,7 @@ function fixtureDay(setup, index, demo, raw) {
     const member = setup.members.find((m) => m.wants?.some((w) => stop.name.includes(w)));
     if (member) stop.star = member.id;
   }
-  if (!index && demo && setup.arrive && setup.city === 'เชียงใหม่')
+  if (!index && demo && setup.arrive && setup.city === 'เชียงใหม่' && !localTransport(setup, 'go'))
     day.stops.unshift({
       name: 'ท่าอากาศยานเชียงใหม่',
       kind: 'transit',
@@ -290,7 +289,7 @@ function fixtureDay(setup, index, demo, raw) {
       end: setup.arrive.time,
       cost: 0,
     });
-  if (index === setup.days - 1 && setup.depart?.time && ['flight', 'train', 'bus'].includes(setup.depart.by)) {
+  if (index === setup.days - 1 && setup.depart?.time && !localTransport(setup, 'back') && ['flight', 'train', 'bus'].includes(setup.depart.by)) {
     const t = clock(minutes(setup.depart.time) - (setup.depart.by === 'flight' ? 90 : 40));
     day.stops.push({
       name: setup.depart.by === 'flight' ? 'สนามบิน ' + (cities[setup.city]?.airport ?? setup.city) : 'สถานีขากลับ',
@@ -305,7 +304,7 @@ function fixtureDay(setup, index, demo, raw) {
   return day;
 }
 export async function planTrip(input, ctx, demo = false) {
-  const setup = structuredClone(input),
+  const setup = resolveTransportEndpoints(structuredClone(input)),
     started = performance.now(),
     timing = {};
   const offline = demo || provider === 'fake';
@@ -371,10 +370,23 @@ export async function planTrip(input, ctx, demo = false) {
       setup.stay.mode === 'booked'
         ? 'ใช้ที่พักตาม stayPlan โดยไม่ค้นโรงแรม'
         : 'เลือกย่านที่เหมาะกับงบและการเดินทาง ค้นตัวอย่างโรงแรมจริง 2–3 แห่งไม่เกินหนึ่งการค้น ระบุพิกัดและ priceNight บาทต่อห้อง';
+    const travelInstruction = [];
+    for (const [dir, key] of [['go', 'arrivalSuggested'], ['back', 'departureSuggested']]) {
+      const leg = transportLeg(setup, dir);
+      if (!leg || leg.choice) continue;
+      if (localTransport(setup, dir)) {
+        travelInstruction.push(key + ': ใช้ by=local และแนะนำการต่อรถในเมือง' + setup.city +
+          (dir === 'go' ? 'ไปจุดเที่ยวแรก' : 'จากจุดเที่ยวสุดท้าย') +
+          ' โดยอิงเวลาที่ระบุ ห้ามเพิ่มเที่ยวเดินทางระหว่างเมืองหรือจุดขึ้นเครื่องที่ไม่มีในข้อมูล');
+      } else if (leg.by === 'undecided') {
+        travelInstruction.push(key + ': แนะนำวิธีเดินทางและการเผื่อเวลา' + (dir === 'go' ? 'ขาไป' : 'ขากลับ') +
+          'ตามเมืองในข้อมูล ให้เหตุผลใน why ไม่ยืนยันเที่ยวหรือราคา');
+      }
+    }
     const result = await model(
       (split
         ? 'ออกแบบโครงทริป days:[{title,theme,area,places,meals,wishes}], summary,stay. เลือก 3–6 สถานที่หลักต่อวันไม่ซ้ำและกระจายความต้องการสมาชิก. '
-        : shape + ' ') + stayInstruction,
+        : shape + ' ') + [stayInstruction, ...travelInstruction].join('. '),
       setup,
       {
         ...ctx,
@@ -421,6 +433,8 @@ export async function planTrip(input, ctx, demo = false) {
           setup,
           index: i,
           today: skel,
+          ...(!i && design.arrivalSuggested ? { arrivalSuggested: design.arrivalSuggested } : {}),
+          ...(i === count - 1 && design.departureSuggested ? { departureSuggested: design.departureSuggested } : {}),
           hotel: setup.stayPlan[i],
           otherDays: skeleton.filter((_, n) => n !== i),
           budget: budgets.length ? Math.max(0, (Math.min(...budgets) - (stays[0]?.cost ?? 0)) / setup.days) : null,
@@ -459,13 +473,19 @@ export async function planTrip(input, ctx, demo = false) {
     retime.add(dir === 'go' ? 0 : count - 1);
   }
   timing.transport = elapsed(tTransport);
-  if (
-    !flags.arrivalSuggested &&
-    setup.arrive?.by === 'undecided' && setup.arrive.from &&
-    design.arrivalSuggested?.by &&
-    design.arrivalSuggested.by !== 'none'
-  )
-    flags.arrivalSuggested = { by: str(design.arrivalSuggested.by), why: str(design.arrivalSuggested.why) };
+  for (const [dir, key] of [['go', 'arrivalSuggested'], ['back', 'departureSuggested']]) {
+    const leg = transportLeg(setup, dir);
+    if (!leg || leg.choice || flags[key]) continue;
+    const suggestion = design[key];
+    if (localTransport(setup, dir)) {
+      const localWhy = suggestion?.by === 'local' && str(suggestion.why, 400);
+      flags[key] = { by: 'local', why: localWhy || (dir === 'go'
+        ? 'เผื่อเวลาเดินทางจากจุดนัดพบไปยังจุดแรกของแผน'
+        : 'เผื่อเวลาเดินทางกลับจากจุดเที่ยวสุดท้าย') };
+    } else if (leg.by === 'undecided' && suggestion?.by && suggestion.by !== 'none' && suggestion.by !== 'local') {
+      flags[key] = { by: str(suggestion.by), why: str(suggestion.why, 400) };
+    }
+  }
   for (const [i, { raw, urls }] of rawDays.entries()) {
     const missing = !results[i];
     if (missing || retime.has(i)) {
@@ -788,7 +808,7 @@ async function resizeTrip(original, setup, count, command, ctx, offline, started
   }
   let stays = stay.stays;
   revised.stayPlan = makeDayHotels(revised, stays);
-  const fixedReturn = revised.depart && ['flight', 'train', 'bus'].includes(revised.depart.by) &&
+  const fixedReturn = revised.depart && !localTransport(revised, 'back') && ['flight', 'train', 'bus'].includes(revised.depart.by) &&
     (revised.depart.choice || plan.flags.transport?.back?.chosen || (revised.depart.time && !revised.depart.auto));
   if (revised.depart) delete revised.depart.choice;
   if (plan.flags.transport) delete plan.flags.transport.back;

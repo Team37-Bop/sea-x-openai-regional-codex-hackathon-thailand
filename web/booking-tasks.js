@@ -1,5 +1,6 @@
 import { action, el } from './integration-ui.js';
 import { mediaUrl } from './setup-extras.js';
+import { localTransport } from './transport-endpoints.js';
 
 const baht = new Intl.NumberFormat('th-TH', { maximumFractionDigits: 0 });
 const dates = new Intl.DateTimeFormat('th-TH', {
@@ -13,6 +14,7 @@ const modes = {
   bus: 'รถบัส',
   train: 'รถไฟ',
   drive: 'รถส่วนตัว',
+  local: 'เดินทางในเมือง',
   undecided: 'ยังไม่ได้เลือกวิธีเดินทาง',
 };
 
@@ -182,18 +184,29 @@ function addDirection(selected, fallback, plan, setup, dir, { adjust, run }) {
   card.append(el('h4', 'การเดินทาง' + label));
   const date = dayLabel(outbound ? setup.startDate : setup.endDate);
   if (date) card.append(el('p', date, 'muted'));
+  const local = !chosen && localTransport(setup, dir);
+  if (leg.endpointDefault) {
+    const place = outbound ? leg.from : leg.to;
+    if (place) card.append(el('p', (outbound ? 'ต้นทางที่ใช้วางแผน · ' : 'จุดหมายขากลับที่ใช้วางแผน · ') + place, 'muted'));
+  }
   if (chosen) {
     card.append(el('span', 'เลือกไว้ในแผน', 'booking-tag'), describeOption(chosen, setup.members?.length || 0));
   } else {
     const from = outbound ? leg.from : setup.city;
     const to = outbound ? setup.city : leg.to;
     const row = el('div', null, 'booking-row');
-    row.append(el('h4', modes[leg.by] || modes.undecided));
-    const routeText = [from || 'ยังไม่ระบุต้นทาง', to || 'ยังไม่ระบุปลายทาง'].join(' → ');
-    row.append(el('p', routeText + (leg.time ? ' · ' + (outbound ? 'ถึง ' : 'ออก ') + leg.time : '')));
-    if (leg.by !== 'drive') row.append(el('p', 'ยังไม่มีค่าโดยสารที่เลือกไว้', 'muted'));
+    row.append(el('h4', local ? 'เดินทางใน' + setup.city : modes[leg.by] || modes.undecided));
+    const timeLabel = local ? (outbound ? 'เริ่มเที่ยว' : 'เดินทางกลับ') : (outbound ? 'ถึง' : 'ออก');
+    const timeText = leg.time ? timeLabel + (leg.auto || leg.by === 'undecided' ? 'ประมาณ ' : ' ') + leg.time : '';
+    if (local) {
+      if (timeText) row.append(el('p', timeText));
+    } else {
+      const routeText = [from || 'ยังไม่ระบุต้นทาง', to || 'ยังไม่ระบุปลายทาง'].join(' → ');
+      row.append(el('p', [routeText, timeText].filter(Boolean).join(' · ')));
+      if (leg.by !== 'drive') row.append(el('p', 'ยังไม่มีค่าโดยสารที่เลือกไว้', 'muted'));
+    }
     const suggestion = outbound ? plan.flags?.arrivalSuggested : plan.flags?.departureSuggested;
-    if (leg.by === 'undecided' && suggestion?.by && suggestion.by !== 'none')
+    if ((local || leg.by === 'undecided') && suggestion?.by && suggestion.by !== 'none')
       row.append(
         el(
           'p',

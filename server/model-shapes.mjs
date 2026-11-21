@@ -127,8 +127,9 @@ const stop = object({
   stayMin: { ...number, description: 'Visit duration in minutes at this stop, excluding travel time.' },
 });
 const day = object({ title: string, stops: array(stop) }, ['title', 'stops']);
+const travelSuggestion = object({ by: string, why: string }, ['by', 'why']);
 const design = object(
-  { days: array(day), summary: string, stay, arrivalSuggested: object({ by: string, why: string }) },
+  { days: array(day), summary: string, stay, arrivalSuggested: travelSuggestion, departureSuggested: travelSuggestion },
   ['days'],
 );
 const edit = object({
@@ -203,6 +204,8 @@ export const shapes = {
     {
       summary: string,
       stay,
+      arrivalSuggested: travelSuggestion,
+      departureSuggested: travelSuggestion,
       days: array(
         object({
           title: string,
@@ -300,7 +303,8 @@ const compactDesign = object(
   {
     summary: string,
     stay: hotel,
-    arrivalSuggested: requiredObject({ by: string, why: string }),
+    arrivalSuggested: travelSuggestion,
+    departureSuggested: travelSuggestion,
     days: array(requiredObject({ title: string, stops: array(compactStop) })),
   },
   ['days', 'summary'],

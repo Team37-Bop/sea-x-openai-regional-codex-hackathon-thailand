@@ -27,6 +27,7 @@ const publicFiles = [
   'stop-note.js',
   'stream.js',
   'style.css',
+  'transport-endpoints.js',
   'trip-integrations.js',
   'workspace-controls.js',
 ];
