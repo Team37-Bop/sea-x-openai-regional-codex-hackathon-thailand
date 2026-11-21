@@ -64,10 +64,9 @@ function savedLocation(input) {
   const hit = selectedLocations.get(input);
   return hit?.name === input.value.trim() ? hit : undefined;
 }
-function withSuggestions(input, kind, multiple = false) {
+function withSuggestions(input, kind, onSelect) {
   attachLocationSuggestions(input, {
     kind,
-    multiple,
     getContext: () => {
       if (kind === 'city') return {};
       const city = setupForm.city.value.trim();
@@ -77,6 +76,7 @@ function withSuggestions(input, kind, multiple = false) {
     onSelect: (item) => {
       selectedLocations.set(input, item);
       if (kind === 'city') lookupCache.set(item.name, item);
+      onSelect?.(item);
     },
   });
 }
@@ -531,7 +531,85 @@ const augmentSetup = installSetupExtras(setupForm, async () =>
 );
 let nextMember = 0;
 let editingSetup;
-function addMember(name = '') {
+const memberWishReaders = new WeakMap();
+function addWishEditor(row, savedWishes) {
+  const editor = node('div', null, 'wish-editor');
+  const header = node('div', null, 'wish-header');
+  const label = node('label', 'อยากไปหรืออยากทำ');
+  const count = node('small');
+  const list = node('ul', null, 'wish-list');
+  list.setAttribute('aria-label', 'รายการที่อยากไปหรืออยากทำ');
+  const entry = node('div', null, 'wish-entry');
+  const input = node('input');
+  input.type = 'text';
+  input.name = 'wants';
+  input.id = row.dataset.id + '-wish';
+  label.htmlFor = input.id;
+  count.id = input.id + '-count';
+  count.setAttribute('role', 'status');
+  input.setAttribute('aria-describedby', count.id);
+  const add = button('เพิ่ม', () => commit(pending()));
+  header.append(label, count);
+  entry.append(input, add);
+  editor.append(header, list, entry);
+
+  const limit = 5;
+  const pending = () => input.value.split(/[,，]/).map((wish) => wish.trim()).filter(Boolean);
+  function validate(wishes) {
+    const remaining = limit - list.children.length;
+    let message = '';
+    if (wishes.length > remaining) message = 'เพิ่มได้อีก ' + remaining + ' รายการ';
+    else if (wishes.some((wish) => wish.length > 120)) message = 'แต่ละรายการยาวได้ไม่เกิน 120 ตัวอักษร';
+    input.setCustomValidity(message);
+  }
+  function refresh() {
+    const size = list.children.length;
+    const wishes = pending();
+    const full = size === limit;
+    input.disabled = full;
+    input.placeholder = full ? 'ครบ 5 รายการแล้ว' : 'เช่น เดินตลาดเช้า';
+    add.disabled = full || !wishes.length;
+    const countText = size + '/' + limit + ' รายการ';
+    if (count.textContent !== countText) count.textContent = countText;
+    list.hidden = !size;
+    validate(wishes);
+  }
+  function appendWish(wish) {
+    const item = node('li');
+    const remove = button('×', () => {
+      item.remove();
+      refresh();
+      input.focus();
+    }, 'wish-remove');
+    remove.setAttribute('aria-label', 'ลบ ' + wish);
+    item.append(node('span', wish), remove);
+    list.append(item);
+  }
+  function commit(wishes) {
+    validate(wishes);
+    if (!wishes.length || !input.reportValidity()) return;
+    wishes.forEach(appendWish);
+    input.value = '';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    if (input.disabled) list.lastElementChild.querySelector('button').focus();
+    else input.focus();
+  }
+  for (const wish of savedWishes.slice(0, limit)) appendWish(wish);
+  withSuggestions(input, 'place', (item) => commit([item.name]));
+  input.addEventListener('input', refresh);
+  input.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' || event.defaultPrevented || event.isComposing || event.keyCode === 229) return;
+    event.preventDefault();
+    commit(pending());
+  });
+  refresh();
+  memberWishReaders.set(row, () => {
+    if (!input.checkValidity()) throw Error(input.validationMessage);
+    return Array.from(list.children, (item) => item.firstElementChild.textContent).concat(pending());
+  });
+  return editor;
+}
+function addMember(name = '', wants = []) {
   if ($('#members').children.length >= 12) return;
   const row = node('div', null, 'member');
   do { row.dataset.id = 'member-' + ++nextMember; } while ([...$('#members').children].some(member => member.dataset.id === row.dataset.id));
@@ -552,11 +630,10 @@ function addMember(name = '') {
     }),
     info,
     limits,
-    field('อยากไปหรืออยากทำ (คั่นด้วยจุลภาค)', 'wants', { maxLength: 250 }),
+    addWishEditor(row, wants),
     field('หมายเหตุ', 'note', { maxLength: 250 }),
   );
   $('#members').append(row);
-  withSuggestions(row.querySelector('[name=wants]'), 'place', true);
   return row;
 }
 $('#add-member').addEventListener('click', () => addMember());
@@ -680,11 +757,11 @@ function restoreForm(setup, flags) {
   $('#city-result').textContent = [setup.country, setup.currency].filter(Boolean).join(' · ');
   $('#members').replaceChildren();
   for (const member of setup.members || []) {
-    const row = addMember(member.name);
+    const row = addMember(member.name, Array.isArray(member.wants) ? member.wants : []);
     if (member.id) row.dataset.id = member.id;
     if (member.role) row.dataset.role = member.role;
     for (const [key, value] of Object.entries({
-      budget: member.budget, walk: member.maxWalkKm, avoid: member.avoid, note: member.note, wants: member.wants?.join(', '),
+      budget: member.budget, walk: member.maxWalkKm, avoid: member.avoid, note: member.note,
     })) row.querySelector('[name=' + key + ']').value = value ?? '';
   }
   if (!$('#members').children.length) addMember();
@@ -744,10 +821,7 @@ function setupInput(found, transportOnly = false) {
       avoid: read('avoid'),
       maxWalkKm: read('walk'),
       budget: read('budget'),
-      wants: read('wants')
-        .split(/[,，]/)
-        .map((item) => item.trim())
-        .filter(Boolean),
+      wants: memberWishReaders.get(row)(),
       note: read('note'),
     };
   });

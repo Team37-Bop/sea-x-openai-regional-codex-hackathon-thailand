@@ -82,6 +82,11 @@ The setup SHALL have 1-12 members, each with a unique slug id, a name and option
 - **WHEN** two members share an id
 - **THEN** the second id gets a suffix so ids stay unique
 
+#### Scenario: Adding and removing member wishes
+- **WHEN** the organizer chooses a place suggestion, or types an activity and presses Enter or “เพิ่ม”
+- **THEN** the member's wish appears as an individually removable item. Each member can have up to five items.
+- **AND** planning and transport searches include a nonempty draft wish even before it is added. Pasted comma-separated wishes are also accepted, and saved wishes reopen as individual items in their original order.
+
 #### Scenario: Note is not an instruction
 - **WHEN** a member note contains text that looks like an instruction to the agent
 - **THEN** the prompts treat it as trip data and the output rules are unchanged
@@ -177,7 +182,7 @@ The destination, outbound origin, return destination, booked lodgings and indivi
 #### Scenario: Selecting a partial name
 
 - **WHEN** the organizer types part of a place name and selects a result by pointer or keyboard
-- **THEN** the field accepts the canonical name and uses known coordinates for that selection. Editing the text invalidates the selection. A wish selection updates only the entry being edited in the comma-separated list.
+- **THEN** the field accepts the canonical name and uses known coordinates for that selection. Editing the text invalidates the selection. In a member's wish field, selecting a result adds its name as a new item and clears the field for the next wish.
 
 #### Scenario: Search service unavailable
 
