@@ -5,6 +5,7 @@ import { extname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { bad, dateAt, normalize } from './domain.mjs';
 import { findCity, weather } from './geo.mjs';
+import { drivePreview } from './drive-preview.mjs';
 import { placeInfo } from './research.mjs';
 import { candidates } from './candidates.mjs';
 import { serveIntegrations, flightCapabilities } from './integrations.mjs';
@@ -87,6 +88,7 @@ const streams = new Map([
       return { options, ms: Math.round(performance.now() - start), usage: ctx.usage };
     },
   ],
+  ['/api/drive-preview', async (input, ctx) => ({ drive: await drivePreview(input, ctx.signal) })],
   ['/api/weather-check', (input, ctx) => weather(input.plan ?? input, ctx.signal, undefined, input.setup)],
   ['/api/place-info', placeInfo],
 ]);
@@ -169,7 +171,7 @@ export async function handleRequest(request, response) {
       }
       return stream(response, abort.signal, async (ctx) => {
         const input = await body(request);
-        if (url.pathname !== '/api/weather-check' && !(url.pathname === '/api/replan' && input.demo === true))
+        if (!['/api/weather-check', '/api/drive-preview'].includes(url.pathname) && !(url.pathname === '/api/replan' && input.demo === true))
           await requireReady();
         const result = await streams.get(url.pathname)(input, ctx);
         if (url.pathname === '/api/plan') {

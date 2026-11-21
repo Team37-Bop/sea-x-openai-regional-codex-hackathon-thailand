@@ -250,7 +250,11 @@ export async function planTrip(input, ctx, demo = false) {
   const pending = Promise.all(
     ['go', 'back'].map(async (dir) => {
       const leg = transportLeg(setup, dir);
-      if (!leg || leg.by === 'drive') return [dir, []];
+      if (!leg) return [dir, []];
+      if (leg.by === 'drive') {
+        if (leg.auto && !leg.time) leg.time = dir === 'go' ? '10:00' : '18:00';
+        return [dir, []];
+      }
       if (leg.choice) {
         setTransport(setup, flags, dir, [leg.choice], leg.choice);
         return [dir, []];

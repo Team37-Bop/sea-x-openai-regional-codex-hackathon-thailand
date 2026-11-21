@@ -66,3 +66,12 @@ The web path SHALL request the direction, destination country when resolved, tra
 
 - **WHEN** a replan identifies a different transport service
 - **THEN** Bop matches its normalized service code or carrier and departure time, selects that option, or adds an estimated user-specified row. For a transit endpoint the inbound stop uses arrival time and the final stop uses departure minus 90 minutes for a flight or 40 minutes for bus/train.
+
+### Requirement: Driving on either leg
+
+The organizer SHALL be able to preview a drive from their origin to the trip city or from the trip city to their return destination. The drive preview SHALL work without model credentials and before all travelers or hotels have been entered.
+
+#### Scenario: Outbound arrival or return departure
+
+- **WHEN** the traveler requests a driving estimate on either leg
+- **THEN** Bop resolves the two places, displays distance, duration, departure and arrival including date changes, and distinguishes measured road distance from a straight-line estimate. The outbound anchor is arrival and the return anchor is departure.
