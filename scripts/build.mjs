@@ -12,6 +12,7 @@ const publicFiles = [
   'forecast.js',
   'index.html',
   'integration-ui.js',
+  'itinerary-facts.js',
   'liff.html',
   'liff.js',
   'location-suggest.css',
@@ -26,6 +27,7 @@ const publicFiles = [
   'stop-note.js',
   'stream.js',
   'style.css',
+  'transport-endpoints.js',
   'trip-integrations.js',
   'workspace-controls.js',
 ];

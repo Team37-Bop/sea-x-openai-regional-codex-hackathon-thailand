@@ -1,4 +1,5 @@
 import { fetchStream, readEvents } from './stream.js';
+import { resolveTransportEndpoints, localTransport } from './transport-endpoints.js';
 
 const money = new Intl.NumberFormat('th-TH', { maximumFractionDigits: 0 });
 const travel = { flight: 'เครื่องบิน', bus: 'รถบัส', train: 'รถไฟ', drive: 'รถยนต์' };
@@ -128,7 +129,7 @@ export function installSetupExtras(form, readSetup) {
     const place = form.elements[name + 'Place'];
     const destination = name === 'arrive' ? 'from' : 'to';
     const directionLabel = dir === 'go' ? 'ขาไป' : 'ขากลับ';
-    const leg = { auto, choice: null, ctrl: null, original: null, placeLL: null };
+    const leg = { auto, choice: null, ctrl: null, original: null, placeLL: null, endpointDefault: !place.value.trim() };
     legs[name] = leg;
     const signature = () =>
       JSON.stringify([
@@ -162,9 +163,14 @@ export function installSetupExtras(form, readSetup) {
       time.closest('label').hidden = time.disabled = Boolean(automatic);
       search.hidden = mode !== 'drive' && !(service && auto.checked);
       search.textContent = (mode === 'drive' ? 'คำนวณเวลาขับรถ' : 'ดูตัวเลือก' + (service || '')) + directionLabel;
-      hint.textContent = mode === 'undecided'
-        ? 'ระบุ' + placeLabel + 'เพื่อให้ Bop แนะนำวิธีเดินทาง' + directionLabel
+      const local = localTransport({ city: form.elements.city.value, [name]: { [destination]: place.value } }, dir);
+      const defaultNote = leg.endpointDefault && place.value
+        ? (outbound ? 'ต้นทางเริ่มต้น ' : 'ปลายทางขากลับเริ่มต้น ') + place.value + ' · เปลี่ยนได้' : '';
+      const guidance = local
+        ? 'Bop จะเผื่อเวลาเดินทางในเมือง'
+        : mode === 'undecided' ? 'Bop จะเทียบวิธีเดินทางให้ตอนจัดแผน'
         : service && auto.checked ? 'เลือก' + service + 'ตอนนี้ หรือให้ Bop เลือกให้ตอนจัดแผน' : '';
+      hint.textContent = [defaultNote, guidance].filter(Boolean).join(' · ');
       hint.hidden = !hint.textContent;
     }
     function clear(restore = false, edited = '') {
@@ -335,13 +341,18 @@ export function installSetupExtras(form, readSetup) {
     form.addEventListener('input', (event) => {
       const field = event.target.name;
       if (!inputFields.has(field)) return;
-      if (field === place.name) leg.placeLL = null;
+      if (field === place.name) {
+        leg.placeLL = null;
+        leg.endpointDefault = !place.value.trim();
+      }
       if (field === byName) {
         time.value = '';
         auto.checked = by.value !== 'drive' && by.value !== 'undecided';
       }
       clear(true, field);
     });
+    leg.clear = clear;
+    leg.updateControls = updateControls;
     let hydrating = false;
     const members = new MutationObserver(() => {
       if (!hydrating && by.value !== 'drive') clear(true);
@@ -369,7 +380,8 @@ export function installSetupExtras(form, readSetup) {
       const preferred = saved.choice?.by || plannedRoute?.requestedBy || saved.by || choice?.by;
       by.value = Object.hasOwn(labelsByMode, preferred) ? preferred : saved.time ? 'flight' : 'undecided';
       time.value = saved.time || (dir === 'go' ? choice?.arr : choice?.dep) || '';
-      place.value = saved[destination] || '';
+      place.value = saved[destination] || choice?.[destination] || '';
+      leg.endpointDefault = saved.endpointDefault === true || !place.value.trim();
       auto.checked = Boolean(choice || saved.auto || plannedRoute?.requestedBy || !time.value);
       leg.placeLL = Array.isArray(saved.placeLL) ? [...saved.placeLL] : null;
       if (choice && by.value !== 'drive') {
@@ -384,6 +396,33 @@ export function installSetupExtras(form, readSetup) {
       updateControls();
     };
   }
+  function syncEndpoints(editing) {
+    const draft = { city: form.elements.city.value };
+    for (const [name, key] of [['arrive', 'from'], ['depart', 'to']]) {
+      draft[name] = {
+        by: form.elements[name + 'By'].value,
+        [key]: legs[name].endpointDefault ? '' : form.elements[name + 'Place'].value,
+      };
+    }
+    const resolved = resolveTransportEndpoints(draft);
+    for (const [name, key] of [['arrive', 'from'], ['depart', 'to']]) {
+      const input = form.elements[name + 'Place'];
+      const leg = legs[name];
+      if (leg.endpointDefault && input !== editing && input.value !== resolved[name][key]) {
+        input.value = resolved[name][key];
+        leg.placeLL = null;
+        if (name === 'depart' && ['arriveBy', 'arrivePlace'].includes(editing?.name)) leg.clear(true);
+      }
+      leg.updateControls();
+    }
+  }
+  form.addEventListener('input', ({ target }) => {
+    if (['city', 'arriveBy', 'departBy', 'arrivePlace', 'departPlace'].includes(target.name))
+      syncEndpoints(target);
+  });
+  for (const name of ['arrive', 'depart'])
+    form.elements[name + 'Place'].addEventListener('blur', () => syncEndpoints());
+  syncEndpoints();
   const augment = (setup) => {
     const decorated = {
       ...setup,
@@ -396,6 +435,7 @@ export function installSetupExtras(form, readSetup) {
       if (!setup[name]) continue;
       decorated[name] = {
         ...setup[name],
+        ...(leg.endpointDefault ? { endpointDefault: true } : {}),
         time: form.elements[name + 'Time'].disabled && !leg.choice ? '' : setup[name].time,
         auto: setup[name].by === 'undecided' || (!leg.auto.disabled && leg.auto.checked),
         ...(leg.placeLL ? { placeLL: leg.placeLL } : {}),
@@ -415,13 +455,14 @@ export function installSetupExtras(form, readSetup) {
       });
     if (decorated.members.length && !decorated.members.some((m) => m.role === 'organizer'))
       decorated.members[0].role = 'organizer';
-    return decorated;
+    return resolveTransportEndpoints(decorated);
   };
   augment.restore = (setup = {}, flags = {}) => {
     form.elements.hotelArea.value = setup.hotelArea || '';
     form.elements.extra.value = setup.extra || '';
     legs.arrive.restore(setup.arrive, flags.transport?.go);
     legs.depart.restore(setup.depart, flags.transport?.back);
+    syncEndpoints();
   };
   return augment;
 }

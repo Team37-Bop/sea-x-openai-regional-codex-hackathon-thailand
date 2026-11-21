@@ -112,7 +112,7 @@ The server SHALL compare each available stop-level `src` labelled `web` with the
 - **THEN** a step "ตรวจจากเว็บ N จุด · ประมาณการ M จุด" is emitted
 
 ### Requirement: Transport search in parallel with design
-When a direction has a supplied origin or return destination, `by` flight, bus, train or undecided and either `auto` is set or no time is given (and no `choice`), the plan SHALL search transport options in parallel with the design, design around placeholder times (arrive 10:00, depart 20:30), and afterwards retime a first or last transit stop to the chosen arrival or to departure minus 90 min (flight) or 40 min (bus/train), respectively.
+When a direction connects different cities using a supplied or default endpoint, `by` flight, bus, train or undecided and either `auto` is set or no time is given (and no `choice`), the plan SHALL search transport options in parallel with the design, design around placeholder times (arrive 10:00, depart 20:30), and afterwards retime a first or last transit stop to the chosen arrival or to departure minus 90 min (flight) or 40 min (bus/train), respectively.
 
 #### Scenario: Recommended flight outside the window
 - **WHEN** the recommended outbound option arrives at 19:00
@@ -127,7 +127,7 @@ When a direction has a supplied origin or return destination, `by` flight, bus, 
 - **THEN** the direction entry in `plan.flags.transport` contains `options` and a `chosen` string matching one option ID
 
 ### Requirement: Suggested travel mode per direction
-When a direction was undecided, the plan SHALL store `{ by, why }` from its chosen option in `flags.arrivalSuggested` for outbound travel or `flags.departureSuggested` for return travel. If the outbound direction has a known origin but no chosen service, it can use a nonempty model arrival suggestion other than `none`. The plan SHALL preserve the requested mode alongside an automatically selected service so reopening setup retains the organizer's preference.
+When a direction was undecided, the plan SHALL store `{ by, why }` from its chosen option in `flags.arrivalSuggested` for outbound travel or `flags.departureSuggested` for return travel. With no chosen service, short and split-trip designs can supply advice for either direction. If the endpoints identify the same city, its recommendation SHALL describe local travel and the planned time. A general suggestion alone does not create a ticket. The plan SHALL preserve the requested mode alongside an automatically selected service so reopening setup retains the organizer's preference.
 
 #### Scenario: Undecided trip
 - **WHEN** `arrive.by` is undecided and the search recommends a train

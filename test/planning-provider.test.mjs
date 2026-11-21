@@ -278,30 +278,91 @@ test('a live extension designs only the added day and schedules its stops on the
   assert.equal(original.days.length, 1);
 });
 
-test('a return recommendation leaves a blank outbound location unresolved', async (t) => {
+test('a Bangkok trip arranges local arrival independently of its intercity return', async (t) => {
   const requests = [];
   mockProvider(t, {
     bop_transport: { options: [{ by: 'train', carrier: 'Rail', dep: '20:30', arr: '22:00' }] },
     bop_repair: { edits: [] },
     bop_design: {
       days: [{ stops: [stop('station', 'สถานี', '19:30', '19:40', { k: 'transit' })] }],
-      arrivalSuggested: { by: 'flight', why: 'outbound suggestion' },
+      arrivalSuggested: { by: 'local', why: 'ต่อรถไฟฟ้าไปยังจุดนัดพบ' },
     },
   }, requests);
   const setup = normalize({
-    ...d,
+    ...d, city: 'กรุงเทพฯ',
     arrive: { by: 'undecided', from: '', auto: true },
-    depart: { by: 'undecided', to: 'กรุงเทพฯ', auto: true },
+    depart: { by: 'undecided', to: 'เชียงใหม่', auto: true },
     picks: { must: [{ name: 'สถานี', ll: point }] },
   });
   const { plan } = await planTrip(setup, ctx());
   assert.equal(requests.filter(({ op }) => op === 'bop_transport').length, 1);
-  assert.equal(plan.setup.arrive.from, '');
+  assert.equal(plan.setup.arrive.from, 'กรุงเทพฯ');
   assert.equal(plan.flags.transport.go, undefined);
-  assert.equal(plan.flags.arrivalSuggested, undefined);
+  assert.deepEqual(plan.flags.arrivalSuggested, { by: 'local', why: 'ต่อรถไฟฟ้าไปยังจุดนัดพบ' });
   assert.equal(plan.flags.departureSuggested.by, 'train');
   assert.equal(plan.flags.transport.back.requestedBy, 'undecided');
   assert.equal(plan.setup.depart.time, '20:30');
+});
+
+test('archived blank legs compare both Bangkok directions for London and retain the estimated status', async (t) => {
+  const requests = [], steps = [];
+  mockProvider(t, {
+    bop_transport: { options: [{ by: 'flight', carrier: 'Example', dep: '20:30', arr: '09:00', price: 18000, checked: 'web' }] },
+    bop_design: { days: [{ stops: [stop('visit', 'Museum', '12:00', '13:00')] }] },
+    bop_repair: { edits: [] },
+  }, requests);
+  const setup = normalize({
+    ...d, city: 'London', cityLL: point, country: 'GB', cityAirport: 'LHR',
+    arrive: { by: 'flight', from: '', auto: true }, depart: { by: 'undecided', to: '', auto: true },
+    picks: { must: [{ name: 'Museum', ll: point }] },
+  });
+  const { plan } = await planTrip(setup, { ...ctx(), step: (s) => steps.push(s) });
+  const lookups = requests.filter(({ op }) => op === 'bop_transport')
+    .map(({ body }) => JSON.parse(body.input.at(-1).content.split('ข้อมูล JSON:\n').at(-1)));
+  assert.deepEqual(lookups.map((q) => q.dir).sort(), ['back', 'go']);
+  for (const q of lookups) {
+    assert.equal(q.setup.arrive.from, 'BKK');
+    assert.equal(q.setup.depart.to, 'กรุงเทพฯ');
+  }
+  assert.equal(setup.arrive.from, '');
+  assert.equal(plan.setup.arrive.endpointDefault, true);
+  for (const direction of ['go', 'back']) {
+    assert.equal(plan.flags.transport[direction].chosenOption.checked, 'estimate');
+    assert.equal(plan.flags.transport[direction].chosenOption.bookable, undefined);
+  }
+  assert.ok(steps.every((s) => !s.includes('ข้ามการค้นหา')));
+});
+
+test('default return follows the organizer’s origin, explicit endpoints or tickets take precedence, omitted legs stay absent', async () => {
+  const { resolveTransportEndpoints, localTransport } = await import('../web/transport-endpoints.js');
+  const travel = (arrive, depart) => resolveTransportEndpoints({ city: 'Bangkok', arrive, depart });
+  const first = { by: 'flight', from: 'CNX', time: '08:45' };
+  assert.equal(travel(first, { by: 'flight' }).depart.to, 'CNX');
+  assert.deepEqual(travel(first, { by: 'train', to: 'อยุธยา', time: '17:40' }).depart, { by: 'train', to: 'อยุธยา', time: '17:40' });
+  const booked = travel({ by: 'flight', choice: { from: 'HKT' } }, undefined);
+  assert.equal(booked.arrive.from, 'HKT');
+  assert.equal(booked.arrive.endpointDefault, undefined);
+  assert.equal(booked.depart, undefined);
+  assert.equal(localTransport(travel({ by: 'flight', from: 'DMK' }, {}), 'go'), true);
+  assert.equal(localTransport(travel(first, {}), 'back'), false);
+});
+
+test('a local round trip with flight selected keeps local timing without a check-in or a flight search', async (t) => {
+  const requests = [];
+  mockProvider(t, {
+    bop_design: { days: [{ stops: [stop('first', 'จุดนัดพบ', '07:30', '08:00'),
+      stop('end', 'จุดต่อรถ', '18:00', '18:00', { k: 'transit' })] }] },
+    bop_repair: { edits: [] },
+  }, requests);
+  const { plan } = await planTrip(normalize({
+    ...d, city: 'กรุงเทพฯ', arrive: { by: 'flight', auto: true }, depart: { by: 'flight', auto: true },
+    picks: { must: ['จุดนัดพบ', 'จุดต่อรถ'].map(name => ({ name, ll: point })) },
+  }), ctx());
+  assert.equal(requests.some(({ op }) => op === 'bop_transport'), false);
+  assert.equal(plan.checks.some(({ id }) => id === 'departure'), false);
+  assert.deepEqual(plan.days[0].stops.map(s => s.t0), ['10:00', '18:00']);
+  assert.equal(plan.setup.depart.by, 'flight');
+  assert.equal(plan.flags.departureSuggested.by, 'local');
 });
 
 test('design, daily planning and edit schemas identify units and constrain categories for both providers', async () => {

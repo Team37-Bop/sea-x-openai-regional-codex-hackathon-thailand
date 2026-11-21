@@ -49,6 +49,12 @@ const hours = object(
 const weekdays = object(
   Object.fromEntries(['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'].map((key) => [key, period])),
 );
+const visitFacts = object({
+  walkin: { type: ['boolean', 'null'], description: 'Whether this meal accepts walk-ins. Use null when unknown.' },
+  dress: { type: ['boolean', 'null'], description: 'Whether modest dress is requested at this stop. Use null when unknown.' },
+  legWhy: { ...string, description: 'Brief practical reason for the incoming travel choice when known.' },
+  restStops: { ...strings, description: 'Named rest stops on the incoming journey, when planned.' },
+});
 const stop = object({
   id: string,
   name: string,
@@ -113,6 +119,7 @@ const stop = object({
   closedDays: array(number),
   closures: array({ anyOf: [string, object({ date: string, why: string }, ['date'])] }),
   outdoor: boolean,
+  visitFacts,
   src,
   legSrc: src,
   catalogId: string,
@@ -120,8 +127,9 @@ const stop = object({
   stayMin: { ...number, description: 'Visit duration in minutes at this stop, excluding travel time.' },
 });
 const day = object({ title: string, stops: array(stop) }, ['title', 'stops']);
+const travelSuggestion = object({ by: string, why: string }, ['by', 'why']);
 const design = object(
-  { days: array(day), summary: string, stay, arrivalSuggested: object({ by: string, why: string }) },
+  { days: array(day), summary: string, stay, arrivalSuggested: travelSuggestion, departureSuggested: travelSuggestion },
   ['days'],
 );
 const edit = object({
@@ -196,6 +204,8 @@ export const shapes = {
     {
       summary: string,
       stay,
+      arrivalSuggested: travelSuggestion,
+      departureSuggested: travelSuggestion,
       days: array(
         object({
           title: string,
@@ -266,6 +276,7 @@ const optionalStop = {
   meal: { ...stop.properties.meal, enum: ['', ...stop.properties.meal.enum] },
   diet: { ...strings, description: stop.properties.diet.description },
   open: string,
+  visitFacts: requiredObject(visitFacts.properties),
 };
 const compactStop = object(
   {
@@ -286,13 +297,14 @@ const compactStop = object(
     res: requiredObject({ todo: boolean, note: string, phone: string }),
     catalogId: string,
   },
-  [...Object.keys(optionalStop).filter((key) => key !== 'src'), 'id', 'aliases', 'outdoor'],
+  [...Object.keys(optionalStop).filter((key) => key !== 'src' && key !== 'visitFacts'), 'id', 'aliases', 'outdoor'],
 );
 const compactDesign = object(
   {
     summary: string,
     stay: hotel,
-    arrivalSuggested: requiredObject({ by: string, why: string }),
+    arrivalSuggested: travelSuggestion,
+    departureSuggested: travelSuggestion,
     days: array(requiredObject({ title: string, stops: array(compactStop) })),
   },
   ['days', 'summary'],
@@ -324,7 +336,7 @@ export const claudeShapes = {
       transport: transitChange,
       options: array(object({ ...compactOption.properties, transport: transitChange }, compactOption.required)),
     },
-    ['summary', 'day', 'needs_vote', 'options'],
+    ['summary', 'day', 'needs_vote', 'vote_reason', 'options'],
   ),
   research: object(
     {

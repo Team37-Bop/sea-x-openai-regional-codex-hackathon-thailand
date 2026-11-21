@@ -103,6 +103,7 @@ function facts(entries) {
 function mapLink(stop, city) {
   const ll = stop.ll;
   const valid =
+    !stop.place?.fallback &&
     Array.isArray(ll) &&
     ll.length === 2 &&
     ll.every(Number.isFinite) &&

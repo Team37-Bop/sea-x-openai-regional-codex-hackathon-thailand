@@ -104,6 +104,30 @@ test('reads Sunday dishes with listed prices from a branch’s public embedded m
   assert.equal(await publishedMenu({ ...stop, n: 'Other venue' }, [], signal()), null);
   assert.ok(requests.every(url => url.startsWith(base + '/')));
 });
+test('gives the researcher the verified menu before it describes the meal', async (t) => {
+  const url = 'https://venue.example/menu';
+  const structured = { '@type': 'MenuItem', name: 'Seasonal curry', offers: { price: '12.95', priceCurrency: 'GBP' } };
+  const html = '<head><title>River Kitchen</title></head><script type="application/ld+json">' + JSON.stringify(structured) + '</script>';
+  let prompt;
+  t.mock.method(globalThis, 'fetch', async (resource, init) => {
+    if (new URL(resource).hostname === 'api.openai.com') {
+      prompt = JSON.parse(JSON.parse(init.body).input[0].content.split('ข้อมูล JSON:\n')[1]);
+      return reply({ summary: 'ร้านครัวริมน้ำ', rate: 43, currency: 'GBP' });
+    }
+    assert.equal(String(resource), url);
+    return new Response(html, { headers: { 'content-type': 'text/html' } });
+  });
+  const { info } = await placeInfo({ city: 'London', stop: {
+    id: 'weekday-meal', n: 'River Kitchen — มื้อเย็น', k: 'food', ll: [51.5, -0.1],
+    place: { fallback: true }, src: { url, checked: 'web' }, date: '2026-11-22',
+  } }, context());
+  assert.equal(prompt.stop.ll, undefined);
+  assert.equal(prompt.publishedMenu.dishes[0].name, 'Seasonal curry');
+  assert.equal(info.menuSource, url);
+  assert.equal(info.dishes[0].price, 557);
+  assert.equal(info.dishes[0].priceLocal.amount, 12.95);
+});
+
 test('uses only the named restaurant’s linked menu on a multi-venue page', async (t) => {
   const { publishedMenu } = await import('../server/menu-source.mjs');
   const page = 'https://directory.example/alpha-restaurant/menu';
@@ -246,6 +270,7 @@ test('limits candidate output and keeps research-only inputs internal; must pick
         { name: ' ' },
         duplicate,
         { ...duplicate, src: { checked: 'web', url: 'https://ok.example/' } },
+        { ...duplicate, name: 'Wat Other', query: 'Wat Other' },
       ],
     },
     { kind: 'food', options: [] },
@@ -259,9 +284,9 @@ test('limits candidate output and keeps research-only inputs internal; must pick
   assert.equal(q.options.length, 2);
   const [a, b] = q.options;
   assert.equal(a.option.id, 'c3_wat_umong');
-  assert.equal(b.option.id, 'c3_wat_umong_');
-  assert.equal(a.option.src, undefined);
-  assert.equal(b.option.src.checked, 'web');
+  assert.notEqual(b.option.id, a.option.id);
+  assert.equal(a.option.src.checked, 'web');
+  assert.equal(b.option.src, undefined);
   assert.equal(a.option.tags.length, 4);
   assert.equal(a.option.tags[0].length, 24);
   assert.equal(a.option.price, duplicate.price);
@@ -325,8 +350,8 @@ test('candidate discovery uses verified search URLs, a matched preview and remem
   let summary;
   const result = await candidates(setup, { ...context(), step: (s) => (summary = s) });
   const option = result.questions[0].options[0];
-  assert.equal(requests.length, 1);
-  assert.equal(requests[0].max_tool_calls, 5);
+  assert.equal(requests.length, 2);
+  assert.deepEqual(requests.map(call => call.max_tool_calls), [3, 2]);
   assert.ok(!requests[0].input[0].content.includes('do-not-send'));
   assert.ok(requests[0].input[0].content.includes('กุ้ง'));
   assert.equal(option.photo.match, 'likely');
@@ -400,4 +425,68 @@ test('persistent Wikimedia 429 retries once then holds further file lookups', as
   assert.equal(calls, 2);
   assert.equal(await exactPhoto({ n: 'Other Place', ll: null }, signal()), null);
   assert.equal(calls, 2);
+});
+
+test('tops up sparse London choices once, with distinct supported places and appropriate trip categories', async (t) => {
+  const places = {
+    food: ['Dishoom Covent Garden', 'Padella Borough', 'St John Smithfield', 'Brat Shoreditch'],
+    sight: ['Tate Modern', 'National Gallery', 'British Museum', 'Tower of London'],
+    stay: ['Bloomsbury', 'South Bank', 'Kensington', 'Marylebone'],
+  };
+  const href = name => 'https://venues.example/' + encodeURIComponent(name);
+  const option = name => ({ name, query: name, photoPage: href(name), src: { url: href(name), checked: 'web' } });
+  const group = (kind, names) => ({ kind, options: names.map(option) });
+  let rounds, mode;
+  t.mock.method(globalThis, 'fetch', async (input, init) => {
+    const url = new URL(input);
+    if (url.hostname === 'api.openai.com') {
+      const body = JSON.parse(init.body);
+      const data = JSON.parse(body.input[0].content.split('ข้อมูล JSON:\n')[1]);
+      assert.equal(body.text.format.name, 'bop_candidates');
+      rounds.push({ data, budget: body.max_tool_calls });
+      const kinds = data.categories;
+      const full = mode === 'full';
+      if (data.gaps && mode === 'fail') return Response.json({ error: { code: 'invalid_api_key' } }, { status: 401 });
+      let questions;
+      if (data.gaps) {
+        questions = kinds.map(kind => group(kind, [...places[kind], 'Invented option']));
+        questions.push(group('stay', ['Hotel nobody requested']));
+      } else {
+        questions = kinds.map(kind => group(kind, full ? places[kind] : places[kind].slice(0, kind === 'food' ? 2 : 1)));
+        if (!kinds.includes('stay')) questions.push(group('stay', ['Hotel nobody requested']));
+      }
+      const records = Object.values(places).flat().map(name => ({ url: href(name) }));
+      return reply({ questions }, [{ id: 'search', type: 'web_search_call', action: { sources: records } }]);
+    }
+    if (url.hostname === 'venues.example') {
+      return new Response('<title>' + decodeURIComponent(url.pathname.slice(1)) + '</title><meta property="og:image" content="https://media.example/venue.jpg">', { headers: { 'content-type':'text/html' } });
+    }
+    if (url.hostname.includes('photon')) return Response.json({ features: [{
+      properties: { name: url.searchParams.get('q').replace(/ London$/, ''), osm_key: 'amenity' },
+      geometry: { coordinates: [-0.1,51.5] },
+    }] });
+    throw Error('Unexpected request: ' + url);
+  });
+  const base = { city: 'London', cityLL: [51.5,-0.1], country:'GB', startDate:'2026-11-22', members:[{ name:'A', avoid:'กุ้ง' }] };
+  for (const [days, stay, expected] of [[1, {mode:'auto'}, ['food','sight']], [5, {mode:'auto'}, ['food','sight','stay']], [5, {mode:'booked', stays:[{name:'Booked hotel', nights:4}]}, ['food','sight']]]) {
+    mode = 'sparse'; rounds = [];
+    const result = await candidates(normalize({ ...base, days, stay }), context());
+    assert.deepEqual(rounds.map(round => round.budget), [3,2]);
+    assert.deepEqual(rounds[1].data.gaps.map(g => g.needed), expected.map(k => k === 'food' ? 2 : 3));
+    assert.ok(rounds[1].data.existing.includes(places.food[0]));
+    assert.equal(rounds[1].data.restrictions[0].avoid, 'กุ้ง');
+    assert.deepEqual(result.questions.map(q => q.kind), expected);
+    const all = result.questions.flatMap(q => q.options);
+    assert.equal(new Set(all.map(o => o.id)).size, all.length);
+    for (const q of result.questions) {
+      assert.deepEqual(q.options.map(o => o.name), places[q.kind]);
+      assert.ok(q.options.every(o => o.src.checked === 'web' && o.photo.credit));
+    }
+  }
+  for (const scenario of ['full','fail']) {
+    mode = scenario; rounds = [];
+    const { questions } = await candidates(normalize({ ...base, days: 1 }), context());
+    assert.equal(rounds.length, mode === 'full' ? 1 : 2);
+    assert.deepEqual(questions.map(q => q.options.length), mode === 'full' ? [4,4] : [2,1]);
+  }
 });

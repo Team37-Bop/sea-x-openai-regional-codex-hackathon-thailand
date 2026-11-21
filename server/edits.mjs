@@ -1,6 +1,12 @@
 import { coordinates } from './domain.mjs';
 export function fields(row) {
-  const copy = { ...row };
+  const { visitFacts, ...copy } = row;
+  if (visitFacts) {
+    for (const key of ['walkin', 'dress'])
+      if (typeof visitFacts[key] === 'boolean') copy[key] = visitFacts[key];
+    if (typeof visitFacts.legWhy === 'string' && visitFacts.legWhy.trim()) copy.legWhy = visitFacts.legWhy.trim();
+    if (Array.isArray(visitFacts.restStops) && visitFacts.restStops.length) copy.restStops = visitFacts.restStops;
+  }
   for (const [key, alias] of [
     ['n', 'name'],
     ['k', 'kind'],

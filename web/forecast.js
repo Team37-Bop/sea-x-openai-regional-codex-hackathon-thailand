@@ -182,5 +182,9 @@ export function createForecast({
     badge.title = 'ข้อมูลอากาศ: Open-Meteo.com';
     return badge;
   }
-  return { reset, refresh, renderStrip, badge };
+  function dayLabel(plan, day) {
+    const [alert] = visible(plan, day);
+    return alert ? (alert.trend ? 'แนวโน้ม' : '') + (alert.level === 'heavy' ? 'ฝนตกหนัก' : 'มีฝน') : '';
+  }
+  return { reset, refresh, renderStrip, badge, dayLabel };
 }

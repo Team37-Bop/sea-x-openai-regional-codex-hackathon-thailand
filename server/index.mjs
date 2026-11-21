@@ -17,5 +17,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   } catch {
     /* Use the local bind settings. */
   }
+  // When the development watcher restarts, finish accepted NDJSON streams first.
+  process.once('SIGTERM', () => server.close());
   server.listen(port, host, () => console.log('Bop listening on ' + host + ':' + port));
 }

@@ -7,7 +7,17 @@ Ask mode collects group preferences before itinerary design. The candidate servi
 ## Requirements
 
 ### Requirement: Candidates request
-`POST /api/plan/candidates` SHALL accept `{ setup }`, run one fast-model call with up to 5 web searches, and end with `done.questions` of at most 3 questions `{ id, kind: 'food'|'sight'|'stay', title, multi: true, options }` with at most 6 options each.
+`POST /api/plan/candidates` SHALL accept `{ setup }`, use at most five web searches across the first discovery call (up to three) and an optional supplementary call (up to two), and end with `done.questions` of at most 3 questions `{ id, kind: 'food'|'sight'|'stay', title, multi: true, options }` with at most 6 options each.
+
+Discovery SHALL aim for four distinct places per relevant question and can offer up to six. Restaurants and sights are alternatives even on a one-day trip. Staying overnight can add a lodging question when accommodation has not already been booked. The options SHALL respect dates, budget, mobility, food restrictions and expressed interests.
+
+#### Scenario: Too few matching places
+- **WHEN** a relevant question starts with fewer than four unique options or is missing
+- **THEN** one targeted follow-up can fill the sparse categories together within the remaining search budget. It receives the original constraints and places already returned. A new option from that call requires a source returned by search. A failed or sparse follow-up preserves the usable original choices, without adding placeholders.
+
+#### Scenario: A venue appears more than once
+- **WHEN** names differ only by case, punctuation or leading English article, or share a map search name
+- **THEN** the traveler sees one card and the available verified source is retained. Different places with a colliding generated ID keep distinct IDs.
 
 #### Scenario: Member with food restrictions
 - **WHEN** a member has `avoid` (allergies or foods they do not eat)
