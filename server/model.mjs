@@ -201,7 +201,7 @@ function fakeAnswer(operation, data) {
       return { options: [] };
   }
 }
-const quickOps = new Set(['research', 'transport', 'candidates', 'pages']);
+const quickOps = new Set(['research', 'transport', 'candidates', 'pages', 'lodging']);
 export async function model(task, data, context = {}) {
   const { signal = new AbortController().signal, usage = {}, step = () => {}, history } = context;
   await requireReady();

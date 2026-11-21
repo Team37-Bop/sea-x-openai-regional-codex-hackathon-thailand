@@ -173,3 +173,8 @@ The map SHALL exclude synthetic city or neighbour coordinates marked as location
 - **WHEN** a saved, unpinned stop claims a survey location shared exactly with a selected venue of a different category and neither name nor ID identifies that venue
 - **THEN** opening the trip invalidates the mistaken point and adjacent routed geometry. Future planning and editing assign selected-venue coordinates only to the matching venue. A fallback point cannot fulfill a wish by proximity.
 - **AND** confirmed positions and newly routed legs can appear without changing the saved visit order, times, or the snapshot on disk. New measured connections require both endpoints and usable route geometry. The separately keyed visit-order and access hints connect known coordinates only. Older placeholder routes cannot reappear.
+
+#### Scenario: Changing map scope with a Bop response open
+
+- **WHEN** the traveler switches between the selected day and the whole trip
+- **THEN** a compact row above the canvas shows both scope buttons and which one is selected. The map title and the number of located visits are accessible to screen readers. The bottom-right zoom buttons and map attribution remain accessible with the response open or collapsed.

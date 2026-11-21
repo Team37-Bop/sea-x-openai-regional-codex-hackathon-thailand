@@ -140,6 +140,16 @@ When a direction was undecided, the plan SHALL store `{ by, why }` from its chos
 ### Requirement: Stay selection
 The plan SHALL set `plan.flags.stay = { area, why, booked?, examples[] }`; in auto mode the model SHALL pick the area that minimises travel and fits budgets and give 2-3 real example hotels found with at most one web search (`priceNight` THB per room per night, `checked: 'web'` only for a real search URL), and split design SHALL prefer the first example with usable coordinates as the hotel supplied to the per-day designer; in booked mode the server SHALL geocode every booked stay (also trying its first 3 and 2 words, then a 200 km radius around the city for a stay in another town), make no hotel search, and set `flags.stay.stays` to each stay with `nights`, `checkIn` and `checkOut` dates.
 
+#### Scenario: Choose an overnight hotel from a neighborhood
+- **WHEN** a multi-day trip leaves lodging to Bop and the initial design supplies only a neighborhood or unsupported hotel examples
+- **THEN** Bop makes one focused lookup with up to three searches for one named property in that area. The lookup receives only destination, area, check-in and check-out dates. A selected hotel takes precedence over a different suggestion, while a booked multi-stay keeps its original sequence.
+- **AND** the recommendation requires a usable location plus a selected property, corroborated venue identity, or a hotel source cited in the actual search. A missing or unverifiable result remains retryable. Model-provided coordinates remain marked as estimates. A source for a hotel’s identity does not establish room availability or a verified price.
+- **AND** the same hotel name and position apply to luggage, check-in, morning departures, nightly returns and checkout. Directions without a confirmed room price identify that cost as unknown. The booking screen identifies the suggestion separately from a reservation.
+
+#### Scenario: Open an older trip with a neighborhood and no selected hotel
+- **WHEN** lodging recommendations are enabled for that saved trip
+- **THEN** its local revision retains the original snapshot and all non-lodging visits. Applying a verified selection updates lodging anchors and local routes for every date. Non-lodging stop data, member details and itinerary notes are excluded from the hotel lookup. No booking is created.
+
 #### Scenario: Auto stay
 - **WHEN** stay mode is auto
 - **THEN** `flags.stay.examples` holds up to 3 hotels with web-estimated nightly prices labelled `web` or `estimate`, and the stay cost per person (priceNight × nights ÷ 2) sits on the first hotel stop

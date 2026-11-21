@@ -75,3 +75,17 @@ With persistent state enabled, order creation and cancellation confirmation SHAL
 
 - **WHEN** two valid identical requests arrive without an active DynamoDB table
 - **THEN** both can proceed past acquisition. The local file used by LINE does not provide flight-order audit or idempotency protection.
+
+### Requirement: Complete automatic lodging on a saved trip
+
+When an overnight local trip was saved with automatic lodging and has no chosen hotel, opening its existing link SHALL start a hotel lookup. The itinerary SHALL remain available while the lookup runs. A successful, located recommendation SHALL be reusable at the same link after restart, with the original snapshot retained. Booked lodging, a previously named property, and day trips SHALL keep their existing lodging state.
+
+#### Scenario: An archived trip only identified a neighborhood
+
+- **WHEN** the traveler opens the link in multiple tabs
+- **THEN** concurrent requests share the lookup. The itinerary and booking view show the selected hotel, its unbooked status, and the room rate as an estimate when available. The booking view links to the venue source when checked and exposes a separate availability search for the trip dates.
+
+#### Scenario: A lodging lookup is interrupted or cannot confirm a hotel
+
+- **WHEN** the provider fails or the traveler begins editing the trip during the lookup
+- **THEN** the current trip and its existing reservations remain available. The traveler can retry, and a late result cannot replace a newer edit.

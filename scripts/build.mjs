@@ -9,6 +9,7 @@ const publicFiles = [
   'assets/anuphan-variable.woff2',
   'booking-tasks.css',
   'booking-tasks.js',
+  'lodging-state.js',
   'candidate-survey.css',
   'flight-panel.js',
   'forecast.js',

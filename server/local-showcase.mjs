@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const memory = new Map();
+const pendingLodging = new Map();
 const uuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
 const folder = () =>
   join(process.env.BOP_CACHE_DIR || fileURLToPath(new URL('./.cache', import.meta.url)), 'showcase');
@@ -41,7 +42,7 @@ export async function saveLocalTrip(request, result) {
   await queue;
   return id;
 }
-export async function readLocalTrip(request, id) {
+async function readEntry(request, id) {
   if (!allowed(request) || !uuid.test(id)) return;
   if (memory.has(id)) return memory.get(id);
   try {
@@ -50,4 +51,34 @@ export async function readLocalTrip(request, id) {
   } catch {
     /* A removed or unreadable trip is no longer available. */
   }
+}
+
+export async function readLocalTrip(request, id) {
+  const saved = await readEntry(request, id);
+  return saved?.lodgingRevision ?? saved;
+}
+
+// Preserve the original snapshot alongside its verified lodging revision under the same local link.
+export async function resolveLocalLodging(request, id, resolve) {
+  const saved = await readEntry(request, id);
+  if (!saved) return;
+  if (saved.lodgingRevision) return saved.lodgingRevision;
+  if (pendingLodging.has(id)) return pendingLodging.get(id);
+  const job = (async () => {
+    const result = await resolve(saved);
+    if (result === saved || !result?.plan?.flags?.stay?.stays?.some(row => row.recommended && row.name)) return result;
+    const updated = { ...saved, lodgingRevision: result };
+    const target = join(folder(), id + '.json');
+    const write = queue.then(async () => {
+      await stat(target);
+      await writeFile(target + '.tmp', JSON.stringify(updated), { mode: 0o600 });
+      await rename(target + '.tmp', target);
+      if (memory.has(id)) memory.set(id, updated);
+    });
+    queue = write.catch(() => {});
+    await write;
+    return result;
+  })();
+  pendingLodging.set(id, job);
+  try { return await job; } finally { pendingLodging.delete(id); }
 }
