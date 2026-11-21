@@ -5,6 +5,7 @@ import { extname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { bad, dateAt, normalize } from './domain.mjs';
 import { findCity, weather } from './geo.mjs';
+import { lookupSuggestions } from './location-suggest.mjs';
 import { drivePreview } from './drive-preview.mjs';
 import { placeInfo } from './research.mjs';
 import { candidates } from './candidates.mjs';
@@ -145,6 +146,18 @@ export async function handleRequest(request, response) {
     if (await serveIntegrations(request, response, url, abort.signal)) return;
     if (request.method === 'GET' && url.pathname === '/api/health')
       return json(response, { ...(await health()), flights: flightCapabilities() });
+    if (request.method === 'GET' && url.pathname === '/api/location-suggest') {
+      const params = url.searchParams;
+      const hasCenter = params.has('lat') || params.has('lon');
+      const coordinate = (key) => params.get(key)?.trim() ? Number(params.get(key)) : NaN;
+      const suggestions = await lookupSuggestions(params.get('q') || '', {
+        kind: params.get('kind') || 'city',
+        city: params.get('city') || '',
+        center: hasCenter ? [coordinate('lat'), coordinate('lon')] : undefined,
+        signal: abort.signal,
+      });
+      return json(response, { suggestions });
+    }
     if (request.method === 'GET' && url.pathname === '/api/city') {
       const name = (url.searchParams.get('q') ?? '').trim().slice(0, 120);
       const found = name && (await findCity(name, abort.signal));

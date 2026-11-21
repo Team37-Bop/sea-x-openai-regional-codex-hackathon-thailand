@@ -70,10 +70,10 @@ export async function bookedStays(setup, ctx, offline) {
   });
   return Promise.all(
     rows.map(async (s) => {
-      let ll;
+      let ll = coordinates(s.ll) ? s.ll : undefined;
       const words = s.name.split(/\s+/),
         names = [...new Set([s.name, words.slice(0, 3).join(' '), words.slice(0, 2).join(' ')])];
-      if (!offline && coordinates(setup.cityLL))
+      if (!ll && !offline && coordinates(setup.cityLL))
         for (const radius of [40, 200]) {
           for (const name of names) {
             ll = await findPlace(radius === 40 ? name + ' ' + setup.city : name, setup.cityLL, radius, ctx.signal);

@@ -165,3 +165,17 @@ The server SHALL reconstruct selected transport and accommodation entries from a
 #### Scenario: JSON media type
 - **WHEN** an agent route receives a POST using a media type other than `application/json`
 - **THEN** it returns HTTP 415 with an NDJSON `bad_request` error. An array, scalar or malformed JSON sent under the correct media type also fails body validation.
+
+### Requirement: Partial place names
+
+The destination, outbound origin, return destination, booked lodgings and individual wish lists SHALL offer selectable place suggestions while the organizer types. Suggestions SHALL accept Thai or English names and known airport codes.
+
+#### Scenario: Selecting a partial name
+
+- **WHEN** the organizer types part of a place name and selects a result by pointer or keyboard
+- **THEN** the field accepts the canonical name and uses known coordinates for that selection. Editing the text invalidates the selection. A wish selection updates only the entry being edited in the comma-separated list.
+
+#### Scenario: Search service unavailable
+
+- **WHEN** the online service times out or returns no matches
+- **THEN** local matches remain available and the organizer can enter a free-text location.

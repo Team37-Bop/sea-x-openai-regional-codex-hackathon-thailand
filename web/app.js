@@ -1,3 +1,4 @@
+import { attachLocationSuggestions } from './location-suggest.js';
 import { bindWorkspace, renderPeople } from './workspace-controls.js';
 import { installSetupExtras, openPlaceSheet, chooseCandidates } from './setup-extras.js';
 import { createForecast } from './forecast.js';
@@ -52,6 +53,28 @@ const tripLength = () =>
   );
 const dateLabel = (value) => calendar.format(new Date(value + 'T00:00:00Z'));
 const lookupCache = new Map();
+const selectedLocations = new WeakMap();
+function savedLocation(input) {
+  const hit = selectedLocations.get(input);
+  return hit?.name === input.value.trim() ? hit : undefined;
+}
+function withSuggestions(input, kind, multiple = false) {
+  attachLocationSuggestions(input, {
+    kind,
+    multiple,
+    getContext: () => {
+      if (kind === 'city') return {};
+      const city = setupForm.city.value.trim();
+      const center = lookupCache.get(city)?.ll ?? presets[city]?.slice(2);
+      return { city, center };
+    },
+    onSelect: (item) => {
+      selectedLocations.set(input, item);
+      if (kind === 'city') lookupCache.set(item.name, item);
+    },
+  });
+}
+withSuggestions(setupForm.city, 'city');
 const history = [];
 let state = { plan: null, routes: {}, setup: {}, selected: 0, demo: true, bookings: {}, cancellations: [] };
 let busy = false;
@@ -514,9 +537,10 @@ for (const [dir, title, placeName] of [
     field(dir === 'arrive' ? 'เวลาถึง' : 'เวลาออก', dir + 'Time', { type: 'time' }),
   );
   $('#directions').append(area);
+  withSuggestions(setupForm.elements[dir + 'Place'], 'transport');
 }
 const augmentSetup = installSetupExtras(setupForm, async () =>
-  setupInput(await locate(setupForm.city.value.trim()).catch(() => null)),
+  setupInput(await locate(setupForm.city.value.trim()).catch(() => null), true),
 );
 let nextMember = 0;
 function addMember(name = '') {
@@ -544,6 +568,8 @@ function addMember(name = '') {
     field('หมายเหตุ', 'note', { maxLength: 250 }),
   );
   $('#members').append(row);
+  withSuggestions(row.querySelector('[name=wants]'), 'place', true);
+  return row;
 }
 $('#add-member').addEventListener('click', () => addMember());
 addMember();
@@ -568,6 +594,8 @@ function addStay(nights) {
     }),
   );
   $('#stay-rows').append(row);
+  withSuggestions(row.querySelector('[name=stayName]'), 'stay');
+  return row;
 }
 function updateStay(reset = false) {
   const nights = tripLength() - 1;
@@ -621,11 +649,12 @@ for (const input of [setupForm.startDate, setupForm.endDate])
     updateStay(true);
   });
 async function locate(city) {
+  if (!city) return null;
+  if (lookupCache.has(city)) return lookupCache.get(city);
   if (Object.hasOwn(presets, city)) {
     const [cc, currency, lat, lon] = presets[city];
     return { cc, currency, ll: [lat, lon] };
   }
-  if (lookupCache.has(city)) return lookupCache.get(city);
   const response = await fetch('/api/city?q=' + encodeURIComponent(city));
   const found = response.ok ? await response.json() : null;
   if (found)
@@ -635,7 +664,7 @@ async function locate(city) {
         found.cc
       ] ??
       'THB';
-  lookupCache.set(city, found);
+  if (found) lookupCache.set(city, found);
   return found;
 }
 setupForm.city.addEventListener('change', async () => {
@@ -646,7 +675,7 @@ setupForm.city.addEventListener('change', async () => {
       ? [found.cc, found.currency].filter(Boolean).join(' · ')
       : 'ยังไม่พบเมืองนี้บนแผนที่';
 });
-function setupInput(found) {
+function setupInput(found, transportOnly = false) {
   const nightsBetween = (Date.parse(setupForm.endDate.value) - Date.parse(setupForm.startDate.value)) / dayMs;
   if (!setupForm.city.value.trim()) throw Error('ระบุเมืองปลายทาง');
   if (!Number.isFinite(nightsBetween) || nightsBetween < 0 || nightsBetween >= 7)
@@ -659,15 +688,17 @@ function setupInput(found) {
     dirs[key] = {
       by: setupForm.elements[key + 'By'].value,
       [place]: setupForm.elements[key + 'Place'].value,
+      placeLL: savedLocation(setupForm.elements[key + 'Place'])?.ll,
       time: setupForm.elements[key + 'Time'].value,
     };
   const stays = [...$('#stay-rows').children].map((row) => ({
     name: row.querySelector('[name=stayName]').value.trim(),
     nights: Number(row.querySelector('[name=nights]').value),
+    ll: savedLocation(row.querySelector('[name=stayName]'))?.ll,
   }));
   const nights = tripLength() - 1;
   const booked = setupForm.stayMode.value === 'booked';
-  if (booked && nights) {
+  if (!transportOnly && booked && nights) {
     for (const [index, row] of stays.entries()) {
       if (!row.name)
         throw new Error('ใส่ชื่อหรือที่อยู่ที่พักแถว ' + (index + 1) + ' หรือเลือก “ให้ Bop แนะนำ”');
@@ -695,10 +726,12 @@ function setupInput(found) {
       note: read('note'),
     };
   });
+  if (transportOnly) members.forEach((m, i) => { m.name ||= 'สมาชิก ' + (i + 1); });
   if (!members.some((m) => m.name)) throw Error('ต้องมีสมาชิกที่ระบุชื่ออย่างน้อย 1 คน');
   return augmentSetup({
     city: setupForm.city.value.trim(),
     cityLL: found?.ll,
+    cityAirport: found?.airport,
     country: found?.cc,
     currency: found?.currency,
     startDate: setupForm.startDate.value,

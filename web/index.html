@@ -7,6 +7,7 @@
     <title>Bop · วางแผนทริปกับเพื่อน</title>
     <link rel="stylesheet" href="/assets/maplibre-gl.css?v=6.19.0" crossorigin="" />
     <link rel="stylesheet" href="/style.css" />
+    <link rel="stylesheet" href="/location-suggest.css" />
     <script type="module" src="/app.js"></script>
   </head>
   <body>
@@ -254,7 +255,6 @@
                     <svg class="icon" aria-hidden="true"><use href="#i-pin" /></svg>
                     <input
                       name="city"
-                      list="cities"
                       value="เชียงใหม่"
                       required
                       maxlength="120"
@@ -262,14 +262,6 @@
                     />
                   </span>
                 </label>
-                <datalist id="cities">
-                  <option value="เชียงใหม่"></option>
-                  <option value="กรุงเทพฯ"></option>
-                  <option value="ดานัง"></option>
-                  <option value="โตเกียว"></option>
-                  <option value="ไทเป"></option>
-                  <option value="โซล"></option>
-                </datalist>
                 <p id="city-result" class="muted" role="status"></p>
                 <div class="fields date-fields">
                   <label>

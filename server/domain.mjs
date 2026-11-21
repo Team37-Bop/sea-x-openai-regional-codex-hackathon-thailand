@@ -89,7 +89,7 @@ export function direction(value, place) {
     });
   }
   const by = modes.includes(value.by) ? value.by : time ? 'flight' : 'undecided';
-  return { by, [place]: str(value[place]), time, auto: value.auto === true, ...(choice ? { choice } : {}) };
+  return { by, [place]: str(value[place]), ...(coordinates(value.placeLL) ? { placeLL: value.placeLL } : {}), time, auto: value.auto === true, ...(choice ? { choice } : {}) };
 }
 export function normalize(input) {
   if (!isDate(input?.startDate)) throw bad('Bop ต้องการวันเริ่มเดินทางที่ถูกต้อง');
@@ -136,7 +136,7 @@ export function normalize(input) {
       if (!name) continue;
       if (!left && (days > 1 || stays.length)) break;
       const nights = Math.min(left, Math.max(1, Math.floor(positive(row.nights) ?? 1)));
-      stays.push({ name, nights });
+      stays.push({ name, nights, ...(coordinates(row.ll) ? { ll: row.ll } : {}) });
       left -= nights;
     }
     if (stays.length) stays.at(-1).nights += left;
