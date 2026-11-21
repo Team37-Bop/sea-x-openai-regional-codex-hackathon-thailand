@@ -18,7 +18,7 @@ The normal entry point SHALL show trip setup, check model readiness and fetch pu
 #### Scenario: Direct demo entry
 
 - **WHEN** the organizer opens the planner with the `demo` query parameter
-- **THEN** the sample opens with the first day selected and offline scenario controls available. A regular successful generated plan opens with the whole-trip map selected.
+- **THEN** the sample opens with the first day selected and offline free-text replanning available. A regular successful generated plan opens with the whole-trip map selected.
 
 ### Requirement: Planning progress and recovery
 
@@ -80,3 +80,13 @@ The reference Node web server SHALL serve the built frontend with GET or HEAD an
 
 - **WHEN** a valid `AWS_LAMBDA_HTTP_ENDPOINT` is present
 - **THEN** the server listens on its advertised host and port. Otherwise it uses `HOST` and `PORT`, with defaults of `0.0.0.0` and `8787`. The API Gateway response-streaming Lambda entry point has a separate adapter.
+
+
+### Requirement: Contextual plan changes
+
+The organizer SHALL be able to describe a change in their own words. The itinerary SHALL check the weather automatically and offer a relevant action on the affected stop when a forecast warrants it.
+
+#### Scenario: Opening a finished plan
+
+- **WHEN** the organizer views a finished trip
+- **THEN** the command area accepts a free-text request and omits hypothetical disruption shortcuts and a manual rain-check button.

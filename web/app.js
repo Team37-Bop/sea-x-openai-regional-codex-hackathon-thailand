@@ -171,7 +171,7 @@ async function api(path, payload, onDay) {
 }
 function setBusy(value) {
   busy = value;
-  for (const selector of ['#demo', '#open-setup', '#hero-setup', '#weather', '#replan button'])
+  for (const selector of ['#demo', '#open-setup', '#hero-setup', '#replan button'])
     $(selector).disabled = value;
   $('#undo').disabled = value || !history.length;
   $('#reset-plan').disabled = value || !original;
@@ -945,12 +945,7 @@ $('#undo').addEventListener('click', () => {
   setBusy(false);
   render();
 });
-$('#weather').addEventListener('click', () => forecast.refresh({ manual: true }));
-bindWorkspace(setupForm, (command) => {
-  if (!state.plan || busy) return;
-  $('#command').value = command;
-  task(() => adjust(command));
-});
+bindWorkspace(setupForm);
 render();
 checkHealth();
 fetch('/api/config').catch(() => {});

@@ -1,5 +1,5 @@
 // Keep the form footer and planner masthead in step with the underlying form and trip.
-export function bindWorkspace(form, runCommand) {
+export function bindWorkspace(form) {
   function summary() {
     const note = document.querySelector('#setup-summary'),
       count = document.querySelector('#setup-person-count');
@@ -12,10 +12,6 @@ export function bindWorkspace(form, runCommand) {
   }
   form.addEventListener('input', summary);
   new MutationObserver(summary).observe(form.querySelector('#members'), { childList: true });
-  document.querySelector('#quick-commands')?.addEventListener('click', (event) => {
-    const command = event.target.closest('[data-command]')?.dataset.command;
-    if (command) runCommand(command);
-  });
   summary();
 }
 export function renderPeople(setup, plan) {
