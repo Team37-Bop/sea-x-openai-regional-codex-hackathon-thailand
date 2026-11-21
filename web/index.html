@@ -288,18 +288,21 @@
                 </div>
               </div>
               <div class="form-group">
-                <label>
-                  ที่พัก
-                  <select name="stayMode">
-                    <option value="auto">ให้ Bop แนะนำ</option>
-                    <option value="booked">จองไว้แล้ว</option>
-                  </select>
+                <fieldset id="stay-mode">
+                  <legend>ที่พัก</legend>
+                  <div class="stay-options">
+                    <label class="stay-option"><input type="radio" name="stayMode" value="auto" checked />ให้ Bop แนะนำ</label>
+                    <label class="stay-option"><input type="radio" name="stayMode" value="booked" />จองไว้แล้ว</label>
+                  </div>
+                </fieldset>
+                <label id="stay-area">ย่านที่สนใจพัก (ถ้ามี)
+                  <input name="hotelArea" maxlength="120" />
                 </label>
-                <div id="stays" hidden>
+                <fieldset id="stays" aria-label="รายละเอียดที่พักที่จองไว้" hidden disabled>
                   <div id="stay-rows"></div>
                   <button class="quiet" id="add-stay" type="button">+ เพิ่มที่พัก</button>
                   <p id="stay-total" class="muted"></p>
-                </div>
+                </fieldset>
               </div>
               <details class="form-disclosure" open>
                 <summary>การเดินทางไป–กลับ</summary>

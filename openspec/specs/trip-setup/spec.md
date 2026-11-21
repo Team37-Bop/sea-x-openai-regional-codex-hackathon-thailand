@@ -55,6 +55,10 @@ The setup SHALL describe each direction as `arrive`/`depart` with `by` in flight
 ### Requirement: Stay mode
 The setup SHALL carry `stay` as `{ mode: 'auto' }` or `{ mode: 'booked', stays: [{ name, nights }] }`, defaulting to auto, and SHALL accept the older `{ mode: 'booked', name }` shape as one stay for every night. The independent legacy `hotelArea` string is an area hint. A booked stay requires `stay.mode = booked`. Stays SHALL be in trip order, the first starting on night 1, and their nights SHALL add up to the trip's nights (days - 1).
 
+#### Scenario: Choosing how to arrange accommodation
+- **WHEN** the organizer opens trip setup
+- **THEN** the accommodation section displays “ให้ Bop แนะนำ” and “จองไว้แล้ว” together as a keyboard-accessible single-choice group. A new trip selects recommendations by default. Selecting booked accommodation reveals hotel names and nights; selecting recommendations reveals the neighborhood field. Switching preserves entered values for the current draft and excludes inactive booked rows from form validation.
+
 #### Scenario: Booked hotel
 - **WHEN** the organizer chooses "จองไว้แล้ว" and types one hotel name
 - **THEN** the setup sends `stay: { mode: 'booked', stays: [{ name, nights: days - 1 }] }`

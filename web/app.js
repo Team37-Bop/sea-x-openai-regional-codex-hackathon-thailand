@@ -576,9 +576,12 @@ function addStay(nights) {
 }
 function updateStay(reset = false) {
   const nights = tripLength() - 1;
-  $('#stays').hidden = setupForm.stayMode.value !== 'booked';
-  if ($('#stays').hidden) return;
+  const booked = setupForm.elements.stayMode.value === 'booked';
+  $('#stay-area').hidden = booked;
+  $('#stays').hidden = !booked;
+  $('#stays').disabled = !booked;
   const area = $('#stay-rows');
+  if (!booked && !area.children.length) return;
   if (!area.children.length) addStay(nights);
   if (!nights && area.children.length > 1) while (area.children.length > 1) area.lastElementChild.remove();
   if (reset && area.children.length === 1)
@@ -614,7 +617,7 @@ $('#add-stay').addEventListener('click', () => {
   updateStay();
 });
 $('#stay-rows').addEventListener('input', () => updateStay());
-setupForm.stayMode.addEventListener('change', () => updateStay(true));
+$('#stay-mode').addEventListener('change', () => updateStay());
 const now = Date.now();
 setupForm.startDate.value = ymd(now + dayMs);
 setupForm.endDate.value = ymd(now + dayMs * 3);

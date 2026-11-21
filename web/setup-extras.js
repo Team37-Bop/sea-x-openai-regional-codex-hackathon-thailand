@@ -94,14 +94,6 @@ function textField(name, title, maxLength) {
   return addField(title, input);
 }
 export function installSetupExtras(form, readSetup) {
-  const stayMode = form.elements.stayMode;
-  const areaLabel = textField('hotelArea', 'ย่านที่สนใจพัก (ถ้ามี)', 120);
-  stayMode.closest('label').after(areaLabel);
-  const toggleArea = () => {
-    areaLabel.hidden = stayMode.value === 'booked';
-  };
-  stayMode.addEventListener('change', toggleArea);
-  toggleArea();
   const noteField = textField('extra', 'รายละเอียดเพิ่มเติมของทริป', 1000);
   form.querySelector('#form-error').before(noteField);
   const airportByCity = {
@@ -389,7 +381,6 @@ export function installSetupExtras(form, readSetup) {
   augment.restore = (setup = {}, flags = {}) => {
     form.elements.hotelArea.value = setup.hotelArea || '';
     form.elements.extra.value = setup.extra || '';
-    toggleArea();
     legs.arrive.restore(setup.arrive, flags.transport?.go);
     legs.depart.restore(setup.depart, flags.transport?.back);
   };
