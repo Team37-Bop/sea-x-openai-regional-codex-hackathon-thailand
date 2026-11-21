@@ -2,6 +2,31 @@
   margin: 12px 0;
   font-size: 0.86rem;
 }
+.preview-status {
+  margin: 0 0 8px;
+  color: var(--accent-dark);
+  font-size: .88rem;
+  font-weight: 600;
+}
+.chat-choices [data-preview][aria-pressed='true'] {
+  background: var(--accent-dark);
+  border-color: var(--accent-dark);
+  color: white;
+}
+#itinerary .preview-note {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 5px 8px;
+}
+.preview-note strong { scroll-margin-block-start: 4rem; }
+.preview-note button { min-height: 36px; }
+.map-toolbar #map-title:not(.map-accessible-text) {
+  margin: 0 10px 0 0;
+  color: var(--accent-dark);
+  font-size: .88rem;
+}
 .review-totals {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

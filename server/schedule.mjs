@@ -20,18 +20,26 @@ function anchor(rows, index, stays, days) {
   const usable = [start, end].filter((s) => s?.name);
   const pin = (row, hotel) => {
     const original = row.name || row.n || '';
+    const changing = hotel.recommended && original && original !== hotel.name;
     const purpose = [];
-    if (hotel.recommended && original !== hotel.name) {
-      if (/เช[็็ค]+[กค]?เอา[ตท์]*|check[ -]?out/i.test(original)) purpose.push('เช็กเอาต์');
-      if (/เช[็็ค]+[กค]?อิน|check[ -]?in/i.test(original)) purpose.push('เช็กอิน');
-      if (/รับกระเป๋า|bag.*pick/i.test(original + ' ' + row.id)) purpose.push('รับกระเป๋า');
-      else if (/ฝากกระเป๋า|drop.*bag/i.test(original)) purpose.push('ฝากกระเป๋า');
-      else if (/กลับที่พัก/.test(original)) purpose.push('กลับที่พัก');
+    if (changing) {
+      const intent = [original, row.note, row.id].join(' ');
+      if (/เช[็็ค]+[กค]?เอา[ตท์]*|check[ -]?out/i.test(intent)) purpose.push('เช็กเอาต์');
+      if (/เช[็็ค]+[กค]?อิน|check[ -]?in/i.test(intent)) purpose.push('เช็กอิน');
+      if (/รับกระเป๋า|bag.*pick/i.test(intent)) purpose.push('รับกระเป๋า');
+      else if (/ฝากกระเป๋า|drop.*bag/i.test(intent)) purpose.push('ฝากกระเป๋า');
+      else if (/กลับที่พัก/.test(intent)) purpose.push('กลับที่พัก');
     }
     const stale = hotel.recommended && /ยังไม่(?:ได้เลือก|ทราบ|ระบุ)(?:ชื่อ|ที่อยู่|พิกัด)?(?:ของ)?(?:โรงแรม|ที่พัก)|สมมติว่า|จนกว่าจะทราบ(?:ที่อยู่|ที่พัก|พิกัด)|จุดเริ่มต้นสมมติ/.test(row.note || '');
-    const note = [purpose.join('และ'), stale ? (purpose.includes('ฝากกระเป๋า') ? 'สอบถามที่พักเรื่องเวลารับฝากกระเป๋า' : '') : row.note].filter(Boolean).join(' · ');
+    const note = [purpose.join('และ'), changing || stale ? (purpose.includes('ฝากกระเป๋า') ? 'สอบถามที่พักเรื่องเวลารับฝากกระเป๋า' : '') : row.note].filter(Boolean).join(' · ');
+    // A new property inherits only this visit's identity, timing and travel mode.
+    // Its predecessor's contact, source, hours and reservation belong to a different venue.
+    const visit = changing ? {
+      id: row.id, start: row.start, t0: row.t0, end: row.end, t1: row.t1, kind: 'hotel', k: 'hotel',
+      mode: row.mode ?? row.leg?.mode ?? row.leg?.m,
+    } : row;
     return {
-    ...row,
+    ...visit,
     name: hotel.name,
     n: hotel.name,
     query: hotel.query || hotel.name,
@@ -314,10 +322,13 @@ export async function schedule(raw, index, setup, ctx, stays, verified, opts = {
         delete leg.why;
         delete leg.rest;
         delete leg.breaks;
+        delete leg.src;
+        delete leg.minSrc;
+      } else {
+        if (row.legWhy) leg.why = row.legWhy;
+        if (row.restStops?.length) leg.rest = row.restStops;
+        if (row.legSrc) leg.src = row.legSrc;
       }
-      if (row.legWhy) leg.why = row.legWhy;
-      if (row.restStops?.length) leg.rest = row.restStops;
-      if (row.legSrc) leg.src = row.legSrc;
       if (road.via === 'unlocated') leg.unlocated = true;
       else delete leg.unlocated;
       s.leg = leg;

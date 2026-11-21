@@ -488,21 +488,28 @@ export function candidateQuestions(result) {
   }
   return [...grouped.values()];
 }
-export function chooseCandidates({ dialog, reopen, result, signal, partySize, onQuestion }) {
+export function chooseCandidates({ dialog, reopen, result, signal, partySize, onQuestion, findMore }) {
   const questions = candidateQuestions(result),
     picks = { must: [], avoid: [] };
   if (!questions.length) return Promise.resolve(picks);
   return new Promise((resolve, reject) => {
     let index = 0;
     let answers = new Map();
+    let refreshController;
+    const stopRefresh = () => {
+      refreshController?.abort();
+      refreshController = undefined;
+    };
     const collect = () => {
       for (const [option, value] of answers) {
-        if (value === 'yes') picks.must.push(option);
-        if (value === 'no') picks.avoid.push(option.id);
+        const kind = option.kind || questions[index].kind;
+        if (value === 'yes') picks.must.push({ ...option, kind });
+        if (value === 'no') picks.avoid.push({ id: option.id, name: option.name, kind, query: option.query });
       }
       answers = new Map();
     };
     const finish = (includeCurrent, aborted = false) => {
+      stopRefresh();
       signal?.removeEventListener('abort', abort);
       dialog.removeEventListener('cancel', cancel);
       dialog.removeEventListener('close', close);
@@ -554,8 +561,9 @@ export function chooseCandidates({ dialog, reopen, result, signal, partySize, on
       head.append(tools, progress, title);
       if (q.sub || q.why) head.append(element('p', plain(q.sub || q.why), 'muted'));
       const grid = element('div', null, 'candidate-grid');
+      grid.id = 'survey-options';
       dialog.replaceChildren(head, grid);
-      for (const option of q.options.filter((o) => o?.name)) {
+      function candidateCard(option) {
         const row = element('article', null, 'question-option');
         row.tabIndex = -1;
         cards.set(option, row);
@@ -601,9 +609,11 @@ export function chooseCandidates({ dialog, reopen, result, signal, partySize, on
           toggles.append(toggle);
         }
         row.append(body, toggles);
-        grid.append(row);
+        return row;
       }
+      grid.append(...q.options.filter(o => o?.name).map(candidateCard));
       const next = (accept) => {
+        stopRefresh();
         if (accept) collect();
         else answers = new Map();
         if (++index < questions.length) {
@@ -612,20 +622,71 @@ export function chooseCandidates({ dialog, reopen, result, signal, partySize, on
         } else finish(false);
       };
       const footer = element('footer', null, 'survey-footer');
-      footer.append(
-        button('ให้ Bop เลือกที่เหลือเอง', () => finish(true)),
-        button('ข้ามคำถามนี้', () => next(false)),
-        button(index === questions.length - 1 ? 'เริ่มวางแผน' : 'ถัดไป', () => next(true), 'primary'),
-      );
-      dialog.append(footer);
-      dialog.scrollTop = 0;
-      onQuestion(q, (option) => {
+      const controls = element('div', null, 'survey-actions');
+      const feedback = element('p', '', 'survey-feedback');
+      feedback.setAttribute('role', 'status');
+      feedback.setAttribute('aria-atomic', 'true');
+      const openCard = option => {
         const card = cards.get(option);
         if (!card?.isConnected) return;
         if (!dialog.open) open();
         card.focus({ preventScroll: true });
         card.scrollIntoView({ block: 'nearest' });
-      });
+      };
+      if (findMore) {
+        const more = button('หาตัวเลือกเพิ่ม', async () => {
+          if (refreshController) return;
+          const controller = new AbortController();
+          refreshController = controller;
+          more.setAttribute('aria-disabled', 'true');
+          feedback.classList.add('bop-working');
+          feedback.textContent = 'กำลังหาตัวเลือกเพิ่มสำหรับคำถามนี้…';
+          const focusAtStart = document.activeElement;
+          try {
+            const exclude = questions.flatMap(question => question.options.map(o => plain(o?.name))).filter(Boolean);
+            const response = await findMore({ kind: q.kind, exclude }, controller.signal);
+            if (controller.signal.aborted) return;
+            const comparable = name => plain(name).normalize('NFKC').toLowerCase()
+              .replace(/^the\s+/i, '').replace(/[^\p{L}\p{M}\p{N}]+/gu, '');
+            const seen = new Set(exclude.map(comparable));
+            const incoming = candidateQuestions(response).find(question => question.kind === q.kind);
+            const fresh = (incoming?.options || []).filter(option => {
+              const name = comparable(option?.name);
+              if (!name || seen.has(name)) return false;
+              seen.add(name);
+              return true;
+            });
+            if (!fresh.length) {
+              feedback.textContent = 'ยังไม่พบตัวเลือกใหม่ ลองค้นอีกครั้งหรือเลือกจากรายการเดิมได้';
+              return;
+            }
+            q.options = [...fresh, ...q.options];
+            grid.prepend(...fresh.map(candidateCard));
+            feedback.textContent = 'เพิ่ม ' + fresh.length + ' ตัวเลือกไว้ด้านบนแล้ว';
+            onQuestion(q, openCard);
+            if (dialog.open && document.activeElement === focusAtStart) openCard(fresh[0]);
+          } catch {
+            if (!controller.signal.aborted) feedback.textContent = 'ค้นหาเพิ่มไม่สำเร็จ กดหาตัวเลือกเพิ่มเพื่อลองอีกครั้ง';
+          } finally {
+            if (refreshController === controller) {
+              refreshController = undefined;
+              more.removeAttribute('aria-disabled');
+              feedback.classList.remove('bop-working');
+            }
+          }
+        }, 'quiet survey-more');
+        more.setAttribute('aria-controls', grid.id);
+        controls.append(more);
+      }
+      controls.append(
+        button('ให้ Bop เลือกที่เหลือเอง', () => finish(true)),
+        button('ข้ามคำถามนี้', () => next(false)),
+        button(index === questions.length - 1 ? 'เริ่มวางแผน' : 'ถัดไป', () => next(true), 'primary'),
+      );
+      footer.append(feedback, controls);
+      dialog.append(footer);
+      dialog.scrollTop = 0;
+      onQuestion(q, openCard);
     };
     if (signal?.aborted) {
       abort();

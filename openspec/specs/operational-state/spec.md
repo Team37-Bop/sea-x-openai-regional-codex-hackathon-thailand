@@ -78,12 +78,12 @@ With persistent state enabled, order creation and cancellation confirmation SHAL
 
 ### Requirement: Complete automatic lodging on a saved trip
 
-When an overnight local trip was saved with automatic lodging and has no chosen hotel, opening its existing link SHALL start a hotel lookup. The itinerary SHALL remain available while the lookup runs. A successful, located recommendation SHALL be reusable at the same link after restart, with the original snapshot retained. Booked lodging, a previously named property, and day trips SHALL keep their existing lodging state.
+When an overnight local trip was saved with automatic lodging and has no confirmed hotel, opening its existing link SHALL present lodging options. Looking up suggestions SHALL leave the stored plan intact. On confirmation, a located choice SHALL be reusable at the same link after restart, with the original snapshot retained. Booked lodging, an explicitly selected property, and day trips SHALL keep their existing lodging state.
 
 #### Scenario: An archived trip only identified a neighborhood
 
 - **WHEN** the traveler opens the link in multiple tabs
-- **THEN** concurrent requests share the lookup. The itinerary and booking view show the selected hotel, its unbooked status, and the room rate as an estimate when available. The booking view links to the venue source when checked and exposes a separate availability search for the trip dates.
+- **THEN** the available lodging choices can be viewed without recording a selection. After confirmation the itinerary and booking view show the selected hotel, its unbooked status, and the room rate as an estimate when available. The booking view links to the venue source when checked and exposes a separate availability search for the trip dates.
 
 #### Scenario: A lodging lookup is interrupted or cannot confirm a hotel
 

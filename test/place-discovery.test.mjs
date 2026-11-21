@@ -623,4 +623,24 @@ test('tops up sparse London choices once, with distinct supported places and app
     assert.equal(rounds.length, mode === 'full' ? 1 : 2);
     assert.deepEqual(questions.map(q => q.options.length), mode === 'full' ? [4,4] : [2,1]);
   }
+  const setup = normalize({ ...base, days: 1 });
+  mode = 'full';
+  rounds = [];
+  const exclude = ['The Dishoom Covent Garden', 'Padella Borough'];
+  const refreshed = await candidates(setup, context(), { kind: 'food', exclude });
+  assert.equal(rounds.length, 1);
+  assert.deepEqual(rounds[0].data.categories, ['food']);
+  assert.deepEqual(rounds[0].data.existing, exclude);
+  assert.deepEqual(refreshed.questions.map(q => q.kind), ['food']);
+  assert.deepEqual(refreshed.questions[0].options.map(o => o.name), places.food.slice(2));
+  assert.ok(refreshed.questions[0].options.every(o => o.src?.checked === 'web'));
+  const reusedId = refreshed.questions[0].options[0].id;
+  const elsewhere = { id: reusedId, name: 'A different restaurant', kind: 'food' };
+  const picks = resolvePicks({ must: [elsewhere], avoid: [elsewhere] });
+  assert.equal(picks.must[0].query, elsewhere.name);
+  assert.equal(picks.must[0].ll, undefined);
+  assert.equal(picks.avoid[0].name, elsewhere.name);
+  const exhausted = await candidates(setup, context(), { kind: 'food', exclude: places.food });
+  assert.deepEqual(exhausted.questions, []);
+  await assert.rejects(candidates(setup, context(), { kind: 'stay', exclude: [] }), /เลือกหมวด/);
 });

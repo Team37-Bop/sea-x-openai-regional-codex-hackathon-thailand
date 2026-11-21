@@ -1,7 +1,8 @@
 import { needsAutoLodging } from '../web/lodging-state.js';
 import { splitStopNote } from '../web/stop-note.js';
-import { saveLocalTrip, readLocalTrip, resolveLocalLodging } from './local-showcase.mjs';
+import { saveLocalTrip, readLocalTrip, resolveLocalLodging, localLodgingOffers } from './local-showcase.mjs';
 import { recoverSavedDay, validateSavedPositions } from './saved-map.mjs';
+import { rememberPlannedLodging, statelessLodging } from './lodging-presentation.mjs';
 import http from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { extname, resolve, sep } from 'node:path';
@@ -14,7 +15,7 @@ import { placeInfo } from './research.mjs';
 import { candidates } from './candidates.mjs';
 import { serveIntegrations, flightCapabilities } from './integrations.mjs';
 import { health, requireReady } from './model.mjs';
-import { planTrip, replan, transport } from './plan.mjs';
+import { applyLodgingOffer, lodgingOffers, planTrip, replan, resolveAutoLodging, transport } from './plan.mjs';
 
 const base = process.env.LAMBDA_TASK_ROOT || fileURLToPath(new URL('../', import.meta.url));
 const root = resolve(base, process.env.NODE_ENV === 'production' ? 'dist' : 'web');
@@ -83,7 +84,7 @@ export function demoSetup(today = new Date().toISOString().slice(0, 10)) {
 }
 const streams = new Map([
   ['/api/plan', (input, ctx) => planTrip(normalize(input?.setup), ctx)],
-  ['/api/plan/candidates', (input, ctx) => candidates(normalize(input?.setup), ctx)],
+  ['/api/plan/candidates', (input, ctx) => candidates(normalize(input?.setup), ctx, input?.refresh)],
   ['/api/replan', (input, ctx) => replan(input ?? {}, ctx)],
   [
     '/api/transport-options',
@@ -153,21 +154,27 @@ export async function handleRequest(request, response) {
       return json(response, await recoverSavedDay(trip, day, abort.signal));
     }
     const lodging = /^\/api\/local-trips\/([0-9a-f-]{36})\/lodging$/.exec(url.pathname);
-    if (request.method === 'POST' && lodging) {
-      const saved = await readLocalTrip(request, lodging[1]);
-      if (!saved) return json(response, { error: 'not_found' }, 404);
+    if (request.method === 'POST' && (lodging || url.pathname === '/api/plan/lodging')) {
+      const id = lodging?.[1];
+      if (id && !await readLocalTrip(request, id)) return json(response, { error: 'not_found' }, 404);
       if (!/^application\/json(?:\s*;|$)/i.test(request.headers['content-type'] || '')) {
         request.resume();
         return json(response, { error: 'bad_request' }, 415);
       }
       return stream(response, abort.signal, async (ctx) => {
-        await body(request);
-        return resolveLocalLodging(request, lodging[1], async (stored) => {
-          if (!needsAutoLodging(stored.plan)) return stored;
-          await requireReady();
-          const { resolveAutoLodging } = await import('./plan.mjs');
-          return resolveAutoLodging(validateSavedPositions(stored), ctx);
-        });
+        const input = await body(request);
+        if (id && input.action === undefined) {
+          return resolveLocalLodging(request, id, (saved) => needsAutoLodging(saved.plan)
+            ? resolveAutoLodging(validateSavedPositions(saved), ctx) : saved);
+        }
+        const { action, optionId } = input;
+        if (!['options', 'choose', 'recommend'].includes(action) || (action === 'choose' && (typeof optionId !== 'string' || !optionId.trim() || optionId.length > 1500)))
+          throw bad('กรุณาเลือกวิธีเลือกที่พัก');
+        if (!id) return statelessLodging(input, ctx);
+        const offer = await localLodgingOffers(request, id, (saved) => lodgingOffers(validateSavedPositions(saved), ctx));
+        if (action === 'options') return offer;
+        const apply = (saved) => applyLodgingOffer(validateSavedPositions(saved), offer, action, optionId, ctx);
+        return resolveLocalLodging(request, id, apply, action + '-' + (optionId || ''));
       });
     }
     if (await serveIntegrations(request, response, url, abort.signal)) return;
@@ -215,6 +222,7 @@ export async function handleRequest(request, response) {
           await requireReady();
         const result = await streams.get(url.pathname)(input, ctx);
         if (url.pathname === '/api/plan') {
+          rememberPlannedLodging(result.plan);
           const tripId = await saveLocalTrip(request, result);
           if (tripId) return { ...result, localTripId: tripId };
         }

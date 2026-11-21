@@ -9,6 +9,7 @@ import {
   clock,
   coordinates,
   dateAt,
+  distance,
   explain,
   minutes,
   normalize,
@@ -26,8 +27,8 @@ import { requestedTripDays } from './trip-duration.mjs';
 import { bookedStays, concurrent, dayHotels, isHotel, isTransit, schedule } from './schedule.mjs';
 import { matchesPick, resolvePicks } from './candidates.mjs';
 import { searchFlights } from './flights.mjs';
-import { checkedHotelExamples as stayExamples, selectLodging } from './lodging.mjs';
-import { needsAutoLodging } from '../web/lodging-state.js';
+import { checkedHotelExamples as stayExamples, hotelOptions, selectLodging } from './lodging.mjs';
+import { needsAutoLodging, needsLodgingChoice } from '../web/lodging-state.js';
 export { candidates } from './candidates.mjs';
 export { requestedTripDays };
 
@@ -403,9 +404,9 @@ export async function planTrip(input, ctx, demo = false) {
       if (protectedError(error)) throw error;
     }
     if (lodging) {
-      examples = [lodging.hotel, ...examples.filter(e => e.name !== lodging.hotel.name)].slice(0, 3);
+      examples = lodging.options.length ? lodging.options : [lodging.hotel];
       stays = autoStays(setup, [lodging.hotel]);
-      ctx.step('ที่พักที่ Bop เลือก · ' + lodging.hotel.name);
+      ctx.step((lodging.selection === 'chosen' ? 'ที่พักที่กลุ่มเลือก · ' : 'ที่พักที่ Bop แนะนำ · ') + lodging.hotel.name);
     } else if (offline) stays = autoStays(setup, examples);
     else ctx.step('ยังยืนยันชื่อโรงแรมไม่ได้');
   }
@@ -414,6 +415,7 @@ export async function planTrip(input, ctx, demo = false) {
     area: str(design.stay?.area) || stays[0]?.name || '',
     why: lodging?.why || str(design.stay?.why, 400),
     booked: setup.stay.mode === 'booked',
+    ...(lodging && { selection: lodging.selection, options: lodging.options, recommendedId: lodging.options[0]?.id }),
     examples,
     stays,
   };
@@ -677,22 +679,73 @@ export function validatePlan(input) {
   return plan;
 }
 
-export async function resolveAutoLodging(saved, ctx) {
-  const plan = validatePlan(saved.plan);
-  const setup = plan.setup;
-  const prior = plan.flags?.stay || {};
-  if (setup?.stay?.mode !== 'auto' || prior.booked || plan.days.length < 2)
+function lodgingSetup(plan) {
+  const setup = plan?.setup;
+  if (!setup || (setup.stay?.mode && setup.stay.mode !== 'auto') || setup.stay?.name?.trim() ||
+      setup.stay?.stays?.some(row => row?.name?.trim()) || plan.flags?.stay?.booked || plan.days.length < 2 ||
+      plan.days.some(day => day.stops.some(stop => isHotel(stop) && stop.res?.done)))
     throw bad('ทริปนี้ไม่ต้องเลือกที่พักเพิ่มเติม');
-  if (!needsAutoLodging(plan)) return { ...saved, plan };
+  const start = setup.startDate || plan.days[0].date;
+  if (!str(setup.city) || typeof start !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(start) || !Number.isFinite(Date.parse(start)))
+    throw bad('กรุณาตรวจสอบเมืองและวันที่ของแผนทริป');
+  setup.startDate = start;
+  setup.endDate = dateAt(start, plan.days.length - 1);
+  setup.days = plan.days.length;
+  setup.stay ??= { mode: 'auto' };
+  return setup;
+}
 
-  const selection = await selectLodging(setup, prior, prior.examples || [], ctx, true);
-  if (!selection) throw bad('Bop ยังยืนยันโรงแรมในย่านนี้ไม่ได้ กรุณาลองเลือกที่พักอีกครั้ง');
-  const { hotel, why } = selection;
+export async function lodgingOffers(saved, ctx, { publicSearch = false } = {}) {
+  const plan = validatePlan(saved.plan);
+  const setup = lodgingSetup(plan), prior = plan.flags?.stay || {};
+  const area = str(prior.area || setup.hotelArea, 200);
+  if (!needsLodgingChoice(plan) && !['chosen','recommended'].includes(prior.selection))
+    throw bad('ทริปนี้ระบุที่พักแล้ว');
+  if (publicSearch) {
+    const { city, cityLL, days, startDate, endDate, hotelArea } = setup;
+    const publicSetup = { city: str(city), cityLL, days, startDate, endDate, hotelArea: str(hotelArea), stay: { mode: 'auto' } };
+    const result = await selectLodging(publicSetup, { area }, [], ctx, true);
+    const options = result?.options || [];
+    return { area, options, recommendedId: options[0]?.id || '' };
+  }
+  const embedded = hotelOptions(Array.isArray(prior.options) ? prior.options : [], setup);
+  if (embedded.length) return { area, options: embedded, recommendedId: embedded[0].id };
+  const existing = [...(prior.stays || []).filter(s => s?.recommended), ...(prior.examples || [])];
+  const offer = await selectLodging(setup, prior, existing, ctx, true);
+  const options = offer?.options || [];
+  return { area, options, recommendedId: options[0]?.id || '' };
+}
+
+export async function applyLodgingOffer(saved, offer, action, optionId, ctx) {
+  const plan = validatePlan(saved.plan);
+  const setup = lodgingSetup(plan), prior = plan.flags?.stay || {};
+  if (!['choose','recommend'].includes(action)) throw bad('กรุณาเลือกวิธีเลือกที่พัก');
+  const id = action === 'recommend' ? offer.recommendedId : optionId;
+  if (action === 'recommend' && optionId && optionId !== id)
+    throw bad('ตัวเลือกที่พักเปลี่ยนแล้ว กรุณาดูรายชื่อโรงแรมอีกครั้ง');
+  const options = hotelOptions(offer.options, setup);
+  const hotel = options.find(row => row.id === id);
+  if (!hotel) throw bad('กรุณาดูรายชื่อที่พักอีกครั้ง แล้วเลือกโรงแรมจากตัวเลือกที่ Bop พบ');
+  const locked = ['chosen', 'recommended'].includes(prior.selection);
+  if (locked) {
+    if (prior.stays?.[0]?.id === id) return saved;
+    throw bad('กลุ่มเลือกที่พักไปแล้ว กรุณาเปิดแผนล่าสุด');
+  }
+  if (!needsLodgingChoice(plan)) throw bad('ทริปนี้ระบุที่พักแล้ว');
+  const oldName = prior.stays?.[0]?.name;
+  const why = hotel.why || (oldName === hotel.name ? prior.why : '') || '';
   ctx.step('เลือก ' + hotel.name + ' · กำลังปรับจุดแวะและเส้นทาง');
   const stays = autoStays(setup, [hotel]);
   plan.flags ??= {};
-  plan.flags.stay = { ...prior, why, booked: false, stays,
-    examples: [hotel, ...(prior.examples || []).filter(e => e.name !== hotel.name)].slice(0, 3) };
+  plan.flags.stay = { ...prior, why, booked: false, stays, examples: options, options, recommendedId: offer.recommendedId,
+    selection: action === 'choose' ? 'chosen' : 'recommended' };
+  const summary = 'เลือก ' + hotel.name + ' สำหรับ ' + stays[0].nights + ' คืน · ยังไม่ได้จอง';
+  const sameAnchor = (stop) => stop.name === hotel.name && coordinates(stop.ll) && distance(stop.ll, hotel.ll) < 0.001;
+  if (prior.selection === 'provisional' && oldName === hotel.name && prior.stays[0].cost === stays[0].cost &&
+      prior.stays[0].url === hotel.url && setup.stayPlan?.length === plan.days.length &&
+      plan.days.every(day => day.stops.some(isHotel) && day.stops.filter(isHotel).every(sameAnchor))) {
+    return { ...saved, plan, summary };
+  }
   setup.stayPlan = makeDayHotels(setup, stays);
   const verified = new Set(hotel.checked === 'web' ? [hotel.url] : []);
   const results = await concurrent(plan.days, 3, (day, i) =>
@@ -704,7 +757,16 @@ export async function resolveAutoLodging(saved, ctx) {
   reportPlan(plan, setup);
   delete plan.repairOutcome;
   const routes = Object.assign({}, ...results.map(result => result.routes));
-  return { ...saved, plan, routes, summary: 'Bop เลือก ' + hotel.name + ' เป็นที่พักในแผนสำหรับ ' + stays[0].nights + ' คืน · ยังไม่ได้จอง', usage: ctx.usage };
+  return { ...saved, plan, routes, summary, usage: ctx.usage };
+}
+
+export async function resolveAutoLodging(saved, ctx) {
+  const plan = validatePlan(saved.plan);
+  lodgingSetup(plan);
+  if (!needsAutoLodging(plan)) return { ...saved, plan };
+  const offer = await lodgingOffers(saved, ctx);
+  if (!offer.options.length) throw bad('Bop ยังยืนยันโรงแรมในย่านนี้ไม่ได้ กรุณาลองเลือกที่พักอีกครั้ง');
+  return applyLodgingOffer(saved, offer, 'recommend', undefined, ctx);
 }
 function changeTrip(change, setup, base) {
   if (!['go', 'back'].includes(change?.dir)) return null;

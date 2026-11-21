@@ -10,6 +10,7 @@
     <link rel="stylesheet" href="/location-suggest.css" />
     <link rel="stylesheet" href="/booking-tasks.css" />
     <link rel="stylesheet" href="/candidate-survey.css" />
+    <link rel="stylesheet" href="/lodging-chooser.css" />
     <link rel="stylesheet" href="/plan-review.css" />
     <link rel="stylesheet" href="/place-details.css" />
     <link rel="stylesheet" href="/planner-theme.css" />
@@ -436,5 +437,27 @@
       </form>
     </dialog>
     <dialog id="planning-survey" class="candidate-survey" aria-labelledby="survey-question"></dialog>
+    <dialog id="lodging-chooser" class="lodging-chooser" aria-labelledby="lodging-title" aria-describedby="lodging-context">
+      <header class="lodging-header">
+        <div>
+          <p id="lodging-context"></p>
+          <h2 id="lodging-title" tabindex="-1">เลือกที่พักสำหรับทริปนี้</h2>
+        </div>
+        <button type="button" class="icon-button" data-dismiss aria-label="ปิดตัวเลือกที่พัก">
+          <svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg>
+        </button>
+      </header>
+      <div class="lodging-content">
+        <p data-message role="status" aria-live="polite"></p>
+        <fieldset data-options hidden>
+          <legend class="sr-only">โรงแรมที่เลือกได้</legend>
+        </fieldset>
+        <button class="quiet" type="button" data-search hidden>ค้นหาที่พักอีกครั้ง</button>
+      </div>
+      <footer class="lodging-actions">
+        <button class="quiet" type="button" data-recommend>ให้ Bop เลือกให้</button>
+        <button class="primary" type="button" data-select>ใช้ที่พักที่เลือก</button>
+      </footer>
+    </dialog>
   </body>
 </html>

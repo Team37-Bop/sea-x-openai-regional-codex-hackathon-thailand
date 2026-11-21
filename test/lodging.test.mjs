@@ -1,14 +1,15 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { Readable, Writable } from 'node:stream';
 process.env.BOP_PROVIDER = 'openai';
 process.env.OPENAI_API_KEY = 'fixture-key';
 process.env.BOP_CACHE_DIR = await mkdtemp(join(tmpdir(), 'bop-stay-test-'));
 delete process.env.BOP_FAKE_LLM;
 const { normalize } = await import('../server/domain.mjs');
-const { planTrip, resolveAutoLodging } = await import('../server/plan.mjs');
+const { applyLodgingOffer, lodgingOffers, planTrip, resolveAutoLodging } = await import('../server/plan.mjs');
 const { selectLodging } = await import('../server/lodging.mjs');
 const ctx = () => ({ signal: new AbortController().signal, step() {}, usage: {} });
 const setup = normalize({ city: 'ลอนดอน', cityLL: [51.508,-.12], days: 2, startDate: '2026-11-22',
@@ -26,8 +27,10 @@ function mockHotel(t, checked, value=venue, replies={}) {
       const op=body.text.format.name;
       assert.ok(op==='bop_lodging'||replies[op],op);
       if(op==='bop_lodging')requests.push(JSON.parse(body.input.at(-1).content.split('ข้อมูล JSON:\n').at(-1)));
+      const options = Array.isArray(value) ? value : [value];
+      const evidence = checked ? options.filter(row => row.cited !== false).map(row => ({type:'url_citation',...row.src})) : [];
       const response={type:'response.completed',response:{status:'completed',output:[{type:'message',content:[
-        {type:'output_text',text:JSON.stringify(op==='bop_lodging'?value:replies[op]),annotations: checked && op==='bop_lodging' ? [{type:'url_citation',...venue.src}] : []},
+        {type:'output_text',text:JSON.stringify(op==='bop_lodging'?{options}:replies[op]),annotations: op==='bop_lodging' ? evidence : []},
       ]}]}};
       return new Response('event: response.completed\ndata: '+JSON.stringify(response)+'\n\n');
     }
@@ -82,5 +85,122 @@ test('fresh overnight planning replaces a design that only named the area with t
   const stay=plan.flags.stay.stays[0];
   assert.deepEqual([stay.name,stay.cost,stay.checkIn,stay.checkOut],[venue.name,1200,setup.startDate,setup.endDate]);
   assert.equal(plan.flags.stay.booked,false);
+  assert.equal(plan.flags.stay.selection,'provisional');
+  assert.equal(plan.flags.stay.recommendedId, plan.flags.stay.options[0].id);
   assert.deepEqual(plan.days.flatMap(d=>d.stops.map(s=>s.name)),[venue.name,venue.name]);
+});
+
+test('presenting verified branches leaves the saved itinerary untouched, and choosing an alternative switches each hotel anchor', async t => {
+  const second = {...venue, name:'South Bank Example Inn', ll:[51.503,-.109],
+    query:'South Bank Example Inn, Waterloo Road', priceNight:3400, why:'เดินไปริมน้ำสะดวก',
+    src:{url:'https://example.com/hotels/south-bank',title:'South Bank Example Inn'}};
+  const unverified = {...venue,name:'Unknown Hotel',src:{url:'https://example.com/unverified'},cited:false};
+  const requests = mockHotel(t,true,[venue,second,unverified]);
+  const saved = {plan:{city:setup.city,setup,flags:{stay:{area:'Waterloo',stays:[]}},days:[
+    {stops:[stop('bags','hotel','ที่พักย่าน Waterloo — ฝากกระเป๋า',null,{place:{fallback:true},
+      src:{url:'https://old.example/hotel',checked:'web'}, phone:'01234', res:{todo:true,phone:'01234'}, open:'12:00', catalogId:'old'}),
+      stop('gallery','sight','Test Gallery',[51.51,-.13])]},
+    {stops:[stop('sight','sight','Test Park',[51.51,-.13])]}
+  ]},routes:{}};
+  const original = structuredClone(saved);
+  const offer = await lodgingOffers(saved,ctx());
+  assert.deepEqual(saved,original);
+  assert.deepEqual(offer.options.map(row => row.name),[venue.name,second.name]);
+  assert.equal(offer.options[0].priceNight,null);
+  assert.equal(offer.recommendedId,offer.options[0].id);
+  await assert.rejects(applyLodgingOffer(saved,offer,'choose','hotel-invented',ctx()),{code:'bad_request'});
+  const chosen = await applyLodgingOffer(saved,offer,'choose',offer.options[1].id,ctx());
+  assert.equal(chosen.plan.flags.stay.selection,'chosen');
+  assert.equal(chosen.plan.flags.stay.booked,false);
+  assert.equal(chosen.plan.flags.stay.stays[0].cost,1700);
+  const anchors = chosen.plan.days.flatMap(d => d.stops.filter(s => s.k === 'hotel'));
+  assert.ok(anchors.length >= 3);
+  for (const row of anchors) {
+    assert.equal(row.name,second.name);
+    assert.deepEqual(row.ll,second.ll);
+    assert.equal(row.src.url,second.src.url);
+    assert.equal(row.res,undefined);
+    assert.equal(row.phone,undefined);
+    assert.equal(row.open,undefined);
+    assert.equal(row.catalogId,undefined);
+  }
+  assert.deepEqual(saved,original);
+  assert.equal(requests.length,1);
+  const recommended = await applyLodgingOffer(saved,offer,'recommend',undefined,ctx());
+  assert.equal(recommended.plan.flags.stay.selection,'recommended');
+  assert.equal(recommended.plan.flags.stay.stays[0].name,venue.name);
+  assert.deepEqual(await applyLodgingOffer(chosen,offer,'choose',offer.options[1].id,ctx()),chosen);
+  await assert.rejects(applyLodgingOffer(chosen,offer,'choose',offer.options[0].id,ctx()),{code:'bad_request'});
+});
+
+async function lodgingPost(body) {
+  const {invoke} = await import('../server/lambda-handler.mjs');
+  let result = '';
+  const response = new Writable({write(chunk, encoding, done) { result += chunk; done(); }});
+  await invoke({path:'/api/plan/lodging',httpMethod:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(body)}, response, stream => stream);
+  return JSON.parse(result.trim().split('\n').at(-1));
+}
+
+test('stateless hotel actions use server evidence, rediscover on a cold worker and reject injected candidates', async t => {
+  const requests = mockHotel(t,true);
+  const plan = {city:setup.city,setup,days:[{stops:[stop('gallery','sight','Gallery',[51.505,-.11])]},
+    {stops:[stop('museum','sight','Museum',[51.51,-.12])]}],
+    flags:{stay:{area:'Waterloo',offerRef:'unrecognized',options:[]}}};
+  const forged = {id:'hotel-injected',name:'Injected',ll:[51.505,-.12],query:'Injected',url:'https://fabricated.example/',
+    title:'Invented source',checked:'web',locationSource:'geocoded'};
+  plan.flags.stay.options.push(forged);
+  const denied = await lodgingPost({plan,routes:{},action:'choose',optionId:forged.id});
+  assert.equal(denied.type,'error');
+  const offered = await lodgingPost({plan,action:'options'});
+  assert.equal(offered.type,'done');
+  assert.deepEqual(offered.options.map(o=>o.name),[venue.name]);
+  assert.ok(offered.offerRef);
+  plan.flags.stay.offerRef = offered.offerRef;
+  const stale = await lodgingPost({plan,action:'recommend',optionId:forged.id});
+  assert.equal(stale.type,'error');
+  const result = await lodgingPost({plan,routes:{},action:'choose',optionId:offered.options[0].id});
+  assert.equal(result.type,'done');
+  assert.equal(result.plan.flags.stay.stays[0].url,venue.src.url);
+  assert.equal(result.plan.flags.stay.selection,'chosen');
+  assert.equal(requests.length,2);
+  for (const data of requests) assert.deepEqual(Object.keys(data).sort(),['area','city','endDate','startDate']);
+});
+
+test('archived HTTP discovery is read-only and a manual selection retains the original snapshot at the same link', async t => {
+  const {handleRequest} = await import('../server/http.mjs');
+  const {saveLocalTrip,readLocalTrip} = await import('../server/local-showcase.mjs');
+  const previous = process.env.BOP_LOCAL_DEMO;
+  process.env.BOP_LOCAL_DEMO = '1';
+  t.after(() => { if (previous === undefined) delete process.env.BOP_LOCAL_DEMO; else process.env.BOP_LOCAL_DEMO = previous; });
+  const other = {...venue,name:'Second Example Inn',ll:[51.502,-.117],src:{url:'https://example.com/hotels/second',title:'Second Inn'}};
+  const requests = mockHotel(t,true,[venue,other]);
+  const original = {plan:{city:setup.city,setup,flags:{stay:{area:'Waterloo'}},days:[
+    {stops:[stop('a','sight','Test Gallery',[51.511,-.13])]}, {stops:[stop('b','sight','Test Museum',[51.512,-.12])]}
+  ]},routes:{}};
+  const host = {socket:{remoteAddress:'127.0.0.1'},headers:{host:'localhost','content-type':'application/json'}};
+  const id = await saveLocalTrip(host,original);
+  async function post(input) {
+    const request = Object.assign(Readable.from([Buffer.from(JSON.stringify(input))]),host,
+      {url:'/api/local-trips/'+id+'/lodging',method:'POST'});
+    let text = '';
+    const response = new Writable({ write(chunk,encoding,done){text+=chunk;done();} });
+    Object.assign(response,{setHeader(){},writeHead(){},flushHeaders(){}});
+    await handleRequest(request,response);
+    return JSON.parse(text.trim().split('\n').at(-1));
+  }
+  const offers = await post({action:'options'});
+  assert.equal(offers.type,'done');
+  assert.deepEqual(await readLocalTrip(host,id),original);
+  const wrong = await post({action:'choose',optionId:'hotel-invented',options:[venue]});
+  assert.equal(wrong.type,'error');
+  assert.deepEqual(await readLocalTrip(host,id),original);
+  const result = await post({action:'choose',optionId:offers.options[1].id});
+  assert.equal(result.type,'done');
+  assert.equal(result.plan.flags.stay.stays[0].name,other.name);
+  assert.deepEqual(JSON.parse(JSON.stringify((await readLocalTrip(host,id)).plan)),result.plan);
+  const stored = JSON.parse(await readFile(join(process.env.BOP_CACHE_DIR,'showcase',id+'.json'),'utf8'));
+  assert.deepEqual(stored.plan,JSON.parse(JSON.stringify(original.plan)));
+  assert.equal(stored.lodgingRevision.plan.flags.stay.selection,'chosen');
+  assert.equal(requests.length,1);
 });

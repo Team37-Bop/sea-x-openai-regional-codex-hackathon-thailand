@@ -48,7 +48,7 @@ test('one verified lodging revision is reused across local requests and restarts
     await rm(root, { recursive: true, force: true });
   });
   const { readFile } = await import('node:fs/promises');
-  const { readLocalTrip, saveLocalTrip, resolveLocalLodging } = await import('../server/local-showcase.mjs');
+  const { readLocalTrip, saveLocalTrip, resolveLocalLodging, localLodgingOffers } = await import('../server/local-showcase.mjs');
   const { needsAutoLodging } = await import('../web/lodging-state.js');
   const request = { socket: { remoteAddress: '127.0.0.1' }, headers: { host: 'localhost' } };
   const plan = { setup: { stay: { mode: 'auto' } }, days: [{ stops: [] }, { stops: [] }], flags: { stay: { area: 'Waterloo' } } };
@@ -58,6 +58,10 @@ test('one verified lodging revision is reused across local requests and restarts
     assert.equal(needsAutoLodging({ ...plan, setup: { stay: manual } }), false);
   assert.equal(needsAutoLodging({ ...plan, days: [plan.days[0]] }), false);
   const id = await saveLocalTrip(request, original);
+  const offered = {options:[{id:'hotel-1',name:'Riverside Hotel'}],recommendedId:'hotel-1',area:'River'};
+  assert.deepEqual(await localLodgingOffers(request,id,async()=>offered),offered);
+  assert.deepEqual(await readLocalTrip(request,id),original);
+  assert.deepEqual(JSON.parse(await readFile(join(root,'showcase',id+'.json'),'utf8')),original);
   await assert.rejects(resolveLocalLodging(request, id, () => Promise.reject(Error('retry'))), /retry/);
   assert.deepEqual(await readLocalTrip(request, id), original);
   const upgraded = structuredClone(original);
@@ -74,7 +78,17 @@ test('one verified lodging revision is reused across local requests and restarts
   assert.deepEqual(disk.plan, original.plan);
   assert.deepEqual(disk.lodgingRevision, upgraded);
   const restarted = await import('../server/local-showcase.mjs?lodging-restart');
+  assert.deepEqual(await restarted.localLodgingOffers(request,id,()=>assert.fail('lookup after reload')),offered);
   assert.deepEqual(await restarted.readLocalTrip(request, id), upgraded);
   assert.deepEqual(await restarted.resolveLocalLodging(request, id, () => assert.fail('unexpected provider call')), upgraded);
   assert.equal(await restarted.resolveLocalLodging({ ...request, headers: { host: 'elsewhere' } }, id, lookup), undefined);
+  const confirmed = structuredClone(upgraded);
+  confirmed.plan.flags.stay.selection = 'chosen';
+  assert.deepEqual(await restarted.resolveLocalLodging(request,id,current=>{
+    assert.deepEqual(current,upgraded);
+    return confirmed;
+  },'choose-hotel-1'),confirmed);
+  const final = JSON.parse(await readFile(join(root,'showcase',id+'.json'),'utf8'));
+  assert.deepEqual(final.plan, original.plan);
+  assert.deepEqual(final.lodgingRevision, confirmed);
 });

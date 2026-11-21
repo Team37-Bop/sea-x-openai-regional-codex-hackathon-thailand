@@ -1,5 +1,5 @@
 import { splitStopNote } from './stop-note.js';
-import { needsAutoLodging } from './lodging-state.js';
+import { isLodgingStop, needsLodgingChoice } from './lodging-state.js';
 import { action, el } from './integration-ui.js';
 import { mediaUrl } from './setup-extras.js';
 import { localTransport } from './transport-endpoints.js';
@@ -100,6 +100,14 @@ function addLodging(container, plan, setup, actions) {
   if (area) card.append(el('p', 'ย่านที่พัก · ' + area));
   const why = splitStopNote(flag.why).text;
   if (why) card.append(el('p', why, 'muted'));
+  const pendingChoice = needsLodgingChoice(plan) && actions.resolveLodging;
+  if (pendingChoice) {
+    const open = action('ดูตัวเลือกที่พัก', actions.resolveLodging);
+    open.setAttribute('aria-haspopup', 'dialog');
+    open.setAttribute('aria-controls', 'lodging-chooser');
+    card.append(open);
+    return;
+  }
   const chosen = flag.stays?.find(stay => stay.name);
   const examples = (flag.examples || flag.options || []).filter(stay => stay.name && stay.name !== chosen?.name);
   for (const stay of [chosen, ...examples].filter(Boolean)) {
@@ -107,7 +115,7 @@ function addLodging(container, plan, setup, actions) {
     const source = stay.src || stay;
     const link = source.checked === 'web' ? sourceLink(source) : null;
     const price = Number(stay.priceNight ?? stay.price);
-    if (stay === chosen) row.append(el('span', 'Bop เลือกให้ · ยังไม่ได้จอง', 'booking-tag'));
+    if (stay === chosen) row.append(el('span', flag.selection === 'chosen' ? 'ที่พักที่เลือก · ยังไม่ได้จอง' : 'Bop เลือกให้ · ยังไม่ได้จอง', 'booking-tag'));
     row.append(el('h4', stay.name));
     if (stay === chosen && stay.checkIn && stay.checkOut)
       row.append(el('p', dayLabel(stay.checkIn) + ' – ' + dayLabel(stay.checkOut) + ' · ' + stay.nights + ' คืน'));
@@ -118,14 +126,7 @@ function addLodging(container, plan, setup, actions) {
     row.append(links);
     card.append(row);
   }
-  if (!chosen && needsAutoLodging(plan) && actions.resolveLodging) {
-    const message = el('p', '', 'muted');
-    message.dataset.lodgingStatus = '';
-    message.setAttribute('role', 'status');
-    const retry = action('ให้ Bop เลือกที่พัก', actions.resolveLodging);
-    retry.dataset.lodgingRetry = '';
-    card.append(message, retry);
-  } else if (!chosen && !examples.length) {
+  if (!chosen && !examples.length) {
     card.append(el('p', 'ยังไม่มีตัวอย่างโรงแรมหรือราคาต่อคืนในแผนนี้', 'muted'), roomLink(area || '', setup));
   }
 }
@@ -257,6 +258,40 @@ function addDirection(selected, fallback, plan, setup, dir, { adjust, run }) {
     card.append(details);
   }
   (chosen ? selected : fallback).append(card);
+}
+// A reused stop id identifies a slot in the itinerary. A reservation also belongs to its venue.
+export function reconcileReservations(state, nextPlan) {
+  const bookings = { ...state.bookings };
+  const cancellations = [...(state.cancellations || [])];
+  const former = new Map(), next = new Map();
+  for (const day of state.plan.days) for (const stop of day.stops) {
+    former.set(stop.id, { stop, date: day.date });
+    if (stop.res?.done && !bookings[stop.id]) bookings[stop.id] = {
+      state: 'done', name: stop.name, time: stop.start, day: day.date, phone: stop.res.phone || stop.phone,
+    };
+  }
+  for (const day of nextPlan.days) for (const stop of day.stops) {
+    next.set(stop.id, { stop, date: day.date });
+    const prior = former.get(stop.id)?.stop;
+    if (prior && prior.name !== stop.name && isLodgingStop(stop)) {
+      if (stop.res) {
+        stop.res = { ...stop.res, done: false };
+        for (const field of ['phone', 'script']) if (stop.res[field] === prior.res?.[field]) delete stop.res[field];
+      }
+      if (stop.phone && stop.phone === prior.phone) delete stop.phone;
+    }
+  }
+  for (const [id, booking] of Object.entries(bookings)) {
+    const replacement = next.get(id);
+    if (!replacement || replacement.stop.name !== booking.name) {
+      const prior = former.get(id);
+      cancellations.push({ ...booking, day: booking.day || prior?.date, phone: booking.phone || prior?.stop.res?.phone || prior?.stop.phone });
+      delete bookings[id];
+    } else if (replacement.stop.start !== booking.time || (booking.day && replacement.date !== booking.day)) {
+      bookings[id] = { ...booking, state: 'move', next: replacement.stop.start };
+    } else if (booking.state === 'move') bookings[id] = { ...booking, state: 'done' };
+  }
+  return { bookings, cancellations };
 }
 export function reservationStatus(state, stop) {
   return state.bookings?.[stop.id]?.state || (stop.res?.done ? 'done' : 'todo');
