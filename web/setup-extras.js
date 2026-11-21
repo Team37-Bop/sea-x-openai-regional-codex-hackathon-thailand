@@ -440,7 +440,7 @@ export function candidateQuestions(result) {
   }
   return [...grouped.values()];
 }
-export function chooseCandidates({ dialog, result, signal, partySize, onQuestion, onEdit }) {
+export function chooseCandidates({ dialog, reopen, result, signal, partySize, onQuestion }) {
   const questions = candidateQuestions(result),
     picks = { must: [], avoid: [] };
   if (!questions.length) return Promise.resolve(picks);
@@ -458,6 +458,8 @@ export function chooseCandidates({ dialog, result, signal, partySize, onQuestion
       signal?.removeEventListener('abort', abort);
       dialog.removeEventListener('cancel', cancel);
       dialog.removeEventListener('close', close);
+      reopen.removeEventListener('click', open);
+      reopen.hidden = true;
       if (includeCurrent) collect();
       if (dialog.open) dialog.close();
       dialog.replaceChildren();
@@ -470,7 +472,14 @@ export function chooseCandidates({ dialog, result, signal, partySize, onQuestion
       finish(true);
     };
     const close = () => {
-      if (!dialog.open) finish(true);
+      if (dialog.open) return;
+      reopen.hidden = false;
+      reopen.focus({ preventScroll: true });
+    };
+    const open = () => {
+      if (!dialog.open) dialog.showModal();
+      reopen.hidden = true;
+      dialog.querySelector('h2').focus({ preventScroll: true });
     };
     const draw = () => {
       const q = questions[index];
@@ -492,7 +501,7 @@ export function chooseCandidates({ dialog, result, signal, partySize, onQuestion
             .join(' · '),
           'muted',
         ),
-        button('กลับไปแก้ข้อมูลทริป', onEdit),
+        button('ดูแผนที่', () => dialog.close()),
       );
       head.append(tools, progress, title);
       if (q.sub || q.why) head.append(element('p', plain(q.sub || q.why), 'muted'));
@@ -562,8 +571,10 @@ export function chooseCandidates({ dialog, result, signal, partySize, onQuestion
       dialog.scrollTop = 0;
       onQuestion(q, (option) => {
         const card = cards.get(option);
-        card?.focus({ preventScroll: true });
-        card?.scrollIntoView({ block: 'nearest' });
+        if (!card?.isConnected) return;
+        if (!dialog.open) open();
+        card.focus({ preventScroll: true });
+        card.scrollIntoView({ block: 'nearest' });
       });
     };
     if (signal?.aborted) {
@@ -573,8 +584,8 @@ export function chooseCandidates({ dialog, result, signal, partySize, onQuestion
     draw();
     dialog.addEventListener('cancel', cancel);
     dialog.addEventListener('close', close);
+    reopen.addEventListener('click', open);
     signal?.addEventListener('abort', abort, { once: true });
-    dialog.showModal();
-    dialog.querySelector('h2').focus({ preventScroll: true });
+    open();
   });
 }

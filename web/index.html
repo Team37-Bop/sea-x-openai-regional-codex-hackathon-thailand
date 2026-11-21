@@ -171,8 +171,11 @@
           </div>
           <p id="planning-error" role="alert" hidden></p>
           <div class="planning-actions">
-            <button class="primary" id="planning-retry" type="button" hidden>ลองอีกครั้ง</button>
-            <button class="quiet" id="cancel-plan" type="button">กลับไปแก้ข้อมูลทริป</button>
+            <button class="primary" id="planning-reopen" type="button" aria-haspopup="dialog" aria-controls="planning-survey" hidden>เปิดคำถามอีกครั้ง</button>
+            <button class="quiet" id="cancel-plan" type="button">ยกเลิก</button>
+            <button class="primary" id="planning-retry" type="button" hidden>ลองใหม่</button>
+            <button class="quiet" id="planning-auto" type="button" hidden>ให้ Bop จัดให้เลย</button>
+            <button class="quiet" id="planning-edit" type="button" hidden>แก้ข้อมูลทริป</button>
           </div>
         </aside>
         <aside class="trip-sidebar" aria-label="รายละเอียดแผนการเดินทาง">

@@ -45,9 +45,13 @@ Once candidates are ready, the UI SHALL present one question at a time in a nati
 - **WHEN** the organizer presses Escape in the ask dialog
 - **THEN** planning starts directly with the original setup and the answers collected so far
 
-#### Scenario: Return to the trip draft
-- **WHEN** the organizer chooses กลับไปแก้ข้อมูลทริป in the survey
-- **THEN** the survey closes, planning is canceled, and the existing setup draft regains focus
+#### Scenario: Inspect the map between answers
+- **WHEN** the organizer chooses ดูแผนที่ while answering
+- **THEN** the dialog closes temporarily. The planning rail offers เปิดคำถามอีกครั้ง and ยกเลิก. Reopening restores the current question and its answers. Canceling from the rail returns to the existing trip draft.
+
+#### Scenario: Candidate discovery fails
+- **WHEN** the candidate request fails before returning questions
+- **THEN** the planning rail offers ลองใหม่, ให้ Bop จัดให้เลย and แก้ข้อมูลทริป. Choosing direct planning retains the trip details and skips candidate discovery.
 
 #### Scenario: Photo badge
 - **WHEN** an option photo has `match: 'likely'`

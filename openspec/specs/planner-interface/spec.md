@@ -36,13 +36,13 @@ On valid setup submission the interactive map SHALL appear immediately, centered
 
 #### Scenario: Organizer edits during generation
 
-- **WHEN** the organizer cancels or returns to edit setup
-- **THEN** the client aborts the active request, retains its setup for editing and ignores late events from that request.
+- **WHEN** the organizer chooses ยกเลิก beneath the progress steps during generation or while waiting for choices
+- **THEN** the client aborts the active request, retains its setup for editing and ignores late events. While a survey is paused the rail also offers เปิดคำถามอีกครั้ง.
 
 #### Scenario: Stream ends unexpectedly
 
 - **WHEN** a response ends after steps or partial days and has no terminal event
-- **THEN** the client returns a connection-cut error. The planning screen offers recovery instead of accepting the partial itinerary as complete.
+- **THEN** the client returns a connection-cut error. The planning rail offers ลองใหม่ and แก้ข้อมูลทริป. A candidate-discovery error also offers ให้ Bop จัดให้เลย to continue directly to itinerary planning.
 
 #### Scenario: JSON events span network chunks
 

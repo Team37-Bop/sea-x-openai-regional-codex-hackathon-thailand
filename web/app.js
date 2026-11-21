@@ -859,10 +859,15 @@ function showPlanning(show) {
     finishTrace($('#planning-steps'), activePlanning?.signal.aborted ? 'stopped' : 'done');
     $('#planning-phase').removeAttribute('data-waiting');
     $('#planning-retry').onclick = null;
+    $('#planning-auto').onclick = null;
     $('#map-title').textContent = 'แผนที่ทริป';
   }
 }
-function planningPhase(phase, title) {
+function planningPhase(phase, title, discoveryFailed = false) {
+  const failed = phase === 'error';
+  $('#cancel-plan').hidden = failed;
+  $('#planning-edit').hidden = $('#planning-retry').hidden = !failed;
+  $('#planning-auto').hidden = !discoveryFailed;
   finishTrace($('#planning-steps'), phase === 'error' ? 'stopped' : 'done');
   planningPanel.dataset.phase = phase;
   $('#planning-phase').toggleAttribute('data-waiting', ['preparing', 'candidates', 'planning'].includes(phase));
@@ -879,6 +884,7 @@ function editPlanningDraft() {
   $('#setup-title').focus();
 }
 $('#cancel-plan').onclick = editPlanningDraft;
+$('#planning-edit').onclick = editPlanningDraft;
 
 async function generateTrip(input) {
   const ctrl = new AbortController();
@@ -920,12 +926,12 @@ async function generateTrip(input) {
   $('#planning-steps').replaceChildren();
   $('#planning-day-meter').max = totalDays;
   $('#planning-day-progress').hidden = true;
-  $('#planning-error').hidden = $('#planning-retry').hidden = true;
+  $('#planning-error').hidden = true;
   planningPhase('preparing', 'กำลังเตรียมทริป');
   showDays();
   showPlanning(true);
   closePlaceSheet($('#place-panel'), { restoreFocus: false });
-  if (!state.plan) draftMap([]);
+  if (showingDraftMap) draftMap([]);
   else {
     $('#map-title').textContent = state.plan.city;
     drawMap(allDays ? state.plan.days : [state.plan.days[state.selected]], state.routes, undefined, undefined, focusedStop);
@@ -952,7 +958,7 @@ async function generateTrip(input) {
       signal.throwIfAborted();
       input.picks = await chooseCandidates({
         dialog: $('#planning-survey'), result: found, partySize: input.members.length, signal,
-        onEdit: editPlanningDraft,
+        reopen: $('#planning-reopen'),
         onQuestion(question, openCandidate) {
           planningPhase('choosing', 'เลือกสถานที่สำหรับทริป');
           const stops = question.options.filter((place) => coordinates(place.ll));
@@ -1005,11 +1011,12 @@ async function generateTrip(input) {
       if (!setupDialog.open) setupDialog.showModal();
       $('#setup-title').focus();
     } else {
-      planningPhase('error', 'สร้างแผนทริปไม่สำเร็จ');
+      const discoveryFailed = planningPanel.dataset.phase === 'candidates';
+      planningPhase('error', discoveryFailed ? 'หาตัวเลือกไม่สำเร็จ' : 'สร้างแผนทริปไม่สำเร็จ', discoveryFailed);
       $('#planning-error').textContent = error.message || 'กรุณาลองอีกครั้ง';
       $('#planning-error').hidden = false;
-      $('#planning-retry').hidden = false;
       $('#planning-retry').onclick = () => task(() => generateTrip(input));
+      if (discoveryFailed) $('#planning-auto').onclick = () => task(() => generateTrip({ ...input, autonomy: 'auto' }));
       $('#planning-retry').focus({ preventScroll: true });
     }
   } finally {
