@@ -9,6 +9,8 @@ import { createForecast } from './forecast.js';
 import { coordinates, drawMap } from './map.js';
 import { fetchStream, readEvents } from './stream.js';
 import {
+  bindTripIntegrations,
+  newTripIntegrationKey,
   renderTripIntegrations,
   renderLineVote,
   renderAppliedLine,
@@ -102,6 +104,7 @@ function updateTripLink() {
   if (state.localTripId) window.history.replaceState(null, '', '#trip=' + state.localTripId);
 }
 function newTrip() {
+  bindTripIntegrations(state);
   closePlaceSheet($('#place-panel'), { restoreFocus: false });
   focusedStop = null;
   presentSummary('');
@@ -1004,6 +1007,7 @@ async function generateTrip(input) {
     state = {
       plan: result.plan, routes: result.routes, setup: result.plan.setup,
       selected: 0, demo: false, bookings: {}, cancellations: [], usage: result.usage,
+      integrationKey: newTripIntegrationKey(),
       localTripId: result.localTripId,
     };
     showPlanning(false);
@@ -1138,6 +1142,7 @@ function applyOption(option, routes, summary = '', fromLineVote = false) {
   $('#options').replaceChildren();
   $('#alerts').replaceChildren();
   state.localTripId = option.localTripId || state.localTripId;
+  bindTripIntegrations(state);
   updateTripLink();
   presentSummary(option.line);
   const details = [...new Set([option.title, summary || option.head])].filter(Boolean);
@@ -1218,9 +1223,9 @@ async function adjust(command, day = state.selected) {
   async function chooseLocal(option) {
     if (pendingVotes !== result || choosingLocal) return;
     choosingLocal = true;
-    const chosen = syncChoice ? await syncChoice(option) : option;
+    const confirmed = await syncChoice?.(option);
     if (pendingVotes !== result) return;
-    applyOption(chosen, result.routes);
+    applyOption(confirmed || option, result.routes, '', Boolean(confirmed));
     setBusy(false);
   }
   for (const option of result.options) {
@@ -1288,10 +1293,8 @@ async function adjust(command, day = state.selected) {
         }
         const key = counts[0][1] === counts[1][1] ? tie.querySelector('select').value : counts[0][0];
         const selected = pendingVotes?.options.find((option) => option.key === key);
-        if (selected) {
-          applyOption(selected, result.routes);
-          setBusy(false);
-        } else voteStatus.textContent = 'คะแนนเสมอ ให้ผู้จัดทริปเลือก';
+        if (selected) chooseLocal(selected);
+        else voteStatus.textContent = 'คะแนนเสมอ ให้ผู้จัดทริปเลือก';
       },
       'primary',
     ),

@@ -25,6 +25,14 @@ The organizer SHALL be able to add or remove a number of days or set the total t
 - **WHEN** a three-day trip starting December 30 receives “เพิ่มอีก 2 วัน”
 - **THEN** the proposed trip has five days ending January 3. Existing visits remain in order, the return journey moves to the final day, and the added days have scheduled stops, routes and constraint checks. A live planner designs only the added days. The bundled sample can extend its itinerary offline.
 
+#### Scenario: Add the first overnight stay
+- **WHEN** a day trip with a recommended hotel gains its first night
+- **THEN** the itinerary ends the first day and starts the next at that hotel. The first hotel stop carries the per-person lodging charge for the revised number of nights, and the cost checks use the updated charge.
+
+#### Scenario: Depart on a former hotel transfer day
+- **WHEN** shortening a trip removes the hotel the group was due to transfer to on its new final day
+- **THEN** that morning's hotel stop shows final checkout and the original option retains its transfer instruction.
+
 #### Scenario: Shorten a trip with a commitment
 - **WHEN** “ลดเหลือ 2 วัน” would remove a confirmed reservation or a member's wished-for visit
 - **THEN** Bop explains the impact and offers the shorter itinerary and the original itinerary as distinct choices. Each choice carries its own setup and dates. Changes to a booked stay, fixed return journey, a newly failed check or a cost increase above ฿300 per person also require a decision. A return offer from the old date cannot be booked on the revised itinerary.
@@ -123,12 +131,12 @@ The UI SHALL push the previous plan, reservation states, cancellations and setup
 - **WHEN** the organizer taps "ย้อนกลับ" after a replan
 - **THEN** the previous plan and reservation states are restored and the step "ย้อนกลับเป็นแผนก่อนหน้าแล้ว" is shown
 
-### Requirement: Offline scenarios
-Without a usable model on the sample plan, the UI SHALL run pre-built scenarios (`SCEN`: rain, closed restaurant, full restaurant, flight delay) instead of calling the server.
+### Requirement: Offline sample scenarios
+The bundled sample replanner SHALL support rain, closed restaurant, full restaurant and flight-delay scenarios when invoked directly with its offline fixture.
 
 #### Scenario: Offline rain
-- **WHEN** the model is unavailable and the organizer types "ถ้าฝนตกล่ะ"
-- **THEN** the rain scenario runs locally and asks the group to choose between its proposed alternatives.
+- **WHEN** the offline sample replanner receives "ถ้าฝนตกล่ะ"
+- **THEN** it returns the rain alternatives for a group decision.
 
 ### Requirement: Bad input
 The endpoint SHALL end with `bad_request` when the plan is invalid (no days, a stop without string id, array `ll` or `HH:MM` times) or the command is empty.
@@ -188,10 +196,6 @@ The UI SHALL distinguish a preview from an applied option. Applying an option sn
 #### Scenario: Group linked to LINE
 - **WHEN** the planner receives a vote with at least two choices and has a linked trip and organizer token
 - **THEN** it previews option A, starts a LINE vote with the choices and a 120-minute deadline, and polls about every three seconds while the vote card is active. A closed vote with a matching winning key applies that option.
-
-#### Scenario: Offline command outside the sample vocabulary
-- **WHEN** a sample user without a usable provider enters an unrecognized command
-- **THEN** the UI explains the sample commands and leaves the plan in place. Recognized waterfall removal, rain, restaurant closure and flight-delay commands use their local scenarios.
 
 ### Requirement: Review before applying a group option
 

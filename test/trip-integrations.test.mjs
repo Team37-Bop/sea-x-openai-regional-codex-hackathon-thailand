@@ -250,7 +250,12 @@ test('signed group linking, public views, LIFF identity, cross-channel ballots, 
     posted: false,
     quotaReached: true,
   });
-  assert.equal((await organizer('POST', '/vote', { options })).data.vote.status, 'OPEN');
+  const replacement = (await organizer('POST', '/vote', { options })).data.vote;
+  assert.equal(replacement.status, 'OPEN');
+  assert.equal((await organizer('POST', '/vote/close', { option: 'B', voteId: started.vote.id })).status, 400);
+  const stillOpen = (await organizer('GET', '/vote')).data.vote;
+  assert.equal(stillOpen.id, replacement.id);
+  assert.equal(stillOpen.status, 'OPEN');
   await operationalStore.mutateTrip(created.tripId, (trip) => {
     trip.vote.deadline = new Date(0).toISOString();
     return trip;

@@ -89,7 +89,7 @@ An option preview SHALL use the candidate itinerary for display while retaining 
 #### Scenario: Return to the initial plan
 
 - **WHEN** the organizer resets a trip while a plan change is not running
-- **THEN** the planner restores the initial live itinerary or regenerates the original sample, clears the edit history and reservation UI state, and selects day one. Single-step undo is specified in the replanning capability.
+- **THEN** the planner restores the initial itinerary, clears the edit history and reservation UI state, and selects day one. Single-step undo is specified in the replanning capability.
 
 ### Requirement: Production web boundary
 

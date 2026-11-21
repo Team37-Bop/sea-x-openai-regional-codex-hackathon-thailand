@@ -27,8 +27,7 @@ function remember(session, localTripId = session.state?.localTripId) {
     /* Keep the current page usable. */
   }
 }
-function keyFor(state) {
-  const data = state.setup || {};
+function setupKey(data) {
   const identity = [
     data.city,
     data.startDate,
@@ -38,9 +37,22 @@ function keyFor(state) {
   if (data.title && data.title !== data.city && data.title !== 'ทริปของเรา') identity.push(data.title);
   return JSON.stringify(identity);
 }
-function lineSessionKey(state) {
-  const localKey = state.localTripId && 'trip/' + state.localTripId;
-  return state.lineSessionKey || (localKey && saved[localKey] ? localKey : keyFor(state));
+export function newTripIntegrationKey() {
+  return 'plan/' + crypto.getRandomValues(new Uint32Array(4)).join('-');
+}
+export function bindTripIntegrations(state) {
+  const legacyLink = state.localTripId && 'trip/' + state.localTripId;
+  const legacyKey = legacyLink && saved[legacyLink] ? legacyLink : setupKey(state.setup);
+  if (state.localTripId) {
+    const storageSlot = 'bop.trip.origin.' + state.localTripId;
+    try {
+      state.integrationKey ??= sessionStorage.getItem(storageSlot) || legacyKey;
+      sessionStorage.setItem(storageSlot, state.integrationKey);
+    } catch {
+      /* The planner state still carries the key when session storage is unavailable. */
+    }
+  }
+  state.integrationKey ??= legacyKey;
 }
 function summary(state) {
   const plan = state.plan;
@@ -210,7 +222,7 @@ async function loadLine(s) {
   await s.loading;
 }
 export function renderTripIntegrations(container, state) {
-  const key = lineSessionKey(state);
+  const key = state.integrationKey;
   if (current?.key !== key) {
     if (current) {
       clearTimeout(current.linkTimer);
@@ -221,7 +233,7 @@ export function renderTripIntegrations(container, state) {
   }
   const s = current;
   s.state = state;
-  renderFlightPanels(container, state, keyFor(state));
+  renderFlightPanels(container, state, key);
   if (!state.plan?.days.every(Boolean)) return;
   if (!s.host) {
     s.host = el('article', null, 'alert');
@@ -235,7 +247,7 @@ export function renderTripIntegrations(container, state) {
 const startedVotes = new WeakMap();
 export function renderLineVote(container, state, result, apply, showLocalVote) {
   const s = current;
-  if (!s?.auth || s.key !== lineSessionKey(state) || s.enabled === false || s.trip?.linked === false) return false;
+  if (!s?.auth || s.key !== state.integrationKey || s.enabled === false || s.trip?.linked === false) return false;
   clearTimeout(s.voteTimer);
   const panel = el('section', null, 'line-vote');
   s.votePanel = panel;
@@ -267,8 +279,8 @@ export function renderLineVote(container, state, result, apply, showLocalVote) {
     // An unpublished ballot may already exist on the server. Finalize it if reachable.
     try {
       const vote = await closeVote(option.key);
-      return result.options.find((o) => o.key === vote?.winner) || option;
-    } catch { return option; }
+      return result.options.find((o) => o.key === vote?.winner);
+    } catch { return undefined; }
   }
   async function choose(key) {
     if (!active() || closing) return;
@@ -361,7 +373,7 @@ export function renderLineVote(container, state, result, apply, showLocalVote) {
   return true;
 }
 export function canNotifyWeather(state) {
-  return !!(current?.enabled && current.auth && current.trip?.linked && lineSessionKey(state) === current.key);
+  return !!(current?.enabled && current.auth && current.trip?.linked && state.integrationKey === current.key);
 }
 
 function groupMessage(text) {
@@ -376,12 +388,8 @@ export function lineMessageBubble(text, title) {
 }
 
 export function renderAppliedLine(container, before, after, text, fromLineVote, showBooking) {
-  const s = current?.key === lineSessionKey(before) ? current : null;
-  if (s) {
-    // This is the same group trip even when the new itinerary ends on a different date.
-    after.lineSessionKey = s.key;
-    if (s.auth) remember(s, after.localTripId);
-  }
+  const s = current?.key === before.integrationKey && current?.key === after.integrationKey ? current : null;
+  if (s?.auth) remember(s, after.localTripId);
   container.replaceChildren();
   const body = groupMessage(text);
   if (!body) return;

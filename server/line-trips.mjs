@@ -304,16 +304,20 @@ export function createLineService(store = operationalStore, request = (...args) 
       return { vote: voteView(vote), ...(await push(next, voteFlex(next))) };
     }
     if (action === 'vote.close') {
+      const expectedVoteId = input.voteId ?? trip.vote?.id;
+      let closedHere;
       const next = await store.mutateTrip(id, (current) => {
         const vote = current.vote;
-        if (!vote?.options.some((o) => o.key === input.option)) throw invalid('ไม่พบตัวเลือกนี้');
-        if (vote.status === 'CLOSED') return;
+        if (!vote || vote.id !== expectedVoteId) throw invalid('โหวตนี้ไม่ใช่โหวตปัจจุบัน');
+        if (!vote.options.some((o) => o.key === input.option)) throw invalid('ไม่พบตัวเลือกนี้');
+        closedHere = vote.status !== 'CLOSED';
+        if (!closedHere) return;
         vote.winner = input.option;
         vote.status = 'CLOSED';
         return current;
       });
       if (!next) throw deny();
-      if (trip.vote?.status === 'CLOSED') return { vote: voteView(next.vote), posted: false };
+      if (!closedHere) return { vote: voteView(next.vote), posted: false };
       return { vote: voteView(next.vote), ...(await push(next, text(resultText(next.vote)))) };
     }
     throw invalid('คำขอไม่ถูกต้อง');

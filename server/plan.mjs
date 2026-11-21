@@ -188,6 +188,18 @@ function stayExamples(stay, verified) {
       ...source(e.src ?? e, (e.src?.checked ?? e.checked) === 'web' ? verified : []),
     }));
 }
+function autoStays(setup, examples = [], previous) {
+  const nights = setup.days - 1;
+  const hotel = previous ?? examples.find((e) => coordinates(e.ll)) ?? examples[0];
+  if (!hotel || !nights) return [];
+  const nightlyCost = previous?.nights && Number.isFinite(previous.cost)
+    ? previous.cost / previous.nights
+    : (hotel.priceNight || 0) / 2;
+  return [{
+    ...hotel, first: 0, nights, checkIn: setup.startDate, checkOut: dateAt(setup.startDate, nights),
+    locationSource: hotel.locationSource ?? 'model', cost: nightlyCost * nights,
+  }];
+}
 function makeDayHotels(setup, stays) {
   return Array.from({ length: setup.days }, (_, i) => {
     const { start, end } = dayHotels(stays, i, setup.days);
@@ -375,18 +387,7 @@ export async function planTrip(input, ctx, demo = false) {
   }
   if (split) timing.skeleton = elapsed(tDesign);
   const examples = setup.stay.mode === 'auto' ? stayExamples(design.stay, verified) : [];
-  if (examples.length && setup.days > 1) {
-    const e = examples.find((e) => coordinates(e.ll)) ?? examples[0];
-    stays = [
-      {
-        ...e,
-        first: 0,
-        nights: setup.days - 1,
-        cost: (e.priceNight * (setup.days - 1)) / 2,
-        locationSource: 'model',
-      },
-    ];
-  }
+  if (setup.stay.mode === 'auto') stays = autoStays(setup, examples);
   setup.stayPlan = makeDayHotels(setup, stays);
   flags.stay = {
     area: str(design.stay?.area) || stays[0]?.name || '',
@@ -776,14 +777,10 @@ async function resizeTrip(original, setup, count, command, ctx, offline, started
     for (const row of revised.stay.stays)
       row.ll ??= previousStays.find((hotel) => hotel.name === row.name)?.ll;
     stay.stays = await bookedStays(revised, ctx, offline);
-  } else if (previousStays.length) {
-    const hotel = previousStays[0];
-    stay.stays = count === 1 ? [] : [{
-      ...hotel, first: 0, nights: count - 1, checkIn: revised.startDate, checkOut: endDate,
-      cost: hotel.nights ? (hotel.cost || 0) * (count - 1) / hotel.nights : 0,
-    }];
+  } else {
+    stay.stays = autoStays(revised, stay.examples, previousStays[0]);
   }
-  const stays = stay.stays || [];
+  let stays = stay.stays;
   revised.stayPlan = makeDayHotels(revised, stays);
   const fixedReturn = revised.depart && ['flight', 'train', 'bus'].includes(revised.depart.by) &&
     (revised.depart.choice || plan.flags.transport?.back?.chosen || (revised.depart.time && !revised.depart.auto));
@@ -798,9 +795,13 @@ async function resizeTrip(original, setup, count, command, ctx, offline, started
   const edge = plan.days[boundary];
   if (count > oldCount && terminal) edge.stops.pop();
   const previousEnd = edge.stops.at(-1);
-  if (count < oldCount && previousEnd && isHotel(previousEnd) && previousStays.length &&
-      previousEnd.n === dayHotels(previousStays, boundary, oldCount).end?.name)
-    edge.stops.pop();
+  if (count < oldCount && previousStays.length) {
+    const formerHotel = dayHotels(previousStays, boundary, oldCount).end;
+    if (formerHotel && isHotel(previousEnd) && previousEnd.n === formerHotel.name) edge.stops.pop();
+    const morning = edge.stops[0];
+    if (formerHotel && isHotel(morning) && morning.note === 'เช็กเอาต์ ขนกระเป๋าไป' + formerHotel.name)
+      delete morning.note;
+  }
   if (count > oldCount && edge.stops[0]?.note === 'เช็กเอาต์และนำสัมภาระ') delete edge.stops[0].note;
   ctx.step('กำลังปรับทริปจาก ' + oldCount + ' เป็น ' + count + ' วัน');
   for (let index = oldCount; index < count; index++) {
@@ -809,13 +810,22 @@ async function resizeTrip(original, setup, count, command, ctx, offline, started
     let raw, verified = new Set();
     if (offline) raw = addedSampleDay(revised.city, index, original.days);
     else {
+      const needsHotel = index === 1 && revised.stay.mode === 'auto' && !stays.length;
+      const lodgingInstruction = needsHotel
+        ? ' เสนอโรงแรมสำหรับคืนที่เพิ่มใน stay.examples พร้อมพิกัดและ priceNight บาทต่อห้อง'
+        : '';
       const reply = await model(
-        shape + ' จัดเฉพาะวันใหม่หนึ่งวัน ใช้สถานที่จริงที่ต่างจากวันที่มีอยู่ หลีกเลี่ยงสถานที่ซ้ำ ระบบจัดที่พักและจุดเดินทางกลับให้.',
+        shape + ' จัดเฉพาะวันใหม่หนึ่งวัน ใช้สถานที่จริงที่ต่างจากวันที่มีอยู่ หลีกเลี่ยงสถานที่ซ้ำ ระบบจัดที่พักและจุดเดินทางกลับให้.' + lodgingInstruction,
         { setup: revised, command, index, date: dateAt(revised.startDate, index), existingDays: brief(plan) },
         { ...ctx, operation: 'daily', searches: 2 },
       );
       raw = reply.value.days?.[0] ?? reply.value.day;
       verified = reply.verified;
+      if (needsHotel) {
+        stay.examples = stayExamples(reply.value.stay, verified);
+        stay.stays = stays = autoStays(revised, stay.examples);
+        revised.stayPlan = makeDayHotels(revised, stays);
+      }
     }
     if (!Array.isArray(raw?.stops) || !raw.stops.some((s) => s && str(s.name || s.n)))
       throw Error('ไม่มีสถานที่สำหรับวันที่เพิ่ม');
@@ -832,13 +842,16 @@ async function resizeTrip(original, setup, count, command, ctx, offline, started
   const retime = new Set();
   if (terminal || previousStays.length || stays.length) retime.add(boundary);
   if (terminal) retime.add(count - 1);
-  const oldFee = previousStays[0]?.cost, newFee = stays[0]?.cost || 0;
-  if (oldFee && oldFee !== newFee) {
-    const charged = plan.days[0].stops.find((s) => isHotel(s) && s.cost === oldFee);
-    if (charged) charged.cost = newFee;
-  }
   const candidate = await editPlan(plan, [], revised, ctx, offline, retime);
   const proposed = candidate.plan;
+  const oldFee = previousStays[0]?.cost || 0, newFee = stays[0]?.cost || 0;
+  if (newFee !== oldFee) {
+    const charged = proposed.days[0].stops.find(isHotel);
+    if (charged) {
+      charged.cost = newFee;
+      reportPlan(proposed, revised);
+    }
+  }
   if (proposed.days.some((day, index) => day.date !== dateAt(revised.startDate, index) || !day.stops.length))
     throw bad('ยังจัดจุดแวะให้ครบทุกวันที่ขอไม่ได้ ลองปรับคำขออีกครั้ง');
   const visits = new Map(proposed.days.flatMap((d) => d.stops.map((stop) => [stop.id, { stop, date: d.date }])));
