@@ -31,6 +31,7 @@ const mime = {
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
   '.webp': 'image/webp',
+  '.woff2': 'font/woff2',
 };
 function json(response, value, status = 200) {
   response.writeHead(status, {

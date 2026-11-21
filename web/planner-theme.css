@@ -1,0 +1,79 @@
+/* Bop Design System v1. This stylesheet is loaded by the planner, not LIFF.
+   Baseline: 0d8bd10b6b3be60cd2fdcf7b3697152b2f96c21a, src/style.css.
+   Anuphan: Cadson Demak, a8ee8448324cc13fb69d585c4f6da4994f7652b0 (SIL OFL). */
+@font-face {
+  font-family: Anuphan;
+  src: url('/assets/anuphan-variable.woff2') format('woff2');
+  font-style: normal;
+  font-weight: 100 700;
+  font-display: swap;
+}
+
+:root {
+  --canvas: #fbfaf7;
+  --paper: #fff;
+  --surface-2: #f2f0eb;
+  --line: #e2ded5;
+  --ink: #17181c;
+  --muted: #5b5d66;
+  --field-border: #8d8f98;
+  --accent: #1d5fd1;
+  --accent-dark: #184b9e;
+  --tint: #e3edff;
+  --action: #ff5a1f;
+  --on-action: #17181c;
+  --action-hover: #ff784a;
+  --red: #c8262d;
+  --go: #0f7442;
+  --warn: #9a5a00;
+  --planner-font: Anuphan, 'Noto Sans Thai', system-ui, sans-serif;
+  font-family: var(--planner-font);
+  color: var(--ink);
+  background: var(--canvas);
+}
+
+.brand {
+  font-family: var(--planner-font);
+  font-weight: 700;
+}
+
+.primary,
+.start-plan {
+  color: var(--on-action);
+  background: var(--action);
+}
+
+:where(button, a, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline-color: var(--accent);
+}
+
+.stop[data-focused='true'],
+.stop[aria-current='true'] {
+  background: var(--tint);
+  box-shadow: inset 3px 0 var(--accent);
+}
+
+.stop[data-focused='true']::before {
+  background: var(--accent);
+}
+
+.map-pin {
+  color: var(--paper);
+  background: var(--ink);
+}
+
+.map-pin[data-focused='true'] {
+  color: var(--paper);
+  background: var(--accent);
+  outline-color: var(--tint);
+}
+
+.map-pin.removed {
+  color: var(--paper);
+  background: var(--red);
+}
+
+.map-pin:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 3px;
+}
