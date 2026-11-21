@@ -234,14 +234,10 @@ function render() {
   }
   renderPeople(state.setup, plan);
   const usageNote = $('#usage-note');
-  if (usageNote)
-    usageNote.textContent = state.sample
-      ? 'ทริปตัวอย่าง'
-      : state.usage?.provider === 'openai'
-        ? 'สร้างด้วย OpenAI'
-        : state.usage?.provider === 'fake'
-          ? 'ข้อมูลทดสอบ'
-          : '';
+  if (usageNote) {
+    usageNote.textContent = state.sample ? 'ทริปตัวอย่าง' : state.usage?.provider === 'fake' ? 'ข้อมูลทดสอบ' : '';
+    usageNote.hidden = !usageNote.textContent;
+  }
   $('#city-title').textContent = plan.city;
   $('#trip-summary').textContent =
     plan.days.length + ' วัน · เพื่อน ' + (state.setup.members?.length ?? 0) + ' คน';
