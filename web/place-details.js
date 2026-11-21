@@ -1,6 +1,6 @@
 import { renderStopNote } from './stop-note.js';
-import { mediaUrl } from './setup-extras.js';
-import { readEvents } from './stream.js';
+import { loadPlaceImage, mediaUrl } from './setup-extras.js';
+import { fetchStream, readEvents } from './stream.js';
 import { samplePlaceInfo } from './sample-place-details.js';
 
 const current = new WeakMap();
@@ -45,6 +45,7 @@ const dates = new Intl.DateTimeFormat('th-TH', {
   timeZone: 'UTC',
 });
 const number = new Intl.NumberFormat('th-TH', { maximumFractionDigits: 1 });
+const localAmount = new Intl.NumberFormat('th-TH', { maximumFractionDigits: 3 });
 const arr = (value) => (Array.isArray(value) ? value : []);
 const money = (amount) =>
   typeof amount === 'number' && Number.isFinite(amount) ? '฿' + number.format(amount) : '';
@@ -200,13 +201,11 @@ function gallery(photos, name) {
   const figures = document.createDocumentFragment();
   let count = 0;
   for (const photo of arr(photos).slice(0, 4)) {
-    const src = mediaUrl(photo?.thumb) || mediaUrl(photo?.url);
-    if (!src) continue;
+    if (!mediaUrl(photo?.thumb) && !mediaUrl(photo?.url)) continue;
     const figure = el('figure'),
       img = el('img');
     figure.hidden = true;
     img.loading = 'eager';
-    img.referrerPolicy = 'no-referrer';
     img.alt = plain(photo.alt) || name;
     const caption = el('figcaption');
     if (photo.match === 'likely') caption.append('รูปจากเว็บ · ');
@@ -215,20 +214,15 @@ function gallery(photos, name) {
     const licence = link('สัญญาอนุญาต', photo.license);
     if (licence) caption.append(' · ', licence);
     figure.append(img, caption);
-    img.addEventListener(
-      'error',
-      () => {
-        figure.hidden = true;
-        const strip = figure.parentElement;
-        if (strip && !strip.querySelector('figure:not([hidden])')) strip.hidden = true;
-      },
-      { once: true },
-    );
+    loadPlaceImage(img, photo, () => {
+      figure.hidden = true;
+      const strip = figure.parentElement;
+      if (strip && !strip.querySelector('figure:not([hidden])')) strip.hidden = true;
+    });
     img.addEventListener('load', () => {
       figure.hidden = false;
       figure.parentElement.hidden = false;
     }, { once: true });
-    img.src = src;
     figures.append(figure);
     count++;
   }
@@ -254,13 +248,39 @@ function dishList(dishes) {
     const row = el('li');
     row.append(el('strong', plain(dish.name)));
     if (Number.isFinite(dish.price)) row.append(el('span', money(dish.price)));
+    else if (!Number.isFinite(dish.priceLocal?.amount)) row.append(el('small', 'ยังไม่พบราคาต่อจาน'));
     if (dish.priceLocal?.currency && Number.isFinite(dish.priceLocal.amount))
-      row.append(el('small', number.format(dish.priceLocal.amount) + ' ' + dish.priceLocal.currency));
+      row.append(el('small', localAmount.format(dish.priceLocal.amount) + ' ' + dish.priceLocal.currency));
     if (dish.veg || plain(dish.why))
       row.append(el('small', [dish.veg ? 'มังสวิรัติ' : '', plain(dish.why)].filter(Boolean).join(' · ')));
     menu.append(row);
   }
   return menu.childElementCount ? menu : null;
+}
+function menuSection(info, sample) {
+  const dishes = dishList(info.dishes);
+  const body = dishes || el('p', sample ? 'ยังไม่มีเมนูตัวอย่างของร้านนี้' : 'ยังไม่พบเมนูแนะนำของร้านนี้');
+  const menu = section(sample ? 'ไอเดียมื้ออาหารในเดโม' : 'เมนูแนะนำ', body, 'pd-dishes');
+  const source = link('ดูเมนูจากเว็บไซต์ของร้าน', info.menuSource);
+  if (source) menu.append(source);
+  return menu;
+}
+function sourceSection(info, stop) {
+  const sources = el('div', '', 'pd-links');
+  const urls = new Set();
+  const planSource = stop.src?.checked === 'web' ? [stop.src] : [];
+  for (const source of [...planSource, ...arr(info.sources)]) {
+    const a = link(source?.title, source?.url);
+    if (!a) continue;
+    const url = new URL(a.href);
+    for (const key of [...url.searchParams.keys()]) {
+      if (/^utm_/i.test(key)) url.searchParams.delete(key);
+    }
+    if (urls.has(url.href)) continue;
+    urls.add(url.href);
+    sources.append(a);
+  }
+  return sources.childElementCount ? section('แหล่งข้อมูล', sources) : null;
 }
 function paintInfo({ results, photos }, visit, stop, info, sample) {
   const parts = [];
@@ -269,6 +289,7 @@ function paintInfo({ results, photos }, visit, stop, info, sample) {
   const description = plain(info.details?.what || info.what || info.summary);
   if (description && description !== visit.note && description !== 'ยังไม่มีข้อมูล')
     parts.push(el('p', description, 'pd-lead'));
+  if (visit.meal && (sample || info.dishes)) parts.push(menuSection(info, sample));
   const highlights = items(info.details?.highlights || info.highlights);
   if (highlights) parts.push(section('จุดที่น่าสนใจ', highlights));
   const details = facts([
@@ -282,22 +303,11 @@ function paintInfo({ results, photos }, visit, stop, info, sample) {
     ['ติดต่อ', contact(plain(info.phone) || visit.phone)],
   ]);
   if (details) parts.push(section('ข้อมูลสำหรับการไปเยือน', details));
-  const menu = visit.meal && dishList(info.dishes);
-  if (menu) parts.push(section(sample ? 'ไอเดียมื้ออาหารในเดโม' : 'เมนูแนะนำ', menu));
   if (visit.why) parts.push(section('เหตุผลที่เลือกที่พักนี้', el('p', visit.why)));
   const tips = items(info.tips);
   if (tips) parts.push(section('ก่อนออกเดินทาง', tips));
-  const sources = el('div', '', 'pd-links'),
-    urls = new Set();
-  const planSource = stop.src?.checked === 'web' ? [stop.src] : [];
-  for (const source of [...planSource, ...arr(info.sources)]) {
-    const a = link(source?.title, source?.url);
-    if (a && !urls.has(a.href)) {
-      urls.add(a.href);
-      sources.append(a);
-    }
-  }
-  if (sources.childElementCount) parts.push(section('แหล่งข้อมูล', sources));
+  const sources = sourceSection(info, stop);
+  if (sources) parts.push(sources);
   results.replaceChildren(...parts);
 }
 function header(container, context, visit) {
@@ -342,9 +352,9 @@ function header(container, context, visit) {
   container.replaceChildren(head, photos, plan, results, live);
   return { photos, results, live, close };
 }
-function initialResearch({ city, stop, sample, liveResearch }) {
+function initialResearch({ city, stop, day, sample, liveResearch }) {
   const name = plain(stop.n || stop.name);
-  const key = JSON.stringify([city, stop.id, name, stop.ll, stop.query]);
+  const key = JSON.stringify([city, stop.id, name, stop.ll, stop.query, stop.src?.url, day?.date]);
   const offline = sample && !liveResearch;
   const saved = !offline && cache.get(key);
   return {
@@ -354,8 +364,8 @@ function initialResearch({ city, stop, sample, liveResearch }) {
     offline,
   };
 }
-async function fetchPlaceInfo({ city, stop }, signal, onStep) {
-  const response = await fetch('/api/place-info', {
+async function fetchPlaceInfo({ city, stop, day }, signal, onStep) {
+  const response = await fetchStream('/api/place-info', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     signal,
@@ -364,6 +374,7 @@ async function fetchPlaceInfo({ city, stop }, signal, onStep) {
       stop: {
         id: stop.id, n: plain(stop.n || stop.name), k: isMeal(stop) ? 'food' : stop.k || stop.kind,
         ll: stop.ll, note: stop.note, query: stop.query, aliases: stop.aliases, place: stop.place,
+        meal: stop.meal, date: day?.date, src: stop.src,
       },
     }),
   });
@@ -428,15 +439,17 @@ export function createStopMenu(context) {
   menu.append(toggle, body);
   let controller;
   const show = (info, sample) => {
-    const dishes = dishList(info.dishes);
     body.replaceChildren();
-    if (!dishes) {
-      body.append(el('p', sample ? 'ยังไม่มีเมนูตัวอย่างของร้านนี้' : 'ยังไม่พบเมนูแนะนำของร้านนี้'));
-      return;
-    }
-    body.append(dishes);
+    if (plain(info.summary) && info.summary !== 'ยังไม่มีข้อมูล') body.append(el('p', plain(info.summary)));
+    const details = [plain(info.priceRange), plain(info.hours), plain(info.phone)].filter(Boolean);
+    if (details.length) body.append(el('p', details.join(' · ')));
+    body.append(menuSection(info, sample));
+    const tips = items(info.tips);
+    if (tips) body.append(section('ก่อนออกเดินทาง', tips));
+    const sources = sourceSection(info, stop);
+    if (sources) body.append(sources);
     if (sample) body.append(el('small', 'เมนูตัวอย่าง'));
-    else if (info.confidence !== 'web') body.append(el('small', 'ข้อมูลเมนูโดยประมาณ'));
+    else if (!info.menuSource && info.confidence !== 'web') body.append(el('small', 'ข้อมูลเมนูโดยประมาณ'));
   };
   async function load() {
     if (signal?.aborted) return;

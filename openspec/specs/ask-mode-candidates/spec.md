@@ -67,11 +67,15 @@ The candidate handler SHALL validate the setup as for normal planning, omit prev
 
 #### Scenario: Descriptive metadata
 - **WHEN** the model supplies a long name, explanation, price hint and tags
-- **THEN** the name is limited to 120 characters, the explanation to 200, the optional price hint to 60, and at most four nonempty tags of 24 characters each survive. A displayed source requires both a web check and a URL recorded by the search
+- **THEN** the name is limited to 120 characters, the explanation to 200, and the optional price hint to 240. Longer price text ends at a word boundary with an ellipsis when possible. Up to four nonempty tags of 24 characters each survive. A displayed source requires both a web check and a URL recorded by the search
 
 #### Scenario: Photo metadata and failures
 - **WHEN** an option lacks its own confirmed source but the model supplied a public page as a photo hint
 - **THEN** the collector can inspect the page for a matched image independently of source verification. The option returns a successful photo or omits it. Research-only queries, aliases, page hints and temporary geocoding inputs are removed from the response
+
+#### Scenario: Official page for a restaurant branch
+- **WHEN** the venue’s domain identifies the restaurant and the URL path identifies its branch
+- **THEN** a matching page preview can appear in the question as Wikimedia is checked. If the supplied thumbnail fails, the card tries the original image.
 
 ### Requirement: Pick continuity and limits
 

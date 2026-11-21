@@ -1,26 +1,44 @@
 import { bad, cities, coordinates } from './domain.mjs';
 import { model, provider, requireReady } from './model.mjs';
+import { publishedMenu } from './menu-source.mjs';
 import { collectPhotos, exactPhoto } from './photos.mjs';
-import { boundedStrings, httpsUrl, list, placeText } from './place-text.mjs';
+import { boundedStrings, httpsUrl, list, placeText, sourceIdentity } from './place-text.mjs';
 
 const researchPrompt =
   'ค้นหาสถานที่จริงให้ตรงชื่อ สาขา เมืองและพิกัด จากเว็บอย่างมากสามครั้ง สรุปเป็นภาษาไทย what, highlights, ราคา เวลาเปิด เรตติ้ง การจอง ที่อยู่ โทรศัพท์และเคล็ดลับตามหลักฐาน ' +
-  'ร้านอาหารให้แนะนำเมนูจริงพร้อมราคา THB ต่อจานและ priceLocal {amount,currency} และ rate จำนวนบาทต่อหนึ่งหน่วยท้องถิ่น ถ้าหาไม่ได้ให้เว้น ' +
-  'คืน sources พร้อมชื่อหน้าและลิงก์ที่ค้นเจอจริง บอก confidence web เฉพาะเมื่อยืนยันได้ และระบุ photoPage หน้าเว็บที่มีรูปสถานที่จริง ห้ามเดาข้อมูล';
+  'ร้านอาหารให้ค้นเมนูของสาขานี้ โดยเริ่มจากเว็บร้านและเมนูที่ตรงกับมื้อในแผน แนะนำ 3–6 จานเมื่อมีหลักฐาน บอกชื่อจานและเหตุผลสั้น ๆ เป็นภาษาไทย เก็บชื่อบนเมนูไว้ด้วย ' +
+  'ถ้าเป็นเมนูตัวอย่างให้ระบุ ใช้ veg=true เฉพาะจานที่หลักฐานระบุว่ามังสวิรัติ คืนราคาของจานเป็น THB, priceLocal {amount,currency} และ rate จำนวนบาทต่อหนึ่งหน่วยท้องถิ่น ถ้าไม่มีราคาให้เว้นราคาได้ ' +
+  'ถ้ามี publishedMenu ให้ถือว่าเป็นรายการที่อ่านจากเมนูของสาขาโดยตรง ใช้ชื่อตามเมนู อธิบายเมนูและราคาชัดเจน หากไม่มีรายการให้เว้น dishes ไม่ต้องเล่าเรื่องการค้นไม่พบใน summary, highlights หรือ tips ' +
+  'แยกที่มาไว้ใน sources พร้อมชื่อหน้าและลิงก์ที่ค้นเจอจริง ไม่แทรกโดเมนหรือลิงก์ในข้อความ บอก confidence web เฉพาะเมื่อยืนยันได้ และระบุ photoPage ของสถานที่นี้โดยเฉพาะ ห้ามเดาข้อมูล';
 const lookups = new Map();
 
+const sourceHost = String.raw`(?:https?:\/\/)?(?:[a-z\d](?:[a-z\d-]*[a-z\d])?\.)+[a-z]{2,}(?:[/?#][^\s(),;]*)?`;
+const parentheticalSource = new RegExp(String.raw`\s*\(\s*${sourceHost}(?:\s*[,;]\s*${sourceHost})*\s*\)`, 'gi');
+function researchText(value, max = 120) {
+  if (typeof value !== 'string') return '';
+  const text = value.replace(/\(\s*\[[^\]]+\]\(https?:\/\/[^\s)]+\)\s*\)/gi, '');
+  return placeText(text, Infinity).replace(parentheticalSource, '').trim().slice(0, max);
+}
+function researchList(values, max) {
+  return list(values).map((value) => researchText(value, max)).filter(Boolean).slice(0, 5);
+}
 function normalizedStop(raw) {
   const id = typeof raw?.id === 'string' ? raw.id.trim() : '';
   const n = placeText(raw?.n);
   if (!id || !n) throw bad('ไม่มีข้อมูลสถานที่ (stop.id, stop.n)');
+  const venue = n.split(/\s+[—–·]\s+/u)[0];
+  const sourceUrl = raw.src?.checked === 'web' && httpsUrl(raw.src.url);
   return {
     id,
     n,
     k: placeText(raw.k, 20),
-    ll: coordinates(raw.ll) ? raw.ll : undefined,
+    ll: !raw.place?.fallback && coordinates(raw.ll) ? raw.ll : undefined,
     note: placeText(raw.note, 300),
     query: placeText(raw.query) || placeText(raw.place?.query),
-    aliases: boundedStrings([...list(raw.aliases), ...list(raw.place?.aliases)], 8, 80),
+    aliases: boundedStrings([...(venue !== n ? [venue] : []), ...list(raw.aliases), ...list(raw.place?.aliases)], 8, 80),
+    ...(sourceUrl ? { src: { url: sourceUrl, title: placeText(raw.src.title) } } : {}),
+    ...(/^\d{4}-\d{2}-\d{2}$/.test(raw.date) ? { date: raw.date } : {}),
+    ...(raw.meal ? { meal: placeText(raw.meal, 30) } : {}),
   };
 }
 const number = (value) =>
@@ -33,7 +51,7 @@ const number = (value) =>
       : null;
 function dish(row, rate, defaultCurrency) {
   if (!row || typeof row !== 'object') return null;
-  const name = placeText(row.name ?? row.n);
+  const name = researchText(row.name ?? row.n);
   if (!name) return null;
   const amount = number(row.priceLocal?.amount);
   const currency = placeText(row.priceLocal?.currency || defaultCurrency, 3).toUpperCase();
@@ -46,8 +64,8 @@ function dish(row, rate, defaultCurrency) {
     if (currency === 'THB') price = amount;
     else if (conversion > 0) price = Math.round(amount * conversion);
   }
-  const why = placeText(row.why ?? row.description, 180);
-  return { name, price, ...(why ? { why } : {}), ...(priceLocal ? { priceLocal } : {}) };
+  const why = researchText(row.why ?? row.description, 180);
+  return { name, price, ...(why ? { why } : {}), ...(row.veg === true ? { veg: true } : {}), ...(priceLocal ? { priceLocal } : {}) };
 }
 export function normalizeInfo(result, stop) {
   const value = result.value ?? {};
@@ -61,23 +79,23 @@ export function normalizeInfo(result, stop) {
   for (const href of [...(result.cited ?? []), ...claimed.keys(), ...verified]) {
     const url = httpsUrl(href);
     if (sources.length === 6) break;
-    if (!url || !verified.has(url) || sources.some((source) => source.url === url)) continue;
+    if (!url || !verified.has(url) || sources.some((source) => source.url === sourceIdentity(url))) continue;
     sources.push({
-      url,
+      url: sourceIdentity(url),
       title: claimed.get(url) || placeText(result.titles?.get(url), 120) || new URL(url).hostname,
       checked: 'web',
     });
   }
   const details = {
-    what: placeText(value.details?.what, 400),
-    highlights: boundedStrings(value.details?.highlights, 5, 160),
+    what: researchText(value.details?.what, 400),
+    highlights: researchList(value.details?.highlights, 160),
   };
   for (const key of ['price', 'hours', 'rating', 'booking', 'address']) {
-    const text = placeText(value.details?.[key], key === 'hours' ? 80 : 180);
+    const text = researchText(value.details?.[key], key === 'hours' ? 80 : 180);
     if (text) details[key] = text;
   }
   const info = {
-    summary: placeText(value.summary, 300) || 'ยังไม่มีข้อมูล',
+    summary: researchText(value.summary, 300) || 'ยังไม่มีข้อมูล',
     details,
     dishes:
       stop.k === 'food'
@@ -95,10 +113,10 @@ export function normalizeInfo(result, stop) {
     ['hours', 80],
     ['phone', 40],
   ]) {
-    const text = placeText(value[field], size);
+    const text = researchText(value[field], size);
     if (text) info[field] = text;
   }
-  const tips = boundedStrings(value.tips, 5, 180);
+  const tips = researchList(value.tips, 180);
   if (tips.length) info.tips = tips;
   return info;
 }
@@ -107,7 +125,14 @@ async function lookup(stop, city, ctx) {
   ctx.step('Bop กำลังค้นรายละเอียดสถานที่');
   const exact = provider === 'fake' ? Promise.resolve(null) : exactPhoto(stop, ctx.signal);
   exact.catch(() => {});
-  const result = await model(researchPrompt, { city, stop }, {
+  let knownMenu;
+  if (provider !== 'fake' && stop.k === 'food' && stop.src) {
+    ctx.step('กำลังอ่านเมนูที่ร้านเผยแพร่');
+    knownMenu = await publishedMenu(stop, [], ctx.signal);
+  }
+  const input = { city, stop };
+  if (knownMenu) input.publishedMenu = { page: knownMenu.page, dishes: knownMenu.dishes };
+  const result = await model(researchPrompt, input, {
     ...ctx, operation:'research', searches:3, location:{city,country:cities[city]?.cc},
   });
   const info = normalizeInfo(result, stop);
@@ -116,19 +141,28 @@ async function lookup(stop, city, ctx) {
       ? 'อ่านผลค้น ' + info.sources.length + ' หน้า'
       : 'ไม่พบข้อมูลที่เชื่อถือได้ ใช้ข้อมูลประมาณ',
   );
-  if (provider !== 'fake')
-    info.photos = await collectPhotos(
-      stop,
-      [result.value.photoPage, ...info.sources.map((s) => s.url)],
-      exact,
-      ctx.signal,
-    );
+  if (provider !== 'fake') {
+    const enrichMenu = stop.k === 'food' && (info.dishes.length < 3 || info.dishes.every(row => row.price == null && !row.priceLocal));
+    if (!knownMenu && enrichMenu && info.sources.length) ctx.step('กำลังอ่านเมนูที่ร้านเผยแพร่');
+    const [photos, menu] = await Promise.all([
+      collectPhotos(stop, [stop.src?.url, result.value.photoPage, ...info.sources.map((s) => s.url)], exact, ctx.signal),
+      knownMenu || (enrichMenu && info.sources.length ? publishedMenu(stop, info.sources, ctx.signal) : null),
+    ]);
+    info.photos = photos;
+    if (menu) {
+      info.menuSource = menu.page;
+      info.dishes = menu.dishes.map(row => dish(row, result.value.rate, result.value.currency));
+      if (!info.sources.some(source => source.url === menu.page)) {
+        info.sources = [{ url: menu.page, title: 'เมนูจากเว็บไซต์ของร้าน', checked: 'web' }, ...info.sources].slice(0, 6);
+      }
+    }
+  }
   return info;
 }
 export async function placeInfo(input, ctx) {
   const start = performance.now();
   const stop = normalizedStop(input?.stop);
-  const key = JSON.stringify([stop.id, stop.n]);
+  const key = JSON.stringify([stop.id, stop.n, stop.src?.url, stop.date]);
   let entry = lookups.get(key);
   const cached = Boolean(entry);
   if (cached) ctx.step('ใช้ข้อมูลที่ค้นไว้แล้ว');

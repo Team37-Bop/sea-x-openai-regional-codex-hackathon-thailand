@@ -7,7 +7,7 @@ import { bindWorkspace, renderPeople } from './workspace-controls.js';
 import { installSetupExtras, chooseCandidates } from './setup-extras.js';
 import { createForecast } from './forecast.js';
 import { coordinates, drawMap } from './map.js';
-import { readEvents } from './stream.js';
+import { fetchStream, readEvents } from './stream.js';
 import {
   renderTripIntegrations,
   renderLineVote,
@@ -192,7 +192,7 @@ function clean(value, key = '') {
   return value;
 }
 async function api(path, payload, onDay, { signal = activePlanning?.signal, onStep, onMap } = {}) {
-  const response = await fetch(path, {
+  const response = await fetchStream(path, {
     signal,
     ...(payload === undefined
       ? {}
@@ -375,7 +375,7 @@ function render() {
       if (menuDay) {
         if (!menuScope.menus.has(stop.id))
           menuScope.menus.set(stop.id, createStopMenu({
-            city: plan.city, stop, sample: state.sample === true, liveResearch, signal: menuScope.controller.signal,
+            city: plan.city, stop, day: menuDay, sample: state.sample === true, liveResearch, signal: menuScope.controller.signal,
           }));
         const menu = menuScope.menus.get(stop.id);
         if (menu) content.append(menu);

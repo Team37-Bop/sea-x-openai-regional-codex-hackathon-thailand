@@ -11,7 +11,7 @@ let run = 0;
 
 const prompt =
   'เสนอคำถามภาษาไทยตามความต้องการของกลุ่ม ไม่เกิน 3 คำถาม kind food/sight/stay คำถามละไม่เกิน 6 สถานที่จริง ' +
-  'บอกข้อดี tags ราคาโดยประมาณต่อคนเป็นข้อความ พิกัด query และ aliases สำหรับหา POI, photoPage หน้าเว็บที่มีรูปของสถานที่หรือย่านนี้ ' +
+  'บอกข้อดี tags ราคาต่อคนแบบสั้น เช่น £20–30 ต่อคน พิกัด query และ aliases สำหรับหา POI, photoPage หน้าเว็บที่มีรูปของสถานที่หรือย่านนี้ ' +
   'ร้านอาหารทุกร้านต้องระบุให้สมาชิกแต่ละคนที่มี avoid ว่ามีเมนูใดกินได้ ตรวจด้วยแหล่งข้อมูลจริง ใส่ src.checked=web พร้อม URL เมื่อมีหลักฐานเท่านั้น';
 
 export function resolvePicks(input = {}) {
@@ -38,6 +38,17 @@ export function resolvePicks(input = {}) {
   return { must, avoid };
 }
 const titles = { sight: 'อยากไปเที่ยวที่ไหนบ้าง', food: 'สนใจร้านอาหารไหนบ้าง', stay: 'อยากพักย่านไหน' };
+const priceWords = new Intl.Segmenter('th', { granularity: 'word' });
+function priceHint(value) {
+  const text = typeof value === 'number' && Number.isFinite(value) ? String(value) : placeText(value, 1600);
+  if (text.length <= 240) return text;
+  let end = 0;
+  for (const { segment, index } of priceWords.segment(text)) {
+    if (index + segment.length > 239) break;
+    end = index + segment.length;
+  }
+  return text.slice(0, end || 239).trimEnd() + '…';
+}
 export function normalizeQuestions(result, runId) {
   const ids = new Set();
   const verified = new Set([...result.verified].map(httpsUrl).filter(Boolean));
@@ -66,10 +77,7 @@ export function normalizeQuestions(result, runId) {
             (raw?.checked ?? item.checked) === 'web' && verified.has(url)
               ? { url, title: placeText(raw?.title) || new URL(url).hostname, checked: 'web' }
               : undefined;
-          const price = placeText(
-            typeof item.price === 'number' && Number.isFinite(item.price) ? String(item.price) : item.price,
-            60,
-          );
+          const price = priceHint(item.price);
           const option = {
             id,
             name,
@@ -107,8 +115,8 @@ async function photoStage(items, width, timeout, ctx, work) {
     try {
       const photo = await work(entry, signal);
       if (!signal.aborted && photo) {
-        const { url, credit, page, match } = photo;
-        entry.option.photo = { url, credit, page, match };
+        const { url, thumb, credit, page, match } = photo;
+        entry.option.photo = { url, ...(thumb ? { thumb } : {}), credit, page, match };
       }
     } catch {
       ctx.signal.throwIfAborted();
@@ -117,13 +125,15 @@ async function photoStage(items, width, timeout, ctx, work) {
   ctx.signal.throwIfAborted();
 }
 async function firstPass(entry, signal) {
-  const photo = await exactPhoto(entry.stop, signal);
-  if (photo) return photo;
-  for (const page of new Set([entry.photoPage, entry.option.src?.url].filter(Boolean))) {
-    const preview = await pagePhoto(page, entry.stop, signal);
-    if (preview) return preview;
-  }
-  return null;
+  const urls = [...new Set([entry.photoPage, entry.option.src?.url].filter(Boolean))];
+  // Reserve time for a confirmed source even when Wikimedia is queued or unavailable.
+  const wikiSignal = AbortSignal.any([signal, AbortSignal.timeout(6500)]);
+  const [exact, ...previews] = await Promise.all([
+    exactPhoto(entry.stop, wikiSignal).catch(() => null),
+    ...urls.map((url) => pagePhoto(url, entry.stop, signal)),
+  ]);
+  signal.throwIfAborted();
+  return exact || previews.find(Boolean) || null;
 }
 export async function candidates(setup, ctx) {
   const started = performance.now();

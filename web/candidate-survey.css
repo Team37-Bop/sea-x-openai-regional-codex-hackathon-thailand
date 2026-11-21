@@ -130,7 +130,7 @@
   border-color: var(--choice);
   box-shadow: 0 0 0 1px var(--choice);
 }
-.candidate-answers button[aria-pressed='true'] {
+.candidate-grid .candidate-answers button[aria-pressed='true'] {
   color: white;
   background: var(--choice);
   box-shadow: none;

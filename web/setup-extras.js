@@ -1,4 +1,4 @@
-import { readEvents } from './stream.js';
+import { fetchStream, readEvents } from './stream.js';
 
 const money = new Intl.NumberFormat('th-TH', { maximumFractionDigits: 0 });
 const travel = { flight: 'เครื่องบิน', bus: 'รถบัส', train: 'รถไฟ', drive: 'รถยนต์' };
@@ -47,22 +47,24 @@ function link(url, title) {
   item.rel = 'noopener noreferrer';
   return item;
 }
+export function loadPlaceImage(image, photo, onFailure) {
+  const original = mediaUrl(photo?.url);
+  const preferred = mediaUrl(photo?.thumb) || original;
+  image.addEventListener('error', () => {
+    if (original && image.src !== original) image.src = original;
+    else onFailure();
+  });
+  image.referrerPolicy = 'no-referrer';
+  image.src = preferred;
+}
 function photoFigure(photo, name) {
   const url = mediaUrl(photo?.url);
   if (!url) return null;
   const figure = element('figure', null, 'place-photo');
   const image = element('img');
-  image.src = mediaUrl(photo.thumb) || url;
   image.alt = plain(name);
-  image.loading = 'lazy';
-  image.referrerPolicy = 'no-referrer';
-  image.addEventListener(
-    'error',
-    () => {
-      figure.hidden = true;
-    },
-    { once: true },
-  );
+  image.loading = 'eager';
+  loadPlaceImage(image, photo, () => { figure.hidden = true; });
   const credit = element('figcaption');
   if (photo.match === 'likely')
     credit.append(element('span', 'รูปจากเว็บ', 'photo-badge'), document.createTextNode(' · '));
@@ -72,7 +74,7 @@ function photoFigure(photo, name) {
   return figure;
 }
 async function post(path, payload, signal, onStep = () => {}) {
-  const response = await fetch(path, {
+  const response = await fetchStream(path, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(payload),

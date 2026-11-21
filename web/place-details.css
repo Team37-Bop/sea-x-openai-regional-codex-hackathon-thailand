@@ -198,6 +198,10 @@
   border-inline-start: 2px solid var(--edge);
   font-size: 0.85rem;
 }
+.stop-menu-body .pd-section { margin-block: 8px; }
+.stop-menu-body .pd-section h3 { margin: 0 0 4px; font-size: inherit; }
+.stop-menu-body .pd-links { display: grid; gap: 3px; }
+.stop-menu-body .pd-list { padding-inline-start: 1.25rem; }
 .stop-menu-body > small {
   display: block;
   margin-top: 5px;
