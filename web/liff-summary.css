@@ -1,0 +1,97 @@
+@font-face {
+  font-family: Anuphan;
+  src: url('/assets/anuphan-variable.woff2') format('woff2');
+  font-style: normal;
+  font-weight: 100 700;
+  font-display: swap;
+}
+
+#trip-summary-link:not([hidden]) {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  margin-bottom: 6px;
+  color: #1d5fd1;
+  text-decoration: underline;
+  text-underline-offset: .18em;
+}
+#trip-summary-link:focus-visible {
+  outline: 2px solid #1d5fd1;
+  outline-offset: 2px;
+}
+#trip-summary {
+  --liff-ink: #17181c;
+  --liff-paper: #fbfaf7;
+  --liff-line: #e2ded5;
+  --liff-blue: #1d5fd1;
+  --liff-muted: #5b5d66;
+  min-width: 0;
+  border: 1px solid var(--liff-line);
+  border-radius: 12px;
+  padding: 0 16px 14px;
+  color: var(--liff-ink);
+  background: var(--liff-paper);
+  font-family: Anuphan, 'Noto Sans Thai', system-ui, sans-serif;
+}
+#trip-summary:not([open]) { padding-bottom: 0; }
+#trip-summary > summary {
+  padding-block: 12px;
+  font-size: 1.1rem;
+}
+#trip-summary summary:focus-visible {
+  outline: 2px solid var(--liff-blue);
+  outline-offset: 2px;
+}
+.liff-summary-destination {
+  margin: 0 0 10px;
+  color: var(--liff-muted);
+  overflow-wrap: anywhere;
+}
+.liff-summary-days { display: grid; gap: 8px; }
+.liff-summary-day {
+  padding: 0 12px;
+  border: 1px solid var(--liff-line);
+  border-radius: 8px;
+  background: #fff;
+}
+.liff-summary-day > summary {
+  min-height: 44px;
+  padding-block: 10px;
+}
+.liff-summary-timeline {
+  list-style: none;
+  margin: 0 0 12px 4px;
+  padding: 0 0 0 14px;
+  border-inline-start: 2px solid #e3edff;
+}
+.liff-summary-timeline li {
+  position: relative;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding-block: 4px;
+}
+.liff-summary-timeline li::before {
+  content: '';
+  position: absolute;
+  top: .85em;
+  inset-inline-start: -19px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--liff-blue);
+}
+.liff-summary-timeline time {
+  color: var(--liff-blue);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.liff-summary-timeline span,
+.liff-summary-plain { overflow-wrap: anywhere; }
+.liff-summary-plain { white-space: pre-wrap; }
+
+.liff-summary-warning {
+  margin-block: 12px 4px;
+  color: #9a5a00;
+  font-weight: 700;
+}

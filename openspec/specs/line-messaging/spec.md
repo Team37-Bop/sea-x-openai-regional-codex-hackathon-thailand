@@ -109,7 +109,7 @@ The LIFF page SHALL require a trip ID, an enabled server config and a public LIF
 #### Scenario: Linked participant opens the trip summary
 
 - **WHEN** the existing authenticated LIFF view returns a linked member identity and a nonempty trip summary
-- **THEN** the page offers a read-only summary disclosure after the vote panel, renders the summary as plain text, and leaves existing identity and voting flows unchanged.
+- **THEN** the page offers a read-only summary disclosure after the vote panel. Stored day/time summaries render as day cards and a timeline; unknown input is plain text. Near the storage cap, complete preceding days render as cards; the uncertain tail remains verbatim plain text and is flagged as potentially incomplete. The first day is open by default. If no vote is active, the summary is open on first availability; an active vote offers a shortcut that opens and focuses the summary without changing the ballot. Polling preserves disclosure choices and restores focus to the same day or vote choice when it remains available. Existing identity and voting flows are unchanged.
 
 #### Scenario: LIFF voting
 
