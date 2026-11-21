@@ -131,6 +131,9 @@ const browserBuild = {
 const graph = await build({
   ...browserBuild, entryPoints: ['dist/app.js'], splitting: true, write: false, metafile: true,
 });
+const publicSources = new Set(publicFiles.map(name => 'dist/' + name));
+for (const input of Object.keys(graph.metafile.inputs))
+  if (!publicSources.has(input)) throw Error('Browser import outside the public file list: ' + input);
 const modules = new Set();
 for (const output of Object.values(graph.metafile.outputs)) {
   for (const input of output.entryPoint ? [output.entryPoint] : Object.keys(output.inputs)) modules.add(input);
