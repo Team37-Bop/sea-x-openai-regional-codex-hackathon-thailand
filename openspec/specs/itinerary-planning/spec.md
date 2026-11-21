@@ -29,6 +29,11 @@ Trips shorter than `BOP_SPLIT_MIN_DAYS` (default 3) SHALL be designed in one des
 - **WHEN** the destination is outside Thailand and one direction is undecided
 - **THEN** the cap is 8 searches
 
+#### Scenario: Incomplete short design
+- **WHEN** the first design omits a requested day or returns an empty stop list for it
+- **THEN** the planner requests a daily design for each missing day and retains the supplied days
+- **AND** an incomplete daily response fails the request before a shortened plan is committed
+
 ### Requirement: Skeleton and parallel days for long trips
 When the selected model adapter implements both the skeleton and per-day calls, trips of `BOP_SPLIT_MIN_DAYS` or more days SHALL first get a skeleton call (themes, area per day, one hotel, which day covers each wish, meals, 3-6 main places per day, no repeats; 1 search only for example hotels in auto stay mode), then one deep-model design call per day, `BOP_DAY_CONCURRENCY` (default 3) at a time, with up to 2 searches each.
 
@@ -41,7 +46,9 @@ When the selected model adapter implements both the skeleton and per-day calls, 
 - **THEN** missing days are filled with an empty "วันว่าง" row before the day calls
 
 ### Requirement: Progressive day events
-In split mode the endpoint SHALL send `{ type: 'day', index, day, routes }` as soon as each day is designed, geocoded, routed and scheduled; days MAY arrive out of order and the final `done` plan SHALL be authoritative.
+The initial planning endpoint SHALL send cumulative `{ type: 'map', index, day: { date, title, stops }, routes }` previews as individual coordinates and routes become available for both short and split trips. Stop positions use `ll` in latitude/longitude order and a one-based `ordinal`. The source distinguishes catalog, geocoded, selected and model-estimated coordinates. Synthetic fallback coordinates SHALL be excluded. A stop SHALL gain an incoming `leg.key` only after routing returns geometry for both located endpoints. Route geometry uses longitude/latitude order and estimated geometry carries `approx: true`.
+
+The endpoint SHALL send one `{ type: 'day', index, day, routes }` when the day is scheduled. Days MAY arrive out of order. The terminal `done` plan remains authoritative after transport adjustments and repair. A client that ignores intermediate events SHALL still receive the complete result.
 
 #### Scenario: First day ready
 - **WHEN** day 3 finishes before day 1
@@ -49,7 +56,12 @@ In split mode the endpoint SHALL send `{ type: 'day', index, day, routes }` as s
 
 #### Scenario: Streaming a day fails
 - **WHEN** geocoding or routing a single day throws (not an abort)
-- **THEN** the failure is logged, no `day` event is sent for it, and planning continues
+- **THEN** split planning retries that day and publishes its completed event only on success
+
+#### Scenario: Pins arrive before routes
+- **WHEN** stop coordinates have been resolved and a route request is still pending
+- **THEN** the preview contains the located pins in itinerary order and includes only routes that have already returned
+- **AND** subsequent transport adjustments and constraint repairs do not repeat the preview stream
 
 ### Requirement: Geocoding of model places
 Every stop spec SHALL be resolved to coordinates in this order: catalog id (Chiang Mai), coordinates the group picked or a booked hotel (`pick`), an OSM hit (`geocoded`) from Photon then Nominatim that is a real POI within 3 km of the model's coordinates (40 km of the city centre when it gave none), else the model's own coordinates (`model`).

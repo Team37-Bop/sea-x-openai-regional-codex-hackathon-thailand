@@ -76,6 +76,13 @@ test('plans from candidate picks, streams days, and anchors both booked stays', 
   assert.equal(last.type, 'done');
   assert.equal(last.plan.setup.title, 'วันหยุดกับเพื่อน');
   assert.equal(events.filter((event) => event.type === 'day').length, 4);
+  for (const index of [0, 1, 2, 3]) {
+    const updates = events.filter(event => event.index === index && ['map', 'day'].includes(event.type));
+    assert.equal(updates[0].type, 'map');
+    assert.deepEqual(updates[0].routes, {});
+    assert.equal(updates.at(-1).type, 'day');
+    assert.equal(updates.filter(event => event.type === 'day').length, 1);
+  }
   assert.equal(last.plan.days[0].stops[0].start, '09:15');
   assert.deepEqual(last.plan.days[0].stops[0].ll, pick.ll);
   assert.equal(last.plan.days[0].stops[0].place.source, 'pick');

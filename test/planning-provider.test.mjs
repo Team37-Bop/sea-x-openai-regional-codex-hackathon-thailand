@@ -79,6 +79,34 @@ test('single design caps searches at zero, uses exact picks, drops extra days an
   assert.equal(result.usage.provider, 'openai');
   assert.equal(result.plan.report.pass, result.plan.checks.length);
 });
+test('short plans recover omitted days with a daily design and stream pins, routes and completed days once', async (t) => {
+  const requests = [], events = [];
+  const day = (suffix) => ({ title: suffix, stops: [
+    stop('lunch' + suffix, 'Lunch ' + suffix, '12:00', '12:40', { k: 'food', meal: 'lunch' }),
+    stop('dinner' + suffix, 'Dinner ' + suffix, '18:00', '18:40', { k: 'food', meal: 'dinner' }),
+  ] });
+  mockProvider(t, { bop_design: { days: [day('one')] }, bop_daily: { days: [day('two')] } }, requests);
+  const picks = ['one', 'two'].flatMap(s => ['Lunch ', 'Dinner '].map(n => ({ name: n + s, ll: point })));
+  const result = await planTrip(normalize({ ...d, days: 2, picks: { must: picks } }), {
+    ...ctx(), emit: event => events.push(event),
+  });
+  assert.deepEqual(requests.map(r => r.op), ['bop_design', 'bop_daily']);
+  assert.deepEqual(result.plan.days.map(day => day.title), ['one', 'two']);
+  for (const i of [0, 1]) {
+    const sequence = events.filter(e => e.index === i);
+    assert.deepEqual(sequence.map(e => e.type), ['map', 'map', 'map', 'day']);
+    assert.deepEqual(sequence.slice(0, 3).map(e => [e.day.stops.length, Object.keys(e.routes).length]), [[1,0],[2,0],[2,1]]);
+    const routed = sequence[2], key = routed.day.stops[1].leg.key;
+    assert.ok(routed.routes[key].approx);
+    assert.equal(routed.day.date, result.plan.days[i].date);
+  }
+});
+test('a missing day with an empty daily response rejects the shortened trip', async t => {
+  const requests = [];
+  mockProvider(t, { bop_design: { days: [{ stops: [] }] }, bop_daily: { days: [{ stops: [] }] } }, requests);
+  await assert.rejects(planTrip(normalize(d), ctx()), /วันที่ 1/);
+  assert.deepEqual(requests.map(r=>r.op), ['bop_design', 'bop_daily']);
+});
 test('replan obeys model vote decision with independent candidate plans, even for equal costs', async (t) => {
   const setup = normalize(d),
     requests = [];

@@ -346,18 +346,22 @@ export async function planTrip(input, ctx, demo = false) {
     stays,
   };
   const requested = Array.isArray(design.days) ? design.days : [];
-  const count = split || offline ? setup.days : Math.min(requested.length, setup.days);
-  if (!split && count < setup.days) console.warn('Bop received ' + count + ' of ' + setup.days + ' design days');
+  const count = setup.days;
   const skeleton = Array.from({ length: count }, (_, i) => requested[i] ?? { title: 'วันว่าง', places: [] });
   const rawDays = [],
     results = [];
   const budgets = setup.members.map((m) => m.budget).filter((n) => n > 0),
     limits = setup.members.map((m) => m.maxWalkKm).filter((n) => n > 0);
   const tParallel = performance.now();
+  function publishDay(i) {
+    timing.firstDay ??= elapsed(started);
+    ctx.emit?.({ type: 'day', index: i, day: results[i].day, routes: results[i].routes });
+    ctx.step('วันที่ ' + (i + 1) + ' พร้อมแล้ว (' + results[i].day.stops.length + ' จุด)');
+  }
   await concurrent(skeleton, conf('BOP_DAY_CONCURRENCY', 3, 1, 7), async (skel, i) => {
     let raw = skel,
       urls = verified;
-    if (!demo && split) {
+    if (!demo && (split || !Array.isArray(skel.stops) || !skel.stops.length)) {
       const day = await model(
         shape + ' ออกแบบเฉพาะวันที่ ' + (i + 1) + ' คืนหนึ่งวัน ตั้ง id ขึ้นต้น d' + (i + 1) + '_',
         {
@@ -372,6 +376,8 @@ export async function planTrip(input, ctx, demo = false) {
         { ...ctx, operation: 'daily', searches: 2 },
       );
       raw = day.value.days?.[0] ?? day.value.day ?? day.value;
+      if (!Array.isArray(raw?.stops) || !raw.stops.length)
+        throw Error('Bop ไม่ได้รับแผนวันที่ ' + (i + 1) + ' กรุณาลองใหม่');
       urls = day.verified;
       for (const url of urls) allUrls.add(url);
     }
@@ -381,12 +387,9 @@ export async function planTrip(input, ctx, demo = false) {
       results[i] = await schedule(raw, i, setup, ctx, stays, urls, {
         offline,
         fakeArrival: provider === 'fake' && !demo,
+        onMap: demo ? undefined : ctx.emit,
       });
-      if (split) {
-        timing.firstDay ??= elapsed(started);
-        ctx.emit({ type: 'day', index: i, day: results[i].day, routes: results[i].routes });
-        ctx.step('วันที่ ' + (i + 1) + ' พร้อมแล้ว (' + results[i].day.stops.length + ' จุด)');
-      }
+      if (!demo || split) publishDay(i);
     } catch (error) {
       if (!split || protectedError(error)) throw error;
       console.warn('Bop could not stream day ' + (i + 1), error.message);
@@ -411,7 +414,11 @@ export async function planTrip(input, ctx, demo = false) {
   )
     flags.arrivalSuggested = { by: str(design.arrivalSuggested.by), why: str(design.arrivalSuggested.why) };
   for (const [i, { raw, urls }] of rawDays.entries()) {
-    if (!results[i] || retime.has(i)) results[i] = await schedule(raw, i, setup, ctx, stays, urls, { offline });
+    const missing = !results[i];
+    if (missing || retime.has(i)) {
+      results[i] = await schedule(raw, i, setup, ctx, stays, urls, { offline });
+      if (missing && (!demo || split)) publishDay(i);
+    }
   }
   timing.geocode = Math.round(results.reduce((n, r) => n + r.geoMs, 0));
   timing.route = Math.round(results.reduce((n, r) => n + r.routeMs, 0));

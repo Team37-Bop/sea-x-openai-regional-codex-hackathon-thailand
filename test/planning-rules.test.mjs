@@ -171,6 +171,52 @@ test('scheduled stops keep dwell, canonical aliases, travel waits, prices and fa
   assert.deepEqual(approximate.day.stops[0].ll, [0.0001, 0.0001]);
   assert.equal(approximate.day.stops[0].place.source, 'model');
 });
+test('map previews expose individual pins and only the route geometry that has returned', async (t) => {
+  const lookup = Promise.withResolvers(), routing = Promise.withResolvers();
+  const lookupStarted = Promise.withResolvers(), routingStarted = Promise.withResolvers();
+  const from = [16.051, 108.201], to = [16.054, 108.206];
+  const geom = Array.from({ length: 65 }, (_, i) =>
+    [from[1] + (to[1] - from[1]) * i / 64, from[0] + (to[0] - from[0]) * i / 64]);
+  t.mock.method(globalThis, 'fetch', async url => {
+    if (String(url).includes('photon.')) {
+      lookupStarted.resolve();
+      await lookup.promise;
+      return Response.json({ features: [{ properties: { osm_key: 'tourism' }, geometry: { coordinates: geom[0] } }] });
+    }
+    assert.match(String(url), /routed-car/);
+    routingStarted.resolve();
+    await routing.promise;
+    return Response.json({ routes: [{ distance: 800, duration: 120, geometry: { coordinates: geom } }] });
+  });
+  const events = [];
+  const scheduled = schedule({ title: 'Preview', stops: [{ id: 'a', n: 'Fixture museum' }, { id: 'b', n: 'Booked place', pinned: true, ll: to }] },
+    0, normalize({ ...base, city: 'ดานัง' }), context(), [], new Set(), { onMap: event => events.push(event) });
+  await lookupStarted.promise;
+  assert.deepEqual(events.map(e => e.day.stops.map(s => s.ordinal)), [[2]]);
+  lookup.resolve();
+  await routingStarted.promise;
+  assert.deepEqual(events.at(-1).day.stops.map(s => [s.id, s.place.source]), [['a', 'geocoded'], ['b', 'pick']]);
+  assert.deepEqual(events.at(-1).routes, {});
+  assert.equal(events.at(-1).day.stops[1].leg, undefined);
+  routing.resolve();
+  const completed = await scheduled;
+  const last = events.at(-1), key = last.day.stops[1].leg.key;
+  assert.equal(events.length, 3);
+  assert.equal(last.day.stops[1].leg.real, true);
+  assert.equal(last.routes[key].approx, undefined);
+  assert.equal(last.routes[key].geom.length, 32);
+  assert.deepEqual([last.routes[key].geom[0], last.routes[key].geom.at(-1)], [geom[0], geom.at(-1)]);
+  assert.deepEqual(completed.routes[key].geom, geom.map(point => point.map(value => Number(value.toFixed(5)))));
+});
+test('synthetic fallback positions and inbound or outbound legs never enter map previews', async () => {
+  const events = [], setup = normalize({ ...base, city: 'ดานัง' });
+  const result = await schedule({ stops: [
+    { n: 'left', ll: [16.05, 108.20] }, { n: 'unresolved' }, { n: 'right', ll: [16.06, 108.21] },
+  ] }, 0, setup, context(), [], new Set(), { offline: true, onMap: event => events.push(event) });
+  assert.deepEqual(events.at(-1).day.stops.map(s => s.ordinal), [1, 3]);
+  assert.ok(events.every(e => !Object.keys(e.routes).length && e.day.stops.every(s => !s.leg)));
+  assert.equal(result.day.stops[1].place.fallback, true);
+});
 test('router rejects unusable geometry, decodes Valhalla and shares the road profile while timing modes separately', async (t) => {
   const responses = [];
   t.mock.method(globalThis, 'fetch', async (url) => {

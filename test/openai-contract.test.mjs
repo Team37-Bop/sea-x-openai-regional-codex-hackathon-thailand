@@ -159,9 +159,11 @@ test('candidate selection, short design and targeted repair use the real adapter
   });
   const discovery = await candidates(setup, ctx());
   setup.picks = { must: [discovery.questions[0].options[0]], avoid: [] };
-  const planned = await planTrip(setup, ctx());
+  const events = [];
+  const planned = await planTrip(setup, { ...ctx(), emit: event => events.push(event.type) });
   assert.deepEqual(seen, ['candidates', 'design', 'repair']);
   assert.equal(planned.repaired, true);
+  assert.deepEqual(events, ['map', 'map', 'map', 'day']);
   assert.equal(planned.plan.days.length, 1);
   assert.equal(planned.plan.days[0].stops.length, 2);
   const stop = planned.plan.days[0].stops[0];

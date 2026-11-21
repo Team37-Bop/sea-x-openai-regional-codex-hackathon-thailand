@@ -22,7 +22,7 @@ function anchor(rows, index, stays, days) {
     n: hotel.name,
     ll: hotel.ll,
     pinned: true,
-    place: { source: hotel.locationSource ?? 'pick' },
+    place: { source: hotel.locationSource ?? 'pick', ...(hotel.locationFallback && { fallback: true }) },
   });
   for (const [i, row] of rows.entries()) {
     if (!isHotel(row)) continue;
@@ -86,6 +86,7 @@ export async function bookedStays(setup, ctx, offline) {
         ...s,
         ll: ll ?? (coordinates(setup.cityLL) ? setup.cityLL : undefined),
         locationSource: ll ? 'pick' : 'model',
+        ...(!ll && { locationFallback: true }),
       };
     }),
   );
@@ -117,6 +118,7 @@ export async function concurrent(items, width, work) {
 export async function schedule(raw, index, setup, ctx, stays, verified, opts = {}) {
   const { keep = false, offline = false } = opts;
   const date = keep && /^\d{4}-\d{2}-\d{2}$/.test(raw?.date) ? raw.date : dateAt(setup.startDate, index);
+  const title = str(raw?.title ?? raw?.label) || 'วันที่ ' + (index + 1);
   const rows = anchor(
     (Array.isArray(raw?.stops) ? raw.stops : [])
       .slice(0, 32)
@@ -128,6 +130,19 @@ export async function schedule(raw, index, setup, ctx, stays, verified, opts = {
   );
   const ids = new Set(),
     batch = { remaining: 8 };
+  const stopIds = rows.map((row, i) => uniqueId(str(row.id, 80) || 'd' + (index + 1) + '_' + (i + 1), ids));
+  const pins = [];
+  const previewRoutes = {};
+  function publishMap() {
+    if (!ctx.signal?.aborted) {
+      opts.onMap({
+        type: 'map',
+        index,
+        day: { date, title, stops: pins.filter(Boolean) },
+        routes: { ...previewRoutes },
+      });
+    }
+  }
   const tGeo = performance.now();
   const placed = await concurrent(rows, 4, async (row, i) => {
     const cat = catalogPlace(setup.city, row);
@@ -160,6 +175,7 @@ export async function schedule(raw, index, setup, ctx, stays, verified, opts = {
     const k = stopKind(row.kind, cat?.kind);
     const stop = {
       ...row,
+      id: stopIds[i],
       n: name,
       name,
       k,
@@ -175,14 +191,19 @@ export async function schedule(raw, index, setup, ctx, stays, verified, opts = {
     if (keep && row.src && row.place === undefined && row.src.checked === 'web')
       stop.src = source(row.src, verified);
     if (!row.src) delete stop.src;
+    if (opts.onMap && coordinates(stop.ll) && !stop.place.fallback) {
+      const source = stop.place.source;
+      pins[i] = { id: stop.id, name, kind: k, ll: stop.ll, place: { source }, ordinal: i + 1 };
+      publishMap();
+    }
     return stop;
   });
   const geoMs = performance.now() - tGeo;
   for (const [i, s] of placed.entries()) {
-    s.id = uniqueId(str(s.id, 80) || 'd' + (index + 1) + '_' + (i + 1), ids);
     if (!coordinates(s.ll)) {
       s.ll = placed[i - 1]?.ll ?? (coordinates(setup.cityLL) ? setup.cityLL : [0.0001, 0.0001]);
       s.place.source = 'model';
+      s.place.fallback = true;
       console.warn('Bop used approximate coordinates for ' + s.id);
     }
   }
@@ -196,7 +217,17 @@ export async function schedule(raw, index, setup, ctx, stays, verified, opts = {
     const incoming = moved
       ? {}
       : { ...row.leg, min: row.legMin ?? row.leg?.min, minSrc: row.minSrc ?? row.leg?.minSrc };
-    return { mode, moved, road: await route(prev.ll, s.ll, mode, ctx.signal, offline, incoming) };
+    const road = await route(prev.ll, s.ll, mode, ctx.signal, offline, incoming);
+    if (opts.onMap && pins[i - 1] && pins[i]) {
+      // Bound repeated snapshot sizes. The completed day retains the original route geometry.
+      const points = road.geom;
+      const geom = points.length <= 32 ? points : Array.from({ length: 32 }, (_, n) =>
+        points[Math.round(n * (points.length - 1) / 31)]);
+      previewRoutes[road.key] = { geom, ...(!road.real && { approx: true }) };
+      pins[i] = { ...pins[i], leg: { key: road.key, mode, real: road.real } };
+      publishMap();
+    }
+    return { mode, moved, road };
   });
   const routes = {},
     stats = {};
@@ -267,7 +298,7 @@ export async function schedule(raw, index, setup, ctx, stays, verified, opts = {
   return {
     day: {
       date,
-      title: str(raw?.title ?? raw?.label) || 'วันที่ ' + (index + 1),
+      title,
       label: str(raw?.label ?? raw?.title) || localized,
       short: str(raw?.short) || localized,
       stops: placed,
