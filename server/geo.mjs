@@ -1,3 +1,4 @@
+import { addressedBranch, numberedStreet, plainAddress } from './place-text.mjs';
 import { legKey, routeResult } from './route-result.mjs';
 import { isScheduledService } from '../web/leg-modes.js';
 export { legKey };
@@ -194,10 +195,11 @@ const realPoi = (h) =>
   !['highway', 'boundary', 'landuse', 'railway', 'power'].includes(h.kind) &&
   (h.kind !== 'place' || h.type === 'square') &&
   !(h.kind === 'natural' && h.type === 'peak');
+const placeKey = (name, center, radius) => [name.trim().toLowerCase(), center.map(v => v.toFixed(2)), radius].join('|');
 export async function findPlace(name, center, radius = 3, signal = new AbortController().signal, batch) {
   if (!name?.trim() || !coordinates(center)) return null;
   await ready;
-  const key = [name.trim().toLowerCase(), center.map((v) => v.toFixed(2)), radius].join('|');
+  const key = placeKey(name, center, radius);
   const cached = data.geocode.get(key);
   if (coordinates(cached)) return cached;
   return once('poi:' + key, signal, async () => {
@@ -215,22 +217,37 @@ export async function findPlace(name, center, radius = 3, signal = new AbortCont
   });
 }
 
-const plainAddress = value => String(value || '').normalize('NFKD').toLowerCase()
-  .replace(/[\u0300-\u036f]/g, '').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+const verifiedKey = (stop, center) =>
+  (stop.kind === 'hotel' ? 'verified-hotel|' : 'verified|') + plainAddress(stop.query) + '|' + center.map(n => n.toFixed(3));
+export async function brandOnlyPosition(stop, center) {
+  if (stop.pinned || stop.place?.source !== 'geocoded' || !coordinates(stop.ll) || !coordinates(center)) return false;
+  const brand = addressedBranch(stop);
+  if (!brand) return false;
+  await ready;
+  const matches = cached => coordinates(cached) && cached[0] === stop.ll[0] && cached[1] === stop.ll[1];
+  return !matches(data.geocode.get(verifiedKey(stop, center))) && matches(data.geocode.get(placeKey(brand, center, 40)));
+}
 // A business may be listed without the generic suffix used in the itinerary.
 const venueSuffix = /\s+(?:café|cafe|kitchen|restaurant|hotel|hostel|bar)$/i;
 export async function findSavedVenue(stop, center, signal, budget) {
   if (!coordinates(center) || typeof stop.query !== 'string' || !stop.query.trim()) return null;
   const parts = stop.query.split(',').map(part => part.trim()).filter(Boolean);
   const full = (parts[0] || '').split(/\s+[—–]\s+/)[0];
-  const streetAddress = parts.slice(1).map(part => part.match(/^(\d+[\p{L}]?(?:\s*[-–]\s*\d+[\p{L}]?)?)\s+(.+)$/u)).find(Boolean);
+  const streetAddress = numberedStreet(parts);
   const short = full.replace(venueSuffix, '');
   if (!full || (!streetAddress && plainAddress(full).split(' ').length < 2)) return null;
-  const key = 'verified|' + plainAddress(stop.query) + '|' + center.map(n => n.toFixed(3));
+  const hotel = stop.kind === 'hotel';
+  const key = verifiedKey(stop, center);
   await ready;
   const cached = data.geocode.get(key);
   if (coordinates(cached)) return cached;
-  const terms = [...new Set(streetAddress ? [short + ', ' + streetAddress[2], full] : [full])];
+  const brand = addressedBranch(stop);
+  const terms = new Set();
+  if (streetAddress) {
+    terms.add(short + ', ' + streetAddress[2]);
+    if (brand) terms.add(brand + ', ' + streetAddress[0]);
+  }
+  terms.add(full);
   const expected = plainAddress(full);
   const display = plainAddress((stop.name || stop.n || '').split(/\s+[—–]\s+/)[0]);
   const branch = display.startsWith(expected + ' ') ? display.slice(expected.length + 1) : '';
@@ -244,10 +261,11 @@ export async function findSavedVenue(stop, center, signal, budget) {
   function select(hits) {
     const identities = (hits || []).filter(hit => {
       if (!realPoi(hit) || distance(center, hit.ll) > 40) return false;
-      const exact = plainAddress(hit.name) === expected;
+      if (hotel && !['hotel', 'hostel', 'motel', 'guest_house', 'resort', 'apartment', 'chalet', 'lodging'].includes(hit.type)) return false;
+      const name = plainAddress(hit.name), exact = name === expected;
       if (!streetAddress) return exact;
-      return (exact || plainAddress(hit.name) === plainAddress(short)) &&
-        (hit.number ? plainAddress(hit.number) === plainAddress(streetAddress[1]) : exact && branchWebsite(hit.site)) &&
+      return (exact || name === plainAddress(short) || (brand && name === plainAddress(brand))) &&
+        (hit.number ? plainAddress(hit.number).replaceAll(' ', '') === plainAddress(streetAddress[1]).replaceAll(' ', '') : exact && branchWebsite(hit.site)) &&
         plainAddress(hit.street) === plainAddress(streetAddress[2]);
     });
     const first = identities[0];

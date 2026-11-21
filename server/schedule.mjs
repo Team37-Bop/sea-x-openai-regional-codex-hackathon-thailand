@@ -1,7 +1,8 @@
 import { clock, coordinates, dateAt, distance, minutes, normTime, source, str } from './domain.mjs';
 import { stopKind } from './stop-kinds.mjs';
 import { fields, uniqueId } from './edits.mjs';
-import { findPlace, findSavedVenue, legKey, route } from './geo.mjs';
+import { addressedBranch } from './place-text.mjs';
+import { brandOnlyPosition, findPlace, findSavedVenue, legKey, route } from './geo.mjs';
 import { catalogPlace } from './sample.mjs';
 import { matchesPick } from './candidates.mjs';
 import { misplacedPick } from './pick-match.mjs';
@@ -173,7 +174,8 @@ export async function schedule(raw, index, setup, ctx, stays, verified, opts = {
   const placed = await concurrent(rows, 4, async (row, i) => {
     const cat = catalogPlace(setup.city, row);
     const name = str(row.name || cat?.name);
-    const unconfirmed = row.place?.fallback || misplacedPick(row, setup.picks?.must);
+    const branch = addressedBranch(row);
+    const unconfirmed = row.place?.fallback || misplacedPick(row, setup.picks?.must) || (branch && await brandOnlyPosition(row, setup.cityLL));
     const hint = !unconfirmed && coordinates(row.ll) ? row.ll : undefined;
     const pick = setup.picks?.must?.find((p) => coordinates(p.ll) && matchesPick({ ...row, name }, p, false));
     let ll, location;
@@ -189,7 +191,7 @@ export async function schedule(raw, index, setup, ctx, stays, verified, opts = {
     } else if (keep && hint && row.place) {
       ll = hint;
       location = row.place.source;
-    } else if (!offline && !opts.preResolved && unconfirmed) {
+    } else if (!offline && !opts.preResolved && (unconfirmed || branch)) {
       ll = await findSavedVenue(row, setup.cityLL, ctx.signal, batch);
       if (ll) location = 'geocoded';
     } else if (!offline && !opts.preResolved) {
@@ -211,7 +213,7 @@ export async function schedule(raw, index, setup, ctx, stays, verified, opts = {
       name,
       k,
       kind: k,
-      ll: ll ?? hint,
+      ll: ll ?? (branch && !row.pinned ? undefined : hint),
       place: { ...row.place, source: location ?? 'model' },
       cost: Math.max(0, Number(row.cost ?? cat?.cost) || 0),
       walk: Math.max(0, Number(row.walk ?? row.walkKm) || 0),

@@ -115,7 +115,7 @@ function newTrip() {
   pendingVotes = null;
   history.length = 0;
   view = 'plan';
-  allDays = !state.demo;
+  allDays = false;
   setItineraryExpanded(true);
   clearChat();
   $('#command').value = '';
@@ -354,7 +354,6 @@ async function recoverDayMap(plan, index) {
   }
 }
 const lodgingChooser = createLodgingChooser($('#lodging-chooser'), {
-  changed: updateLodgingNotice,
   request(plan, action, shortlist, signal, onStep) {
     if (state.plan !== plan) throw Error('แผนทริปเปลี่ยนแล้ว');
     if (state.localTripId)
@@ -395,23 +394,6 @@ const lodgingChooser = createLodgingChooser($('#lodging-chooser'), {
 function chooseLodging() {
   if (state.sample || state.demo || activeReplan || activePlanning || preview || pendingVotes || !needsLodgingChoice(state.plan)) return;
   lodgingChooser.open(state.plan);
-}
-function updateLodgingNotice() {
-  const notice = $('#lodging-notice');
-  const flag = state.plan?.flags?.stay;
-  const canChoose = !state.sample && !state.demo && needsLodgingChoice(state.plan);
-  const hotel = !canChoose && state.setup?.stay?.mode === 'auto' && flag?.stays?.find(stay => stay.name);
-  notice.hidden = Boolean(preview) || !(canChoose || hotel);
-  const button = notice.querySelector('button');
-  const text = hotel ? (flag.selection === 'chosen' ? 'ที่พักที่เลือก · ' : 'Bop เลือก ') + hotel.name + ' · ยังไม่ได้จอง'
-    : 'เลือกโรงแรมเพื่อนำไปจัดจุดพักในกำหนดการ';
-  if (notice.querySelector('p').textContent !== text) notice.querySelector('p').textContent = text;
-  button.hidden = notice.hidden;
-  button.textContent = canChoose ? 'ดูตัวเลือกที่พัก' : 'ดูรายละเอียดที่พัก';
-  if (canChoose) button.setAttribute('aria-haspopup', 'dialog');
-  else button.removeAttribute('aria-haspopup');
-  button.setAttribute('aria-controls', canChoose ? 'lodging-chooser' : 'book-panel');
-  button.onclick = canChoose ? chooseLodging : () => switchView('book');
 }
 function render() {
   const plan = preview?.plan || state.plan;
@@ -643,7 +625,6 @@ function render() {
       return adjust(command, day);
     },
   });
-  updateLodgingNotice();
   $('#booking-count').textContent = todo ? '(' + todo + ')' : '';
   if (todo) $('#itinerary').append(button('ดูรายการที่ต้องติดต่อ ' + todo + ' รายการ', () => switchView('book')));
   forecast.renderStrip($('#alerts'), plan, state.selected);
@@ -663,7 +644,7 @@ function render() {
       preview && !allDays ? state.plan.days[state.selected] : null,
       focusedStop,
       undefined,
-      plan.days,
+      allDays,
     );
 }
 window.addEventListener(
@@ -729,6 +710,7 @@ function place(stop) {
   const plan = preview?.plan || state.plan;
   const index = plan.days.findIndex(day => day?.stops?.some(item => item.id === stop.id));
   if (index >= 0) state.selected = index;
+  allDays = false;
   if (view !== 'plan') view = 'plan';
   focusedStop = stop.id;
   if (!preview && !state.sample && !state.demo && needsLodgingChoice(plan) && isLodgingStop(stop)) {
@@ -920,9 +902,13 @@ function addStay(nights) {
   withSuggestions(row.querySelector('[name=stayName]'), 'stay');
   return row;
 }
+const candidateKindsLabel = includeHotels => includeHotels ? 'ร้านอาหาร ที่เที่ยว และโรงแรม' : 'ร้านอาหารและที่เที่ยว';
 function updateStay(reset = false) {
   const nights = tripLength() - 1;
   const booked = setupForm.elements.stayMode.value === 'booked';
+  const places = candidateKindsLabel(nights > 0 && !booked);
+  $('#autonomy-ask-hint').textContent = 'เลือก' + places + 'ที่สนใจก่อนจัดแผน';
+  $('#autonomy-auto-hint').textContent = 'ให้ Bop เลือก' + places + 'ให้ แก้แผนทีหลังได้';
   $('#stay-area').hidden = booked;
   $('#stays').hidden = !booked;
   $('#stays').disabled = !booked;
@@ -1206,11 +1192,12 @@ async function generateTrip(input) {
     signal.throwIfAborted();
     if (!health?.ai) throw Error($('#readiness').textContent);
     if (input.autonomy === 'ask' && !input.picks) {
-      planningPhase('candidates', 'กำลังค้นหาร้านอาหารและที่เที่ยวให้เลือก');
+      const includeHotels = totalDays > 1 && input.stay?.mode !== 'booked';
+      planningPhase('candidates', 'กำลังค้นหา' + candidateKindsLabel(includeHotels) + 'ให้เลือก');
       const found = await api('/api/plan/candidates', { setup: input }, undefined, { signal, onStep });
       signal.throwIfAborted();
       input.picks = await chooseCandidates({
-        dialog: $('#planning-survey'), result: found, partySize: input.members.length, signal,
+        dialog: $('#planning-survey'), result: found, partySize: input.members.length, signal, includeHotels,
         reopen: $('#planning-reopen'),
         findMore: (refresh, refreshSignal) =>
           api('/api/plan/candidates', { setup: input, refresh }, undefined, { signal: refreshSignal, onStep }),
@@ -1256,7 +1243,6 @@ async function generateTrip(input) {
     render();
     $('#plan-tab').focus({ preventScroll: true });
     forecast.refresh();
-    queueMicrotask(chooseLodging);
   } catch (error) {
     if (signal.aborted) {
       showPlanning(false);
@@ -1608,7 +1594,6 @@ if (localTrip)
     archivedMap = { id: localTrip[1], plan: state.plan, checked: new Set() };
     presentSummary(saved.summary);
     render();
-    chooseLodging();
     forecast.refresh();
   });
 else setupDialog.showModal();

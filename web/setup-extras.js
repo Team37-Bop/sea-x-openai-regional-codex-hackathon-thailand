@@ -472,24 +472,30 @@ export function installSetupExtras(form, readSetup) {
   return augment;
 }
 export function candidateQuestions(result) {
+  // Earlier lodging questions offered neighborhoods. Only a property can anchor a stay.
+  const hotels = options => options.filter(option => option?.kind === 'hotel' && plain(option.name));
+  const order = { stay: 0, food: 1, sight: 2 };
+  const surveyOrder = questions => questions.sort((a, b) => (order[a.kind] ?? 3) - (order[b.kind] ?? 3));
   if (Array.isArray(result?.questions))
-    return result.questions.filter((q) => Array.isArray(q?.options) && q.options.some((o) => o?.name));
+    return surveyOrder(result.questions.filter(q => Array.isArray(q?.options))
+      .map(q => q.kind === 'stay' ? { ...q, options: hotels(q.options) } : q)
+      .filter(q => q.options.some(o => o?.name)));
   const grouped = new Map();
   for (const option of Array.isArray(result?.candidates) ? result.candidates : []) {
-    if (!option?.name) continue;
-    const kind = ['sight', 'food', 'stay'].includes(option.kind) ? option.kind : 'sight';
+    if (!option?.name || option.kind === 'stay') continue;
+    const kind = option.kind === 'hotel' ? 'stay' : option.kind === 'food' ? 'food' : 'sight';
     if (!grouped.has(kind))
       grouped.set(kind, {
         kind,
-        title: { sight: 'อยากไปเที่ยวที่ไหน', food: 'สนใจร้านอาหารไหน', stay: 'อยากพักย่านไหน' }[kind],
+        title: { sight: 'อยากไปเที่ยวที่ไหน', food: 'สนใจร้านอาหารไหน', stay: 'อยากพักโรงแรมไหน' }[kind],
         options: [],
       });
     grouped.get(kind).options.push(option);
   }
-  return [...grouped.values()];
+  return surveyOrder([...grouped.values()]);
 }
-export function chooseCandidates({ dialog, reopen, result, signal, partySize, onQuestion, findMore }) {
-  const questions = candidateQuestions(result),
+export function chooseCandidates({ dialog, reopen, result, signal, partySize, onQuestion, findMore, includeHotels = true }) {
+  const questions = candidateQuestions(result).filter(q => includeHotels || q.kind !== 'stay'),
     picks = { must: [], avoid: [] };
   if (!questions.length) return Promise.resolve(picks);
   return new Promise((resolve, reject) => {
@@ -560,6 +566,7 @@ export function chooseCandidates({ dialog, reopen, result, signal, partySize, on
       );
       head.append(tools, progress, title);
       if (q.sub || q.why) head.append(element('p', plain(q.sub || q.why), 'muted'));
+      if (q.kind === 'stay') head.append(element('p', 'กด “สนใจ” ได้หนึ่งโรงแรม หรือข้ามเพื่อให้ Bop เลือก', 'muted'));
       const grid = element('div', null, 'candidate-grid');
       grid.id = 'survey-options';
       dialog.replaceChildren(head, grid);
@@ -571,6 +578,8 @@ export function chooseCandidates({ dialog, reopen, result, signal, partySize, on
         if (fig) row.append(fig);
         const body = element('div', null, 'candidate-body');
         body.append(element('h3', plain(option.name)));
+        const address = q.kind === 'stay' && (plain(option.address) || plain(option.query));
+        if (address && address !== plain(option.name)) body.append(element('p', address, 'muted'));
         if (plain(option.why)) body.append(element('p', plain(option.why)));
         const tags = (Array.isArray(option.tags) ? option.tags : []).map(plain).filter(Boolean);
         if (tags.length) {
@@ -584,7 +593,11 @@ export function chooseCandidates({ dialog, reopen, result, signal, partySize, on
           typeof raw === 'number' || (typeof raw === 'string' && /^\d+(?:\.\d+)?$/.test(raw))
             ? '฿' + money.format(Number(raw))
             : plain(raw);
-        if (price) body.append(element('p', (page ? 'ราคาที่พบ ' : 'ราคาประมาณ ') + price, 'muted'));
+        if (q.kind === 'stay') {
+          const nightly = Number(option.priceNight);
+          body.append(element('p', Number.isFinite(nightly) && nightly > 0
+            ? 'ประมาณ ฿' + money.format(nightly) + ' / ห้อง / คืน' : 'ยังไม่มีราคาสำหรับวันเข้าพัก', 'muted'));
+        } else if (price) body.append(element('p', (page ? 'ราคาที่พบ ' : 'ราคาประมาณ ') + price, 'muted'));
         if (page) body.append(page);
         const toggles = element('div', null, 'candidate-answers');
         toggles.setAttribute('role', 'group');
@@ -596,10 +609,16 @@ export function chooseCandidates({ dialog, reopen, result, signal, partySize, on
         ]) {
           const toggle = button(label, () => {
             if (answers.get(option) === value) answers.delete(option);
-            else answers.set(option, value);
-            row.dataset.answer = answers.get(option) || '';
-            for (const item of toggles.children)
-              item.setAttribute('aria-pressed', String(item.dataset.answer === answers.get(option)));
+            else {
+              if (q.kind === 'stay' && value === 'yes')
+                for (const [other, answer] of answers) if (answer === 'yes') answers.delete(other);
+              answers.set(option, value);
+            }
+            for (const [candidate, card] of cards) {
+              card.dataset.answer = answers.get(candidate) || '';
+              for (const item of card.querySelectorAll('.candidate-answers button'))
+                item.setAttribute('aria-pressed', String(item.dataset.answer === card.dataset.answer));
+            }
           });
           const mark = element('span', '✓', 'answer-mark');
           mark.setAttribute('aria-hidden', 'true');

@@ -21,7 +21,7 @@ test('coincident visits retain every target at one true anchor; zoom separates n
   ]);
 });
 
-test('the trip key lists modes from every known day, including unresolved legs, before any line is available', () => {
+test('the pending key uses supplied days and the rendered key describes only visible strokes', () => {
   const trip = [
     { stops: [{}, { leg: { mode: 'car' } }] },
     undefined,
@@ -33,7 +33,7 @@ test('the trip key lists modes from every known day, including unresolved legs, 
   assert.deepEqual(routeLegendEntries([{ stops: [{ name: 'Candidate' }] }]), []);
   const feature = stroke => ({ properties: { mode: 'transit', stroke, color: '#695396' } });
   const entries = routeLegendEntries(trip, [feature('transit'), feature('estimate'), feature('estimate'), feature('removed')]);
-  assert.deepEqual(entries.map(e => e.stroke), ['walk', 'transit', 'road', 'estimate', 'removed']);
+  assert.deepEqual(entries.map(e => e.stroke), ['transit', 'estimate', 'removed']);
 });
 
 test('the key names each identified public service and keeps an unspecified transit leg generic', async () => {
@@ -47,35 +47,40 @@ test('the key names each identified public service and keeps an unspecified tran
   assert.ok(entries.every(entry => entry.stroke === 'transit'));
 });
 
-test('the map connects the order of known stops across each gap without using unresolved coordinates or bridging days', () => {
-  const at = n => ({ id: String(n), ll: [15, 99 + n] });
+test('the map leaves a gap when stops are unlocated or a travel leg is missing', () => {
+  const at = n => ({ id: String(n), ll: [15, 99 + n], leg: { mode: 'walk' } });
   const unknown = { ...at(5), place: { fallback: true } };
-  const day = { stops: [at(1), unknown, { id: 'no coordinates' }, at(2), at(3)] };
+  const day = { stops: [at(1), unknown, { id: 'no coordinates' }, at(2), { ...at(3), leg: undefined }, at(4)] };
   const { features } = dayRouteFeatures(day, {});
-  assert.deepEqual(features.map(f => [f.properties.stroke, f.properties.gap, f.geometry.coordinates]), [
-    ['sequence', true, [[100, 15], [101, 15]]],
-    ['sequence', false, [[101, 15], [102, 15]]],
-  ]);
-  assert.ok(features.every(f => f.properties.approx && f.properties.mode === undefined));
-  const onlyOneKnown = { stops: [at(4), unknown] };
-  assert.deepEqual(dayRouteFeatures(onlyOneKnown, {}).features, []);
+  assert.deepEqual(features.map(f => f.geometry.coordinates), [[[102, 15], [103, 15]]]);
+  assert.deepEqual(routeLegendEntries([day], features).map(e => e.stroke), ['estimate']);
   assert.deepEqual(dayRouteFeatures(day, {}, true).features, []);
-  assert.equal(routeLegendEntries([day],features).length,2);
 });
 
-test('a road snapped away from the POIs keeps its exact measured geometry and gets separate access connectors only in a committed view', () => {
-  const geometry = [[100.0001,15],[100.5,15.05],[100.9999,15]];
+test('a measured route meets nearby entrances without drawing a separate line to a distant road', () => {
+  const geometry = [[100.0001, 15], [100.5, 15.05], [100.9999, 15]];
   const day = { stops: [
     { ll: [15, 100] }, { ll: [15, 101], leg: { mode: 'car', real: true, key: 'r' } },
   ] };
   const { features } = dayRouteFeatures(day, { r: { geom: geometry } });
-  assert.deepEqual(features.map(f=>f.properties.stroke), ['road', 'access', 'access']);
-  assert.deepEqual(features[0].geometry.coordinates, geometry);
-  assert.deepEqual(features.slice(1).map(f=>f.geometry.coordinates), [
-    [[100,15], geometry[0]], [geometry.at(-1), [101,15]],
-  ]);
-  assert.ok(features.slice(1).every(f=>f.properties.approx));
-  assert.deepEqual(dayRouteFeatures(day,{r:{geom:geometry}},true).features.map(f=>f.properties.stroke), ['road']);
-  day.stops[1].leg.geometry=geometry.map(([lng, lat])=>[lat, lng]);
-  assert.deepEqual(dayRouteFeatures(day,{}).features[0].geometry.coordinates, geometry);
+  assert.deepEqual(features.map(f => f.properties.stroke), ['road']);
+  assert.deepEqual(features[0].geometry.coordinates, [[100, 15], ...geometry, [101, 15]]);
+  assert.equal(geometry.length, 3);
+  day.stops[0].ll = [15, 99.95];
+  assert.deepEqual(dayRouteFeatures(day, { r: { geom: geometry } }).features[0].geometry.coordinates, [...geometry, [101, 15]]);
+});
+
+test('a saved generic transit leg identifies its date and endpoints without reusing a car route', () => {
+  const key = 'car|100,15;101,15';
+  const geometry = [[100, 15], [100.6, 15.08], [101, 15]];
+  const day = { date: '2026-11-26', stops: [
+    { name: 'Station', ll: [15, 100] },
+    { n: 'Museum', ll: [15, 101], leg: { m: 'transit', real: true, key, geometry } },
+  ] };
+  const { features: [line] } = dayRouteFeatures(day, { [key]: { geom: geometry } });
+  const { date, from, to, mode, stroke } = line.properties;
+  assert.deepEqual({ date, from, to, mode, stroke }, {
+    date: day.date, from: 'Station', to: 'Museum', mode: 'transit', stroke: 'estimate',
+  });
+  assert.deepEqual(line.geometry.coordinates, [[100, 15], [101, 15]]);
 });

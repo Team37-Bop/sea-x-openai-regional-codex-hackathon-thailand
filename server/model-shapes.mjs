@@ -148,12 +148,15 @@ const edit = object({
 });
 const candidate = object({
   id: string,
+  kind: { type: 'string', enum: ['food', 'sight', 'hotel'], description: 'Use hotel for a specific lodging property in the stay question.' },
   name: string,
   why: string,
   query: string,
   aliases: strings,
   tags: strings,
   price: string,
+  address: { ...string, description: 'Verified street address of the hotel branch. Leave empty for other categories.' },
+  priceNight: { ...number, description: 'Verified approximate room price per night in THB. Use 0 when unknown.' },
   ll,
   photoPage: string,
   checked: string,

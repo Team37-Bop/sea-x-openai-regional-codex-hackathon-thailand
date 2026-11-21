@@ -1,10 +1,11 @@
 import { coordinates, distance } from './domain.mjs';
-import { findSavedVenue, route } from './geo.mjs';
+import { brandOnlyPosition, findSavedVenue, route } from './geo.mjs';
 import { misplacedPick } from './pick-match.mjs';
 
-export function validateSavedPositions(saved) {
+export async function validateSavedPositions(saved) {
   const picks = saved.plan.setup?.picks?.must || [];
-  const suspect = saved.plan.days.map(day => day.stops.map(stop => misplacedPick(stop, picks)));
+  const suspect = await Promise.all(saved.plan.days.map(day => Promise.all(day.stops.map(stop =>
+    misplacedPick(stop, picks) || brandOnlyPosition(stop, saved.plan.setup?.cityLL)))));
   if (!suspect.some(day => day.some(Boolean))) return saved;
   const safe = structuredClone(saved);
   const discarded = new Set(), used = new Set();

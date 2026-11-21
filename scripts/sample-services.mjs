@@ -8,6 +8,8 @@ export function route(from, to, mode, signal, offline, leg) {
   const measured = seed[legKey(from, to, mode)];
   return routeResult(from, to, mode, leg, measured, measured ? 'cache' : 'approx');
 }
+// Bundled sample coordinates have no live geocoder search history.
+export const brandOnlyPosition = () => false;
 export const provider = null;
 export function model() {
   throw Error('ทริปตัวอย่างรองรับเฉพาะสถานการณ์ที่กำหนด');
@@ -17,4 +19,4 @@ export const candidates = model,
   findPlace = model,
   findSavedVenue = model,
   searchFlights = model,
-  resolvePicks = model;
+  resolveSurveyPicks = model;

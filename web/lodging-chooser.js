@@ -9,7 +9,7 @@ function stayDates(setup) {
   return Number.isFinite(start) && Number.isFinite(end) ? dates.formatRange(start, end) : '';
 }
 
-export function createLodgingChooser(dialog, { request, apply, changed }) {
+export function createLodgingChooser(dialog, { request, apply }) {
   const options = dialog.querySelector('[data-options]');
   const message = dialog.querySelector('[data-message]');
   const search = dialog.querySelector('[data-search]');
@@ -27,7 +27,6 @@ export function createLodgingChooser(dialog, { request, apply, changed }) {
     recommend.disabled = waiting || !session.options.length;
     confirm.disabled = recommend.disabled || !session.selected;
     search.hidden = !['empty', 'error'].includes(session.phase);
-    changed();
   }
   function showOptions() {
     options.querySelectorAll('.lodging-option').forEach(row => row.remove());
@@ -137,7 +136,6 @@ export function createLodgingChooser(dialog, { request, apply, changed }) {
     if (dialog.open) dialog.close();
   }
   dialog.querySelector('[data-dismiss]').onclick = () => dialog.close();
-  dialog.addEventListener('close', changed);
   search.onclick = () => perform('options');
   recommend.onclick = () => perform('recommend');
   confirm.onclick = () => perform('choose');

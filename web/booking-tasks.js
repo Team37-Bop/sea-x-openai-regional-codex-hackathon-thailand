@@ -106,7 +106,6 @@ function addLodging(container, plan, setup, actions) {
     open.setAttribute('aria-haspopup', 'dialog');
     open.setAttribute('aria-controls', 'lodging-chooser');
     card.append(open);
-    return;
   }
   const chosen = flag.stays?.find(stay => stay.name);
   const examples = (flag.examples || flag.options || []).filter(stay => stay.name && stay.name !== chosen?.name);
@@ -115,7 +114,11 @@ function addLodging(container, plan, setup, actions) {
     const source = stay.src || stay;
     const link = source.checked === 'web' ? sourceLink(source) : null;
     const price = Number(stay.priceNight ?? stay.price);
-    if (stay === chosen) row.append(el('span', flag.selection === 'chosen' ? 'ที่พักที่เลือก · ยังไม่ได้จอง' : 'Bop เลือกให้ · ยังไม่ได้จอง', 'booking-tag'));
+    if (stay === chosen) {
+      const label = flag.selection === 'chosen' ? 'ที่พักที่เลือก'
+        : flag.selection === 'recommended' ? 'Bop เลือกให้' : 'ที่พักที่ใช้คำนวณแผน';
+      row.append(el('span', label + ' · ยังไม่ได้จอง', 'booking-tag'));
+    }
     row.append(el('h4', stay.name));
     if (stay === chosen && stay.checkIn && stay.checkOut)
       row.append(el('p', dayLabel(stay.checkIn) + ' – ' + dayLabel(stay.checkOut) + ' · ' + stay.nights + ' คืน'));

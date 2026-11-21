@@ -127,11 +127,13 @@ export function normalize(input) {
   });
   const arrive = direction(input.arrive, 'from'),
     depart = direction(input.depart, 'to');
-  const requested = input.stay?.stays ?? [{ name: input.stay?.name, nights: days - 1 }];
+  const stay = input.stay || {};
+  const requested = Array.isArray(stay.stays) && stay.stays.some(row => str(row?.name))
+    ? stay.stays : [{ name: stay.name, ll: stay.ll, nights: days - 1 }];
   let left = days - 1;
   const stays = [];
-  if (input.stay?.mode === 'booked') {
-    for (const row of Array.isArray(requested) ? requested : []) {
+  if (!stay.mode || stay.mode === 'booked') {
+    for (const row of requested) {
       const name = str(row?.name);
       if (!name) continue;
       if (!left && (days > 1 || stays.length)) break;

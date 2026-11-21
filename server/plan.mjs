@@ -25,9 +25,9 @@ import { model, provider } from './model.mjs';
 import { addedSampleDay, indoor, sampleDay } from './sample.mjs';
 import { requestedTripDays } from './trip-duration.mjs';
 import { bookedStays, concurrent, dayHotels, isHotel, isTransit, schedule } from './schedule.mjs';
-import { matchesPick, resolvePicks } from './candidates.mjs';
+import { matchesPick, resolveSurveyPicks } from './candidates.mjs';
 import { searchFlights } from './flights.mjs';
-import { checkedHotelExamples as stayExamples, hotelOptions, selectLodging } from './lodging.mjs';
+import { checkedHotelExamples as stayExamples, chosenHotelPick, hotelOptions, selectLodging } from './lodging.mjs';
 import { needsAutoLodging, needsLodgingChoice } from '../web/lodging-state.js';
 export { candidates } from './candidates.mjs';
 export { requestedTripDays };
@@ -319,7 +319,7 @@ export async function planTrip(input, ctx, demo = false) {
       setup.country ||= city.cc;
     }
   }
-  setup.picks = resolvePicks(setup.picks);
+  setup.picks = await resolveSurveyPicks(setup);
   ctx.step('อ่านความต้องการของ ' + setup.members.length + ' คน');
   ctx.step('Bop ออกแบบแผน ' + setup.days + ' วันใน' + setup.city);
   const flags = { stay: {}, transport: {} };
@@ -353,6 +353,11 @@ export async function planTrip(input, ctx, demo = false) {
   );
   pending.catch(() => {});
   let stays = await bookedStays(setup, ctx, offline);
+  let lodging;
+  if (chosenHotelPick(setup)) {
+    lodging = await selectLodging(setup, {}, [], ctx, !offline);
+    if (lodging) stays = autoStays(setup, [lodging.hotel]);
+  }
   setup.stayPlan = makeDayHotels(setup, stays);
   const split = setup.days >= conf('BOP_SPLIT_MIN_DAYS', 3, 1, 100);
   let design = { days: [], summary: 'แผนทริปพร้อมแล้ว' },
@@ -369,9 +374,10 @@ export async function planTrip(input, ctx, demo = false) {
           base + (foreign ? 3 : 0) + ([setup.arrive?.by, setup.depart?.by].includes('undecided') ? 2 : 0),
         )
       : 0;
-    const stayInstruction =
-      setup.stay.mode === 'booked'
-        ? 'ใช้ที่พักตาม stayPlan โดยไม่ค้นโรงแรม'
+    const fixedStay = setup.stay.mode === 'booked' || Boolean(lodging);
+    const stayInstruction = setup.days === 1 ? 'ทริปวันเดียว ไม่ต้องค้นหรือเสนอที่พักค้างคืน' :
+      fixedStay
+        ? 'ใช้ชื่อและพิกัดที่พักตาม stayPlan สำหรับทุกจุดเกี่ยวกับที่พัก โดยไม่ค้นหรือเสนอโรงแรมอื่น'
         : 'สำหรับทริปค้างคืน ให้เลือกชื่อและสาขาโรงแรมจริงหนึ่งแห่งในย่านที่สะดวกตามงบและย่านที่เลือก ใส่เป็นรายการแรกใน stay.examples พร้อมพิกัดโรงแรมจริง แหล่งข้อมูล และ priceNight บาทต่อห้องต่อคืน ถ้าเป็นไปได้เสนอทางเลือกเพิ่ม ใช้ชื่อโรงแรมเดียวกันกับจุดฝากกระเป๋า เช็กอิน ออกจากที่พัก และกลับมาพักให้ครบทุกคืน ไม่มีการจอง';
     const travelInstruction = [];
     for (const [dir, key] of [['go', 'arrivalSuggested'], ['back', 'departureSuggested']]) {
@@ -394,7 +400,7 @@ export async function planTrip(input, ctx, demo = false) {
       {
         ...ctx,
         operation: split ? 'skeleton' : 'design',
-        searches: split ? (setup.stay.mode === 'booked' ? 0 : 1) : searchCap,
+        searches: split ? (fixedStay || setup.days === 1 ? 0 : 1) : searchCap,
       },
     );
     design = result.value;
@@ -403,11 +409,10 @@ export async function planTrip(input, ctx, demo = false) {
     for (const url of verified) allUrls.add(url);
   }
   if (split) timing.skeleton = elapsed(tDesign);
-  let examples = setup.stay.mode === 'auto' ? stayExamples(design.stay, verified) : [];
-  let lodging;
+  let examples = setup.stay.mode === 'auto' && setup.days > 1 ? stayExamples(design.stay, verified) : [];
   if (setup.stay.mode === 'auto' && setup.days > 1) {
     try {
-      lodging = await selectLodging(setup, design.stay, examples, ctx, !offline && conf('BOP_SEARCH_PLAN', 5, 0, 8) > 0);
+      lodging ??= await selectLodging(setup, design.stay, examples, ctx, !offline && conf('BOP_SEARCH_PLAN', 5, 0, 8) > 0);
     } catch (error) {
       if (protectedError(error)) throw error;
     }
@@ -420,10 +425,10 @@ export async function planTrip(input, ctx, demo = false) {
   }
   setup.stayPlan = makeDayHotels(setup, stays);
   flags.stay = {
-    area: str(design.stay?.area) || stays[0]?.name || '',
+    area: str(setup.hotelArea) || str(design.stay?.area) || stays[0]?.name || '',
     why: lodging?.why || str(design.stay?.why, 400),
     booked: setup.stay.mode === 'booked',
-    ...(lodging && { selection: lodging.selection, options: lodging.options, recommendedId: lodging.options[0]?.id }),
+    ...(lodging && { selection: lodging.selection === 'provisional' ? 'recommended' : lodging.selection, options: lodging.options, recommendedId: lodging.options[0]?.id }),
     examples,
     stays,
   };
@@ -466,6 +471,10 @@ export async function planTrip(input, ctx, demo = false) {
       for (const url of urls) allUrls.add(url);
     }
     if (offline) raw = fixtureDay(setup, i, demo, demo ? undefined : raw);
+    if (lodging?.hotel.checked === 'web') {
+      urls.add(lodging.hotel.url);
+      allUrls.add(lodging.hotel.url);
+    }
     rawDays[i] = { raw, urls };
     try {
       results[i] = await schedule(raw, i, setup, ctx, stays, urls, {

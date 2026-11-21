@@ -248,10 +248,10 @@ test('router rejects unusable geometry, decodes Valhalla and shares the road pro
   const from = [15.2, 100.77777],
     to = [15.3, 100.88888];
   const a = await route(from, to, 'car', context().signal),
-    b = await route(from, to, 'transit', context().signal);
+    b = await route(from, to, 'own', context().signal);
   assert.equal(a.via, 'Valhalla');
   assert.equal(a.min, 17);
-  assert.equal(b.min, 32);
+  assert.equal(b.min, 11);
   assert.equal(b.key, a.key);
   assert.equal(b.via, 'cache');
   assert.equal(responses.length, 2);
@@ -259,10 +259,10 @@ test('router rejects unusable geometry, decodes Valhalla and shares the road pro
 test('scheduled public services use their reported mode and time, preserve per-person fares, and never query a car router', async t => {
   const fetch = t.mock.method(globalThis, 'fetch', () => { throw Error('unexpected external request'); });
   const setup = normalize(base);
-  const stops = [stop('start'), ...['train', 'subway', 'ferry', 'bus'].map((mode, i) =>
+  const stops = [stop('start'), ...['train', 'subway', 'ferry', 'bus', 'transit'].map((mode, i) =>
     stop(mode, { ll: [18.01 + i * .01, 99], mode, legMin: 14 + i, minSrc: 'web', legCost: i === 0 ? 59 : -1 }))];
   const result = await schedule({ stops }, 0, setup, context(), [], new Set(), { preResolved: true });
-  const modes = ['rail', 'metro', 'ferry', 'bus'];
+  const modes = ['rail', 'metro', 'ferry', 'bus', 'transit'];
   for (const [index, s] of result.day.stops.slice(1).entries()) {
     assert.equal(s.leg.mode, modes[index]);
     assert.equal(s.leg.min, 14 + index);
