@@ -55,6 +55,7 @@ function completion(value) {
 }
 test('every SDK request carries a named Responses-compatible JSON Schema with optional facts represented by null', async (t) => {
   const responses = {
+    lodging: { name: 'City Hotel', query: 'City Hotel', why: 'Close to the itinerary' },
     design: { days: [{ title: 'd1', stops: [] }] },
     daily: { days: [{ title: 'd1', stops: [] }] },
     skeleton: { days: [] },
