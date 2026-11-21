@@ -204,7 +204,7 @@ export function createLineService(store = operationalStore, request = (...args) 
   async function push(trip, message, retryKey) {
     if (!trip.groupId) return { posted: false };
     required();
-    if (!(await store.consumePush())) return { posted: false, quotaReached: true };
+    if (!(await store.consumePush(retryKey))) return { posted: false, quotaReached: true };
     await send('push', { to: trip.groupId, messages: [message] }, retryKey);
     return { posted: true };
   }

@@ -400,18 +400,28 @@ export function renderAppliedLine(container, before, after, text, fromLineVote, 
   container.append(panel);
   let sent = false, sending = false;
   const retryKey = globalThis.crypto?.randomUUID?.();
+  let retryUntil;
   const active = () => container.contains(panel) && s === current;
   async function send() {
     if (!active() || sending || sent || !s?.enabled || !s?.auth || !s.trip?.linked) return;
+    const retrying = retryUntil !== undefined;
+    if (retrying && Date.now() >= retryUntil) {
+      controls.replaceChildren();
+      status.textContent = 'หมดเวลาลองส่งซ้ำ · กรุณาตรวจสอบข้อความในกลุ่ม LINE';
+      return;
+    }
+    const deadline = retryUntil ?? Date.now() + 24 * 60 * 60 * 1000;
     sending = true;
     controls.replaceChildren();
     status.textContent = 'กำลังส่งเข้ากลุ่ม LINE…';
     try {
       const result = await access(s, '/post', { text: body, ...(retryKey && { retryKey }) });
       sent = result.posted === true;
-      status.textContent = sent ? 'ส่งเข้ากลุ่ม LINE แล้ว'
-        : result.quotaReached ? 'ยังไม่ได้ส่ง · ครบโควตา LINE ของเดือนนี้' : 'ยังไม่ได้ส่งเข้ากลุ่ม LINE';
+      if (sent) status.textContent = 'ส่งเข้ากลุ่ม LINE แล้ว';
+      else if (retrying) status.textContent = 'ยังยืนยันการส่งครั้งก่อนไม่ได้ · กรุณาตรวจสอบข้อความในกลุ่ม LINE';
+      else status.textContent = result.quotaReached ? 'ยังไม่ได้ส่ง · ครบโควตา LINE ของเดือนนี้' : 'ยังไม่ได้ส่งเข้ากลุ่ม LINE';
     } catch (err) {
+      retryUntil = deadline;
       status.textContent = 'ยังยืนยันการส่งไม่ได้ · ' + err.message;
       if (retryKey && active()) controls.append(action('ลองส่งอีกครั้ง', send));
     } finally {

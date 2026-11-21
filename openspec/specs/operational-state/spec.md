@@ -38,6 +38,11 @@ The vote SHALL be stored on the trip. A DynamoDB ballot update SHALL target the 
 - **WHEN** two DynamoDB push attempts compete for the last available unit
 - **THEN** quota consumption uses a conditional atomic counter increment. A rejected increment suppresses the push. A permitted increment happens before calling LINE; delivery failure does not refund the unit in this implementation.
 
+#### Scenario: Retrying the message that used the last available unit
+
+- **WHEN** the first attempt's delivery status is unknown and the organizer retries the same keyed push within 24 hours
+- **THEN** the retry uses its existing reservation even across a UTC month boundary. DynamoDB creates the `LINE_PUSH#<scoped retry key>` receipt and increments the monthly counter in one transaction. Other messages still require their own unit.
+
 ### Requirement: Order audit omits passenger manifests
 
 After a successful supplier order Bop SHALL attempt a conditional create of `ORDER#<orderId>`. Audit fields are supplier order ID, booking reference, offer ID, mode, type, total, currency, creation time and optional payment deadline. Default retention is 90 days from record creation and `BOP_STATE_RETENTION_DAYS` overrides it with a minimum of one day. Passenger names, birth dates, contact details and passport data are excluded from the audit record.

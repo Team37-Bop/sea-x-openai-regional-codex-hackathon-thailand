@@ -78,13 +78,18 @@ const options = [
 ];
 
 test('an applied-plan post uses the exact summary, safely retries an accepted request and honors disabled credentials', async (t) => {
-  hooks(t, { LINE_CHANNEL_ACCESS_TOKEN: 'test-token', LINE_CHANNEL_SECRET: 'test-secret' });
+  const dir = await mkdtemp(join(tmpdir(), 'bop-line-retry-'));
+  const file = join(dir, 'trips.json');
+  t.after(() => rm(dir, { force: true, recursive: true }));
+  hooks(t, {
+    LINE_CHANNEL_ACCESS_TOKEN: 'test-token', LINE_CHANNEL_SECRET: 'test-secret',
+    BOP_NO_STORE: '1', BOP_TRIP_STORE_FILE: file, BOP_LINE_MONTHLY_CAP: '1',
+  });
   const trip = { tripId: 'trip1', groupId: 'group1', organizerHash: createHash('sha256').update('organizer').digest('hex') };
-  let quota = 0;
   const attempts = [];
   const service = createLineService({
     getTrip: async () => trip,
-    consumePush: async () => { quota++; return true; },
+    consumePush: createOperationStore().consumePush,
   }, async (url, init) => {
     assert.equal(url, 'https://api.line.me/v2/bot/message/push');
     const key = init.headers['X-Line-Retry-Key'];
@@ -97,15 +102,68 @@ test('an applied-plan post uses the exact summary, safely retries an accepted re
   const input = { text, retryKey: randomUUID() };
   const send = () => service.organizer(trip.tripId, 'organizer', 'post', input);
   await assert.rejects(send(), /connection closed/);
-  assert.deepEqual(await send(), { posted: true });
+  assert.deepEqual(await Promise.all([send(), send()]), [{ posted: true }, { posted: true }]);
   assert.deepEqual(attempts[0], attempts[1]);
   assert.deepEqual(attempts[0].messages, [{ type: 'text', text }]);
   assert.equal(attempts[0].to, 'group1');
   assert.match(attempts[0].key, /^[a-f\d-]{36}$/);
+  const capped = { posted: false, quotaReached: true };
+  const post = (payload) => service.organizer(trip.tripId, 'organizer', 'post', payload);
+  assert.deepEqual(await post({ ...input, text: 'a different message' }), capped);
+  assert.deepEqual(await post({ ...input, retryKey: randomUUID() }), capped);
+  assert.deepEqual(await post({ text }), capped);
+  trip.groupId = 'another-group';
+  assert.deepEqual(await send(), capped);
+  const rows = JSON.parse(await readFile(file, 'utf8'));
+  assert.equal(Object.values(rows).find((row) => row.record_key.startsWith('LINE_QUOTA#')).count, 1);
   delete process.env.LINE_CHANNEL_SECRET;
   await assert.rejects(send(), { code: 'no_key' });
-  assert.equal(quota, 2);
-  assert.equal(attempts.length, 2);
+  assert.equal(attempts.length, 3);
+});
+
+test('DynamoDB reserves a keyed push and its quota atomically across concurrent retries and month boundaries', async (t) => {
+  hooks(t, { BOP_NO_STORE: undefined, BOP_STATE_TABLE: 'mock', BOP_LINE_MONTHLY_CAP: '1' });
+  t.mock.timers.enable({ apis: ['Date'], now: Date.UTC(2026, 10, 30, 23, 59) });
+  const receipts = new Map(), counts = new Map();
+  let busy = true, omitReasons = false;
+  const store = createOperationStore(async (command, data) => {
+    if (command === 'Get') {
+      assert.equal(data.ConsistentRead, true);
+      const id = data.Key.record_key;
+      return { Item: counts.has(id) ? { count: counts.get(id) } : receipts.get(id) };
+    }
+    assert.equal(command, 'TransactWrite');
+    const [{ Put: put }, { Update: increment }] = data.TransactItems;
+    assert.match(put.ConditionExpression, /attribute_not_exists.* OR expires_at <= :now/);
+    assert.match(increment.ConditionExpression, /#c < :cap/);
+    const receipt = put.Item, month = increment.Key.record_key;
+    const at = put.ExpressionAttributeValues[':now'];
+    assert.equal(receipt.expires_at, at + 86400);
+    const codes = [
+      receipts.get(receipt.record_key)?.expires_at > at ? 'ConditionalCheckFailed' : 'None',
+      (counts.get(month) || 0) >= increment.ExpressionAttributeValues[':cap'] ? 'ConditionalCheckFailed' : 'None',
+    ];
+    if (busy) { codes[0] = 'TransactionConflict'; busy = false; }
+    if (codes.some(code => code !== 'None')) throw Object.assign(Error('Transaction cancelled'), {
+      name: 'TransactionCanceledException', ...(!omitReasons && { CancellationReasons: codes.map(Code => ({ Code })) }),
+    });
+    receipts.set(receipt.record_key, receipt);
+    counts.set(month, (counts.get(month) || 0) + 1);
+    return {};
+  });
+  const key = randomUUID();
+  assert.deepEqual(await Promise.all([store.consumePush(key), store.consumePush(key)]), [true, true]);
+  assert.equal(await store.consumePush(randomUUID()), false);
+  omitReasons = true;
+  assert.equal(await store.consumePush(key), true);
+  assert.equal(await store.consumePush(randomUUID()), false);
+  t.mock.timers.tick(120_000);
+  assert.equal(await store.consumePush(key), true);
+  assert.deepEqual([...counts], [['LINE_QUOTA#2026-11', 1]]);
+  assert.equal(await store.consumePush(randomUUID()), true);
+  t.mock.timers.tick(86_400_000 - 120_000);
+  assert.equal(await store.consumePush(key), false);
+  assert.deepEqual([...counts], [['LINE_QUOTA#2026-11', 1], ['LINE_QUOTA#2026-12', 1]]);
 });
 
 test('signed group linking, public views, LIFF identity, cross-channel ballots, closure and quota', async (t) => {
