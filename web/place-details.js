@@ -90,7 +90,9 @@ function facts(entries) {
     if (value == null || value === '') continue;
     const dd = el('dd');
     dd.append(value);
-    dl.append(el('dt', key), dd);
+    const pair = el('div', '', 'pd-fact');
+    pair.append(el('dt', key), dd);
+    dl.append(pair);
   }
   return dl.childElementCount ? dl : null;
 }
@@ -196,8 +198,8 @@ function gallery(photos, name) {
     if (!src) continue;
     const figure = el('figure'),
       img = el('img');
-    img.src = src;
-    img.loading = count ? 'lazy' : 'eager';
+    figure.hidden = true;
+    img.loading = 'eager';
     img.referrerPolicy = 'no-referrer';
     img.alt = plain(photo.alt) || name;
     const caption = el('figcaption');
@@ -216,11 +218,17 @@ function gallery(photos, name) {
       },
       { once: true },
     );
+    img.addEventListener('load', () => {
+      figure.hidden = false;
+      figure.parentElement.hidden = false;
+    }, { once: true });
+    img.src = src;
     figures.append(figure);
     count++;
   }
   if (!count) return null;
   const strip = el('div', '', 'pd-gallery');
+  strip.hidden = true;
   strip.setAttribute('aria-label', 'ภาพของ' + name);
   if (count > 1) strip.tabIndex = 0;
   strip.append(figures);
@@ -233,10 +241,10 @@ function contact(phone) {
   a.href = 'tel:' + phone.replace(/[^\d+]/g, '');
   return a;
 }
-function paintInfo(host, visit, stop, info, sample) {
+function paintInfo({ results, photos }, visit, stop, info, sample) {
   const parts = [];
   const images = gallery(info.photos, visit.name);
-  if (images) parts.push(images);
+  photos.replaceChildren(...(images ? [images] : []));
   const description = plain(info.details?.what || info.what || info.summary);
   if (description && description !== visit.note && description !== 'ยังไม่มีข้อมูล')
     parts.push(el('p', description, 'pd-lead'));
@@ -283,7 +291,7 @@ function paintInfo(host, visit, stop, info, sample) {
     }
   }
   if (sources.childElementCount) parts.push(section('แหล่งข้อมูล', sources));
-  host.replaceChildren(...parts);
+  results.replaceChildren(...parts);
 }
 function header(container, context, visit) {
   const head = el('header', '', 'pd-heading');
@@ -297,11 +305,21 @@ function header(container, context, visit) {
   close.setAttribute('aria-label', 'ปิดรายละเอียดสถานที่');
   head.append(text, close);
   const plan = el('div', '', 'pd-plan');
-  plan.append(el('p', visit.date, 'pd-date'));
-  const fields = facts([
-    ['เวลาในแผน', [visit.window, visit.duration].filter(Boolean).join(' · ')],
+  if (visit.date) plan.append(el('p', visit.date, 'pd-date'));
+  const schedule = el('div', '', 'pd-schedule');
+  for (const [label, value] of [
+    ['เวลาในแผน', visit.window],
+    ['ระยะเวลา', visit.duration],
     ['งบตามแผน', visit.cost ? visit.cost + ' / คน' : ''],
-    ['เดินทางมาจากจุดก่อน', visit.legText],
+  ]) {
+    if (!value) continue;
+    const item = el('span', value);
+    item.setAttribute('aria-label', label + ' ' + value);
+    schedule.append(item);
+  }
+  if (schedule.childElementCount) plan.append(schedule);
+  const fields = facts([
+    ['การเดินทาง', visit.legText],
     ['คนที่อยากไป', visit.wish],
   ]);
   if (fields) plan.append(fields);
@@ -309,11 +327,12 @@ function header(container, context, visit) {
   if (visit.closure) plan.append(el('p', visit.closure, 'pd-warning'));
   const map = link('เปิดตำแหน่งใน Google Maps ↗', mapLink(context.stop, context.city));
   if (map) plan.append(map);
+  const photos = el('div', '', 'pd-photos');
   const results = el('div', '', 'pd-results'),
     live = el('div', '', 'pd-live');
   live.setAttribute('role', 'status');
-  container.replaceChildren(head, plan, results, live);
-  return { results, live, close };
+  container.replaceChildren(head, photos, plan, results, live);
+  return { photos, results, live, close };
 }
 export function closePlaceSheet(panel, { restoreFocus = true } = {}) {
   if (!panel || panel.hidden) return;
@@ -339,12 +358,13 @@ export async function openPlaceSheet(context) {
   const origin = context.opener || document.activeElement;
   current.set(panel, { controller, origin, id: stop.id });
   const visit = plannedVisit(context);
-  const { results, live, close } = header(content, context, visit);
+  const reader = header(content, context, visit);
+  const { live, close } = reader;
   const local = sample ? samplePlaceInfo(city, visit.name) : {};
   const key = JSON.stringify([city, stop.id, visit.name, stop.ll, stop.query]);
   const cached = (!sample || context.liveResearch) && cache.get(key);
   const initial = cached?.expires > Date.now() ? cached.info : null;
-  paintInfo(results, visit, stop, initial || local, sample && !initial);
+  paintInfo(reader, visit, stop, initial || local, sample && !initial);
   panel.hidden = false;
   panel.scrollTop = 0;
   close.focus({ preventScroll: true });
@@ -391,7 +411,7 @@ export async function openPlaceSheet(context) {
         info: terminal.info,
         expires: Date.now() + 30 * 60_000,
       });
-      paintInfo(results, visit, stop, terminal.info, false);
+      paintInfo(reader, visit, stop, terminal.info, false);
       live.textContent =
         terminal.info.confidence === 'web'
           ? 'รายละเอียดจากแหล่งข้อมูลที่ระบุ'
