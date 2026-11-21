@@ -1,0 +1,126 @@
+schema: spec-driven
+
+# Project context for OpenSpec. OpenSpec 1.x reads this instead of the legacy openspec/project.md.
+context: |
+  # Bop
+
+  ## Purpose
+  Bop is a group-trip planner for Thai friend groups. The organizer describes the trip (destination, dates,
+  how the group gets there and back, where it stays, each member's constraints), and Bop's agent designs a
+  day-by-day itinerary, checks every member's constraints against real roads and opening days, repairs what
+  fails, and later replans on a natural-language command ("ร้านปิด", "ถ้าฝนตกล่ะ", "เปลี่ยนเที่ยวบิน") with
+  minimal edits and, for real trade-offs, a group vote. The demo trip is 3 days in Chiang Mai for 4 friends;
+  any city can be planned.
+
+  ## Stack
+  - Frontend: Vite 5 (5.4.21), vanilla JS ES modules, no framework. `index.html`, `src/main.js` (planner,
+    rendering, map), `src/ui/setup.js` (onboarding), `src/ui/place.js` (place sheet), `src/ui/api.js`
+    (NDJSON client), `src/style.css`.
+  - Map: MapLibre GL JS 6.19.0 with OpenFreeMap vector tiles (positron light / dark), labels prefer `name:th`.
+    The browser draws the geometry the server returns; it does not call a router itself.
+  - Shared logic: `src/plan.js` is DOM-free and imported by both browser and server (data model, checks(),
+    schedule(), applyEdits(), buildPlan(), sample plan + offline scenarios).
+  - Backend core: plain Node `http` routing in `server/api.mjs`, mounted as Vite dev/preview middleware
+    (`vite.config.js`) and by the local production server (`server/index.mjs`).
+  - AWS runtime: CloudFront serves the private S3 frontend through OAC and routes `/api/*` to a Regional REST API
+    Gateway `AWS_PROXY` integration with `responseTransferMode=STREAM`; a Node.js 24 arm64 Lambda runs the API from
+    a deterministic CommonJS bundle, and an on-demand DynamoDB table stores bounded operational state.
+  - Routing: OSRM (routing.openstreetmap.de) -> Valhalla (valhalla1.openstreetmap.de) -> straight line
+    marked `approx`. Geocoding: Photon -> Nominatim for places; Nominatim -> Photon for the city lookup.
+  - Photos: Wikipedia/Wikidata/Wikimedia Commons (credited) and og:image of web pages, no API key.
+  - Local persistent caches: `server/.cache/{routes,geocode,cities}.json` (git-ignored); `src/routes.json` seeds
+    routes for the Chiang Mai sample. Lambda uses `/tmp/bop/cache` for disposable cache files; DynamoDB holds durable
+    trip, LINE vote, idempotency and booking-audit records with per-item TTL.
+
+  ## Model policy
+  - Primary/deep tier for plan design, the long-trip skeleton, per-day design calls, repair and replan:
+    Anthropic `claude-opus-5-5`; OpenAI `gpt-6.2-astra`.
+  - Fast/balanced tier for place info, transport options, photo-page searches and ask-mode candidates:
+    Anthropic `claude-sonnet-5-5` then `claude-haiku-5-5`; OpenAI `gpt-6.2-sol` then `gpt-6-luna`.
+  - Provider-specific overrides: `BOP_FAST_MODEL` for Anthropic; `BOP_OPENAI_MODEL` and `BOP_OPENAI_FAST_MODEL` for OpenAI.
+  - Adaptive/reasoning thinking on every call; depth via effort; JSON via structured outputs; web search via the provider's
+    server-side search tool or the local CLI `WebSearch` tool, always with a per-call cap.
+
+  ## LLM providers
+  - `openai`: OpenAI Responses API (`openai` 7.62.0) with `OPENAI_API_KEY` or legacy local name `OPENAI_APIKEY`.
+    Streams responses, uses JSON Schema structured outputs and built-in web search, and sets `store:false`.
+  - `api` / `anthropic`: Anthropic SDK (`@anthropic-ai/sdk` 1.6.0) with `ANTHROPIC_API_KEY`. Streams, caches the system
+    prompt (`cache_control: ephemeral`), opts into server-side refusal fallbacks and drops them on a 400.
+  - `subscription`: the local Claude Code CLI run headless (`claude -p --output-format stream-json`), billed to
+    the owner's Claude subscription. The child process gets no API key, a temp cwd, no settings/MCP/session persistence.
+    Personal-use only; AWS production uses an API service-account key from Secrets Manager.
+  - Selection: `BOP_PROVIDER=openai|anthropic|api|subscription` forces one; otherwise OpenAI key -> OpenAI,
+    Anthropic key -> Anthropic, then a found `claude` binary -> subscription, else none. `BOP_FAKE_LLM=1` swaps in a deterministic fake model.
+
+  ## Conventions
+  - All user-facing copy is Thai. Step lines, summaries, errors and LINE messages are Thai.
+  - The product name is always "Bop". User-facing text never says Claude, Anthropic or "AI model"; the
+    prompts tell the model it is Bop and the UI rewrites /Claude|Anthropic/ to "Bop" in every event string
+    except url/page/href/model/id keys. `/api/health` still reports provider/model for internal use.
+  - Agent endpoints stream NDJSON (`application/x-ndjson`): `step` events, optional `day` events, then exactly
+    one terminal `done` or `error` (codes: no_key, auth, rate_limit, upstream, bad_request, refusal).
+  - Prices are THB per person (`cost`, `leg.cost`, `budget`); local-currency amounts ride along as
+    `priceLocal`. Web-derived facts carry `checked: 'web'` only when the URL came from a real search result,
+    else `'estimate'` with an empty URL. The agent never invents phone numbers or URLs.
+  - API.md is the frontend/backend contract: extend by adding fields, never rename/remove, log in Changelog.
+  - Local credentials live in `.env.local` (git-ignored). AWS passes only `BOP_RUNTIME_SECRET_ID`; Lambda loads an
+    allowlist of server-side values from one KMS-encrypted Secrets Manager JSON document. Terraform creates no secret
+    version, and only public `LIFF_ID` may reach the browser.
+  - Keyed services are parked (KEYS.md); each has an OpenSpec change in `openspec/changes/`.
+
+  ## AWS deployment
+  - Terraform is split into `terraform/bootstrap` (versioned/encrypted remote state, GitHub OIDC role and scoped update
+    policies) and `terraform/app` (CloudFront, WAF, S3, API Gateway, Lambda, DynamoDB, Secrets Manager, KMS, logs,
+    alarms, dashboard, SNS and budget). Providers fail closed unless the expected account is selected.
+  - GitHub Actions tests and packages on every pull request. Pushes to `main` assume short-lived OIDC credentials bound
+    to immutable owner/repository IDs and the main branch, verify the sanctioned account, apply a saved Terraform plan,
+    check `/api/health`, and prove direct S3 origin access returns 403.
+  - The Lambda artifact is an esbuild CommonJS ZIP with a package-local CommonJS boundary, normalized timestamps and
+    POSIX modes, and a packaged-handler health regression. Terraform addresses releases by SHA-256 and moves the
+    `live` alias only to a published version.
+  - Edge and Regional WAF managed rules and rate rules start in Count mode with redacted KMS-encrypted logs. API Gateway
+    and Lambda access/error logs, X-Ray, alarms and a tag-scoped budget provide the POC operational baseline.
+  - Supported resources carry `Project=poc-tourism`, `Workload=poc-tourism`, `Environment`, `ManagedBy` and `Repository` tags.
+
+  ## Dev commands
+  - `npm run dev` - Vite + API middleware on one port (http://localhost:5173).
+  - `npm run build` then `npm start` - production server (`PORT`, default 8787).
+  - `npm test` - application, OpenAI, LINE, Lambda adapter, image normalization and infrastructure regressions.
+    `npm run build` - static Vite build and MapLibre worker asset. `npm run package:lambda` - clean install, tests,
+    production audit, frontend build and deterministic CommonJS Lambda package. `npm run smoke` - local smoke checks.
+    `npm run routes` - re-seed `src/routes.json`.
+  - `BOP_FAKE_LLM=1 npm run dev` (or `BOP_FAKE_LLM=1 PORT=8787 npm start`) - no model; Da Nang setups get a
+    fixed plan and candidates, everything else runs for real.
+
+  ## Environment variables the code reads
+  Local development reads `.env`, `.env.local` and the process environment (Vite: `loadEnv`; Node: `server/env.mjs`).
+  In AWS, `server/runtime-secrets.mjs` loads only allowlisted fields from the secret named by `BOP_RUNTIME_SECRET_ID`;
+  an existing process value wins for controlled overrides.
+  - `OPENAI_API_KEY` or `OPENAI_APIKEY` - enables the OpenAI Responses API provider.
+  - `ANTHROPIC_API_KEY` - enables the Anthropic API provider.
+  - `BOP_PROVIDER` - `openai` | `anthropic` | `api` | `subscription` to force a provider.
+  - `BOP_CLAUDE_BIN` - path to the `claude` CLI (else ~/.local/bin, /opt/homebrew/bin, /usr/local/bin, PATH).
+  - `BOP_FAKE_LLM` - `1` for the fake model.
+  - `PORT` - production server port (default 8787).
+  Read from `process.env` only at module load (shell exports; `.env.local` does not set them):
+  - `BOP_FAST_MODEL` - Anthropic model tried first for fast calls.
+  - `BOP_OPENAI_MODEL` (`gpt-6.2-astra`) and `BOP_OPENAI_FAST_MODEL` (`gpt-6.2-sol`) - OpenAI tier overrides.
+  - `BOP_EFFORT_PLAN` (low), `BOP_EFFORT_REPLAN` (medium), `BOP_EFFORT_REPAIR` (low), `BOP_EFFORT_PLACE` (low).
+  - `BOP_SEARCH_PLAN` (5), `BOP_SEARCH_REPLAN` (3) - web-search caps; 0 disables search for that call.
+  - `BOP_SPLIT_MIN_DAYS` (3) - trips this long use skeleton + parallel days.
+  - `BOP_DAY_CONCURRENCY` (3) - parallel per-day design calls.
+  - `BOP_UA_CONTACT` - contact appended to the Wikimedia User-Agent.
+  Set for the CLI child only: `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`; removed from it:
+  `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDECODE`.
+  External-service keys below stay server-side: local values live in `.env.local`, while AWS values live in the
+  runtime Secrets Manager document. Storing a future provider key does not activate an unfinished feature.
+  - Google: `GOOGLE_MAPS_API_KEY` (Places API (New) + Routes API); Japan transit `NAVITIME_API_KEY` or `ODPT_CONSUMER_KEY`.
+  - Flights: `DUFFEL_ACCESS_TOKEN`, `DUFFEL_WEBHOOK_SECRET`, `SERPAPI_KEY`; status `AERODATABOX_API_KEY`,
+    `AERODATABOX_HOST`, `FLIGHTAWARE_API_KEY`, `FLIGHTAWARE_WEBHOOK_SECRET`.
+  - Hotels: `LITEAPI_KEY`; later `HOTELBEDS_API_KEY`, `HOTELBEDS_SECRET`, `AGODA_PARTNER_ID`, `AGODA_API_KEY`,
+    `BOOKING_DEMAND_API_TOKEN`, `BOOKING_AFFILIATE_ID`.
+  - Weather (live since 2026-11-09): none required; optional `OPEN_METEO_API_KEY` for the commercial endpoint.
+  - LINE: `LINE_CHANNEL_ACCESS_TOKEN`, `LINE_CHANNEL_SECRET`, `LINE_LOGIN_CHANNEL_ID`; `LIFF_ID` is a public app id.
+  - Activities: `VIATOR_API_KEY`, `VIATOR_PARTNER_ID`, `KLOOK_AFFILIATE_ID`, `KKDAY_PARTNER_KEY`, `KKDAY_AFFILIATE_ID`.
+  - Payments: `OMISE_SECRET_KEY`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`.
+  - LLM production: OpenAI service-account key as `OPENAI_API_KEY`/`OPENAI_APIKEY`, or `ANTHROPIC_API_KEY`, with `BOP_ENV=production`.

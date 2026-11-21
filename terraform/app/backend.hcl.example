@@ -1,0 +1,6 @@
+# Generated values from terraform/bootstrap. Keep the real backend.hcl gitignored.
+bucket       = "bop-poc-tourism-prod-tfstate-example"
+key          = "poc-tourism/prod/terraform.tfstate"
+region       = "us-east-1"
+encrypt      = true
+use_lockfile = true

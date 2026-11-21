@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Bop · วางแผนเที่ยวกับเพื่อน</title>
+<meta name="description" content="Bop จัดแผนเที่ยวให้ทั้งกลุ่ม ผ่านเงื่อนไขของทุกคน และปรับแผนให้เมื่อมีเรื่องเปลี่ยน">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect width=%2732%27 height=%2732%27 rx=%278%27 fill=%27%2317181c%27/%3E%3Cpath d=%27M10 7v17M10 17.5a5 5 0 1 0 5-5 5 5 0 0 0-5 5%27 fill=%27none%27 stroke=%27%23fbfaf7%27 stroke-width=%273%27 stroke-linecap=%27round%27/%3E%3Ccircle cx=%2724%27 cy=%2722%27 r=%273.2%27 fill=%27%23ff5a1f%27/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Anuphan:wght@400;500;600;700&family=JetBrains+Mono:wght@500&family=Roboto:wght@400&display=swap">
+</head>
+<body>
+<div class="app" id="app" data-screen="setup">
+  <header class="top gut">
+    <div class="lockup">
+      <div class="brand">
+        <svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8" fill="#17181c"/><path d="M10 7v17M10 17.5a5 5 0 1 0 5-5 5 5 0 0 0-5 5" fill="none" stroke="#fbfaf7" stroke-width="3" stroke-linecap="round"/><circle cx="24" cy="22" r="3.2" fill="#ff5a1f"/></svg>
+        <b>Bop<span class="dot" aria-hidden="true">.</span></b><span>เพื่อนร่วมทริปที่วางแผนให้</span>
+      </div>
+      <div class="trip" id="trip" hidden>
+        <h1 id="triptitle"></h1>
+        <p id="tripmeta"></p>
+      </div>
+    </div>
+    <div class="members" id="members" hidden></div>
+    <div class="topr" id="topr">
+      <span class="agent" role="status"><i class="adot"></i><span>กำลังเช็ก agent…</span></span>
+    </div>
+  </header>
+
+  <section class="setup" id="setup" aria-label="ตั้งค่าทริป"></section>
+
+  <div class="cmd gut" id="cmd" hidden>
+    <form id="cmdform" autocomplete="off">
+      <label class="sr" for="cmdin">สั่ง Bop ให้แก้แผน</label>
+      <input id="cmdin" type="text" placeholder="สั่ง Bop เช่น “วันเสาร์ขอนอนตื่นสาย” หรือ “ตัดน้ำตกออก”">
+      <button class="btn" type="submit">ปรับแผน</button>
+    </form>
+    <div class="sims" id="sims" role="group" aria-label="เดโมออฟไลน์: จำลองเหตุการณ์กับแผนตัวอย่าง">
+      <span class="sims-l">เดโมออฟไลน์</span>
+      <button class="sim" data-s="cut" type="button"><svg class="ico" viewBox="0 0 18 18" aria-hidden="true"><circle cx="5" cy="5" r="2.2"/><circle cx="5" cy="13" r="2.2"/><path d="M6.8 6.3L15 13M6.8 11.7L15 5"/></svg><span>ตัดน้ำตกออก</span></button>
+      <button class="sim" data-s="rain" type="button"><svg class="ico" viewBox="0 0 18 18" aria-hidden="true"><path d="M5 11a3.4 3.4 0 010-6.8 4.5 4.5 0 018.6 1.1A2.9 2.9 0 0113 11z"/><path d="M6 13.5l-.8 2M9.5 13.5l-.8 2M13 13.5l-.8 2"/></svg><span>ฝนตก วันเสาร์ 11:10</span></button>
+      <button class="sim" data-s="closed" type="button"><svg class="ico" viewBox="0 0 18 18" aria-hidden="true"><path d="M3 7l1.2-4h9.6L15 7v1a2 2 0 01-4 0 2 2 0 01-4 0 2 2 0 01-4 0z"/><path d="M4 10.5V15h10v-4.5"/></svg><span>ร้านปิด</span></button>
+      <button class="sim" data-s="delay" type="button"><svg class="ico" viewBox="0 0 18 18" aria-hidden="true"><circle cx="9" cy="9" r="6.5"/><path d="M9 5v4l2.8 1.6"/></svg><span>ไฟลต์ดีเลย์ 90 นาที</span></button>
+    </div>
+    <div class="cmd-r">
+    <button class="sim quiet" id="edittrip" type="button"><svg class="ico" viewBox="0 0 18 18" aria-hidden="true"><path d="M3 15l1-3.5L11.5 4a1.6 1.6 0 012.3 0l.2.2a1.6 1.6 0 010 2.3L6.5 14z"/></svg>แก้ข้อมูลทริป</button>
+    <button class="sim quiet" id="reset" type="button"><svg class="ico" viewBox="0 0 18 18" aria-hidden="true"><path d="M3.5 9a5.5 5.5 0 105.5-5.5H6M6.5 1.5L4 4l2.5 2.5"/></svg>กลับไปแผนแรก</button>
+    <span class="agent"><i class="adot"></i><span>กำลังเช็ก agent…</span></span>
+    </div>
+  </div>
+
+  <main class="split" id="split" hidden>
+    <section class="panel" aria-label="แผนทริป">
+      <div class="tabs gut" role="tablist" id="tabs">
+        <button class="tab" role="tab" id="tab-plan" data-tab="plan" aria-selected="true" aria-controls="panelbody">แผน</button>
+        <button class="tab" role="tab" id="tab-book" data-tab="book" aria-selected="false" aria-controls="panelbody">การจอง<span class="n" id="nbook"></span></button>
+      </div>
+      <div id="panelbody" role="tabpanel"></div>
+    </section>
+
+    <div class="mapwrap">
+      <div class="mapbar" id="mapbar" role="group" aria-label="มุมมองแผนที่">
+        <button type="button" id="vDay" aria-pressed="true">เฉพาะวันที่เลือก</button>
+        <button type="button" id="vAll" aria-pressed="false">ทั้งทริป</button>
+      </div>
+      <div class="sheet-bg" id="sheetbg" hidden></div>
+      <aside class="sheet" id="sheet" hidden role="dialog" aria-modal="false" aria-labelledby="sheet-title"></aside>
+      <div id="map" role="region" aria-label="แผนที่เส้นทางทริป"></div>
+      <div class="legend" hidden></div>
+    </div>
+
+    <aside class="dock" id="dock" hidden aria-label="Bop ปรับแผน"></aside>
+  </main>
+  <div class="ask" id="ask" hidden role="dialog" aria-modal="true" aria-labelledby="ask-title"></div>
+  <div class="pay" id="pay" hidden role="dialog" aria-modal="true" aria-labelledby="pay-title"></div>
+  <div class="sr" id="live" aria-live="polite" aria-atomic="true"></div>
+</div>
+<script type="module" src="/src/main.js"></script>
+</body>
+</html>
