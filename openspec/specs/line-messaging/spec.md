@@ -50,7 +50,7 @@ Connect a planner session to a LINE group, send summaries, and collect real grou
 
 ### Requirement: Link and unlink a group
 
-Bop SHALL reply to a group join with instructions for sending the link code, accept a trimmed case-insensitive six-character group text matching the alphabet, and verify the lookup and its 30-minute expiry. A successful link writes the group-to-trip mapping, removes the link lookup and pending code, and replies with a short Flex confirmation containing the trip title and one trip-specific LIFF action when LIFF and LINE Login are configured, or a brief text confirmation otherwise. The link reply does not contain the itinerary summary or organizer credential. Unrelated text SHALL be ignored. A leave event removes the group association; a member-joined event can reply with LIFF identity instructions.
+Bop SHALL reply to a group join with instructions for sending the link code, accept a trimmed case-insensitive six-character group text matching the alphabet, and verify the lookup and its 30-minute expiry. A successful link writes the group-to-trip mapping, removes the link lookup and pending code, and replies with a short Flex confirmation containing the trip title and one trip-specific LIFF action when LIFF and LINE Login are configured, or a brief CTA-free Flex confirmation otherwise. The link reply does not contain the itinerary summary or organizer credential. Unrelated text SHALL be ignored. A leave event removes the group association; a member-joined event can reply with LIFF identity instructions.
 
 #### Scenario: Organizer watches the link
 
@@ -59,7 +59,7 @@ Bop SHALL reply to a group join with instructions for sending the link code, acc
 
 ### Requirement: Distinguish reply, push and quota
 
-`POST /api/trips/{id}/plan` SHALL save the summary, then attempt a push for a linked group when a summary is supplied. `POST /api/trips/{id}/post` SHALL reject blank text or an unlinked trip and otherwise push a message prefixed with `Bop:` once. The server SHALL limit outbound text to 5,000 characters and each reply or push to five messages. A push first consumes one unit of the shared UTC monthly quota (`BOP_LINE_MONTHLY_CAP`, default 200). Replies use LINE reply tokens separately.
+`POST /api/trips/{id}/plan` SHALL save the summary, then attempt a push for a linked group when a summary is supplied. `POST /api/trips/{id}/post` SHALL reject blank text or an unlinked trip and otherwise push the organizer-provided text prefixed with `Bop:` once inside a Flex notice. The server SHALL preserve the 5,000-character limit and existing normalized text for retry identity. All bot replies and pushes SHALL use the Bop Flex design, up to five messages each. A plan-update notice SHALL link to the existing LIFF summary when configured, or show the stored summary as readable wrapped text without a CTA when not configured. A push first consumes one unit of the shared UTC monthly quota (`BOP_LINE_MONTHLY_CAP`, default 200). Replies use LINE reply tokens separately.
 
 #### Scenario: Monthly allowance exhausted
 
