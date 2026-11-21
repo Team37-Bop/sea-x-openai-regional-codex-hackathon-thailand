@@ -18,6 +18,25 @@ The model SHALL answer with edits (`remove`, `insert`, `replace`, `flag`) agains
 - **WHEN** an edit names a stop id that does not exist
 - **THEN** the error "ไม่พบ <id>" is recorded and sent to the repair round
 
+### Requirement: Change the length of a trip in chat
+The organizer SHALL be able to add or remove a number of days or set the total through the existing chat. The revised itinerary SHALL keep the original start, end on its last calendar day, and have between one and seven dated days. An out-of-range request SHALL explain the supported range and leave the trip intact.
+
+#### Scenario: Extend across a month boundary
+- **WHEN** a three-day trip starting December 30 receives “เพิ่มอีก 2 วัน”
+- **THEN** the proposed trip has five days ending January 3. Existing visits remain in order, the return journey moves to the final day, and the added days have scheduled stops, routes and constraint checks. A live planner designs only the added days. The bundled sample can extend its itinerary offline.
+
+#### Scenario: Shorten a trip with a commitment
+- **WHEN** “ลดเหลือ 2 วัน” would remove a confirmed reservation or a member's wished-for visit
+- **THEN** Bop explains the impact and offers the shorter itinerary and the original itinerary as distinct choices. Each choice carries its own setup and dates. Changes to a booked stay, fixed return journey, a newly failed check or a cost increase above ฿300 per person also require a decision. A return offer from the old date cannot be booked on the revised itinerary.
+
+#### Scenario: Applying or undoing a duration change
+- **WHEN** the group applies a duration change
+- **THEN** the date range, day tabs, selected day, setup and reservations reflect the chosen itinerary. Undo restores the original dates and days.
+
+#### Scenario: An edit mentions a particular day
+- **WHEN** the organizer requests a change to a stop on day two without asking to change the trip length
+- **THEN** Bop handles it as an ordinary stop edit and keeps the trip duration.
+
 ### Requirement: Vote rules
 The model prompt SHALL request a vote for a broken member constraint, a cost increase greater than ฿300 per person, or a lost starred wish. The server SHALL use the returned vote decision and require at least two options to hold a vote. It caps options at three and assigns A–C by position. With a false decision or one option it retains only A. The arithmetic threshold guides the model and is not a separate server-side decision.
 

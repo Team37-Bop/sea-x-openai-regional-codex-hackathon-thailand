@@ -202,6 +202,26 @@ test('a booked choice bypasses search, new transport uses the fitting estimated 
   assert.equal(only[0].id, 'back-kept');
 });
 
+test('a live extension designs only the added day and schedules its stops on the correct date', async (t) => {
+  const requests = [];
+  const setup = normalize({ ...d, picks: { must: [{ name: 'ตลาดใหม่', ll: point }] } });
+  const original = {
+    setup, city: setup.city, flags: {},
+    days: [{ date: setup.startDate, stops: [stop('old', 'ตลาดเดิม', '10:00', '11:00', { place: { source: 'pick' } })] }],
+  };
+  mockProvider(t, { bop_daily: { days: [{ title: 'ตลาดใหม่', stops: [
+    stop('new', 'ตลาดใหม่', '11:20', '12:10', { k: 'food', meal: 'lunch' }),
+  ] }] } }, requests);
+  const result = await replan({ plan: original, command: 'เพิ่มอีกหนึ่งวัน' }, ctx());
+  const updated = result.options[0].plan;
+  assert.deepEqual(requests.map((r) => r.op), ['bop_daily']);
+  assert.equal(updated.setup.endDate, '2026-11-22');
+  assert.equal(updated.days[1].date, updated.setup.endDate);
+  assert.equal(updated.days[1].stops[0].name, 'ตลาดใหม่');
+  assert.equal(updated.days[0].stops[0].id, 'old');
+  assert.equal(original.days.length, 1);
+});
+
 test('a return recommendation leaves a blank outbound location unresolved', async (t) => {
   const requests = [];
   mockProvider(t, {

@@ -18,11 +18,13 @@ import {
 import { applyEdits, fields, uniqueId } from './edits.mjs';
 import { findCity, legKey, route } from './geo.mjs';
 import { model, provider } from './model.mjs';
-import { indoor, sampleDay } from './sample.mjs';
+import { addedSampleDay, indoor, sampleDay } from './sample.mjs';
+import { requestedTripDays } from './trip-duration.mjs';
 import { bookedStays, concurrent, dayHotels, isHotel, isTransit, schedule } from './schedule.mjs';
 import { matchesPick, resolvePicks } from './candidates.mjs';
 import { searchFlights } from './flights.mjs';
 export { candidates } from './candidates.mjs';
+export { requestedTripDays };
 
 const protectedError = (e) => ['auth', 'rate_limit', 'no_key'].includes(e.code) || e.name === 'AbortError';
 const conf = (name, fallback, min, max) => {
@@ -701,6 +703,125 @@ function offlineAnswer(plan, command, day) {
     ],
   };
 }
+async function resizeTrip(original, setup, count, command, ctx, offline, started) {
+  const oldCount = original.days.length;
+  if (!Number.isInteger(count) || count < 1 || count > 7)
+    throw bad('ปรับทริปได้ตั้งแต่ 1 ถึง 7 วัน ตอนนี้ทริปมี ' + oldCount + ' วัน');
+  if (count === oldCount) throw bad('ทริปนี้มี ' + count + ' วันอยู่แล้ว ลองระบุจำนวนวันใหม่');
+  const endDate = dateAt(setup.startDate, count - 1);
+  const revised = normalize({ ...setup, days: count, endDate });
+  const plan = structuredClone(original);
+  plan.days = plan.days.slice(0, count);
+  plan.flags ??= {};
+  const stay = plan.flags.stay ??= {};
+  const previousStays = stay.stays || [];
+  if (revised.stay.mode === 'booked') {
+    for (const row of revised.stay.stays)
+      row.ll ??= previousStays.find((hotel) => hotel.name === row.name)?.ll;
+    stay.stays = await bookedStays(revised, ctx, offline);
+  } else if (previousStays.length) {
+    const hotel = previousStays[0];
+    stay.stays = count === 1 ? [] : [{
+      ...hotel, first: 0, nights: count - 1, checkIn: revised.startDate, checkOut: endDate,
+      cost: hotel.nights ? (hotel.cost || 0) * (count - 1) / hotel.nights : 0,
+    }];
+  }
+  const stays = stay.stays || [];
+  revised.stayPlan = makeDayHotels(revised, stays);
+  const fixedReturn = revised.depart && ['flight', 'train', 'bus'].includes(revised.depart.by) &&
+    (revised.depart.choice || plan.flags.transport?.back?.chosen || (revised.depart.time && !revised.depart.auto));
+  if (revised.depart) delete revised.depart.choice;
+  if (plan.flags.transport) delete plan.flags.transport.back;
+  delete plan.flags.departureSuggested;
+
+  // The return journey moves with the end date. Its offer and routes belong to the old date.
+  const formerLast = original.days.at(-1).stops.at(-1);
+  const terminal = revised.depart && formerLast && isTransit(formerLast) ? structuredClone(formerLast) : null;
+  const boundary = Math.min(count, oldCount) - 1;
+  const edge = plan.days[boundary];
+  if (count > oldCount && terminal) edge.stops.pop();
+  const previousEnd = edge.stops.at(-1);
+  if (count < oldCount && previousEnd && isHotel(previousEnd) && previousStays.length &&
+      previousEnd.n === dayHotels(previousStays, boundary, oldCount).end?.name)
+    edge.stops.pop();
+  if (count > oldCount && edge.stops[0]?.note === 'เช็กเอาต์และนำสัมภาระ') delete edge.stops[0].note;
+  ctx.step('กำลังปรับทริปจาก ' + oldCount + ' เป็น ' + count + ' วัน');
+  for (let index = oldCount; index < count; index++) {
+    ctx.signal.throwIfAborted();
+    ctx.step('กำลังจัดสถานที่และเวลาเที่ยววันที่ ' + (index + 1));
+    let raw, verified = new Set();
+    if (offline) raw = addedSampleDay(revised.city, index, original.days);
+    else {
+      const reply = await model(
+        shape + ' จัดเฉพาะวันใหม่หนึ่งวัน ใช้สถานที่จริงที่ต่างจากวันที่มีอยู่ หลีกเลี่ยงสถานที่ซ้ำ ระบบจัดที่พักและจุดเดินทางกลับให้.',
+        { setup: revised, command, index, date: dateAt(revised.startDate, index), existingDays: brief(plan) },
+        { ...ctx, operation: 'daily', searches: 2 },
+      );
+      raw = reply.value.days?.[0] ?? reply.value.day;
+      verified = reply.verified;
+    }
+    if (!Array.isArray(raw?.stops) || !raw.stops.some((s) => s && str(s.name || s.n)))
+      throw Error('ไม่มีสถานที่สำหรับวันที่เพิ่ม');
+    const built = await schedule(raw, index, revised, ctx, stays, verified, { offline });
+    plan.days.push(built.day);
+  }
+  if (terminal) {
+    delete terminal.leg;
+    const last = plan.days.at(-1).stops;
+    if (last.length && isTransit(last.at(-1)) && last.at(-1).id !== terminal.id) last.pop();
+    last.push(terminal);
+  }
+  uniqueAcross(plan.days);
+  const retime = new Set();
+  if (terminal || previousStays.length || stays.length) retime.add(boundary);
+  if (terminal) retime.add(count - 1);
+  const oldFee = previousStays[0]?.cost, newFee = stays[0]?.cost || 0;
+  if (oldFee && oldFee !== newFee) {
+    const charged = plan.days[0].stops.find((s) => isHotel(s) && s.cost === oldFee);
+    if (charged) charged.cost = newFee;
+  }
+  const candidate = await editPlan(plan, [], revised, ctx, offline, retime);
+  const proposed = candidate.plan;
+  if (proposed.days.some((day, index) => day.date !== dateAt(revised.startDate, index) || !day.stops.length))
+    throw bad('ยังจัดจุดแวะให้ครบทุกวันที่ขอไม่ได้ ลองปรับคำขออีกครั้ง');
+  const visits = new Map(proposed.days.flatMap((d) => d.stops.map((stop) => [stop.id, { stop, date: d.date }])));
+  const removed = original.days.flatMap((d) => d.stops).filter((s) => !visits.has(s.id));
+  const missing = removed.find((s) => s.star || setup.members.some((m) => m.wants.some((w) => s.n?.includes(w))) ||
+    setup.picks.must.some((pick) => matchesPick(s, pick, true)));
+  const reservation = original.days.flatMap((d) => d.stops.filter((s) => {
+    const visit = visits.get(s.id);
+    return s.res?.done && (visit?.date !== d.date || visit?.stop.start !== s.start);
+  }))[0];
+  const wasFailing = new Set(checks(original, setup).list.filter((r) => !r.pass).map((r) => r.id));
+  const failure = proposed.checks.find((r) => !r.pass && !wasFailing.has(r.id));
+  const delta = Math.round(total(proposed) - total(original));
+  const reasons = [
+    reservation && 'การเปลี่ยนจำนวนวันกระทบการจองที่ ' + reservation.n,
+    missing && 'จะไม่ได้ไป ' + missing.n + ' ตามที่กลุ่มต้องการ',
+    setup.stay.mode === 'booked' && 'ต้องยืนยันจำนวนคืนกับที่พักที่จองไว้',
+    fixedReturn && 'ต้องตรวจเที่ยวเดินทางขากลับสำหรับวันที่ใหม่',
+    delta > 300 && 'ค่าใช้จ่ายเพิ่มประมาณ ฿' + delta + ' ต่อคน',
+    failure && 'แผนใหม่ไม่ผ่านเงื่อนไข ' + failure.label,
+  ].filter(Boolean);
+  const title = (count > oldCount ? 'เพิ่ม' : 'ลด') + 'ทริปเป็น ' + count + ' วัน';
+  const head = title + ' · ' + revised.startDate + ' ถึง ' + revised.endDate;
+  const opt = { key: 'A', title, head, line: 'Bop: ' + head + '\nค่าใช้จ่าย ' + (delta >= 0 ? '+' : '−') + '฿' + Math.abs(delta) + '/คน', plan: proposed };
+  const options = [opt];
+  let vote_reason;
+  if (reasons.length) {
+    vote_reason = str(reasons.join(' · ') + ' เลือกใช้วันใหม่หรือคงทริปเดิม', 400);
+    const keep = await editPlan(original, [], setup, ctx, offline);
+    const title = 'คงทริปเดิม ' + oldCount + ' วัน';
+    options.push({ key: 'B', title, head: title, line: 'Bop: ' + title + '\nค่าใช้จ่ายเท่าเดิม', plan: keep.plan });
+    Object.assign(candidate.routes, keep.routes);
+  }
+  ctx.step('ตรวจเวลา เส้นทาง และเงื่อนไขของทริป ' + count + ' วันแล้ว');
+  return {
+    options, needs_vote: Boolean(vote_reason), ...(vote_reason ? { vote_reason } : {}),
+    summary: vote_reason || head, day: Math.min(oldCount, count - 1), routes: candidate.routes,
+    timing: {}, usage: ctx.usage, repaired: false, ms: elapsed(started),
+  };
+}
 export async function replan(input, ctx) {
   const t = performance.now();
   const original = validatePlan(input.plan);
@@ -712,6 +833,8 @@ export async function replan(input, ctx) {
   setup.cityLL ??= original.days.flatMap((d) => d.stops)[0]?.ll;
   const day = cutDay(input.day, original.days.length),
     offline = input.demo === true || provider === 'fake';
+  const duration = requestedTripDays(command, original.days.length);
+  if (duration !== null) return resizeTrip(original, setup, duration, command, ctx, offline, t);
   const previous = checks(original, setup),
     timing = {};
   ctx.step('กำลังดูคำขอและหาจุดที่ต้องปรับในแผนเดิม');
