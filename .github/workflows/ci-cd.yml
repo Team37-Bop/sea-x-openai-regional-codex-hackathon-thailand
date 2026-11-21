@@ -1,4 +1,5 @@
-name: Validate and release Bop
+name: CI and AWS deployment
+
 on:
   pull_request:
   push:
@@ -6,109 +7,177 @@ on:
   workflow_dispatch:
     inputs:
       waf_mode:
-        description: WAF behavior after reviewing representative request logs
+        description: "WAF action after reviewing count-mode logs"
+        required: true
         type: choice
-        options: [current, count, block]
-        default: current
+        default: count
+        options: [count, block]
+
 permissions:
   contents: read
 
+concurrency:
+  group: bop-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  NODE_VERSION: "24"
+  TERRAFORM_VERSION: "1.17.2"
+
 jobs:
   validate:
+    name: Test, build, and validate IaC
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          node-version: 24
-          cache: npm
-      - run: npm ci
-      - run: npm run package:lambda
-      - uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: 1.15.8
-      - run: terraform fmt -recursive -check terraform
-      - name: Validate both stacks offline
+          fetch-depth: 0
+
+      - name: Scan Git history for secrets
         run: |
-          set -euo pipefail
-          for stack in bootstrap app; do
-            terraform -chdir="terraform/$stack" init -backend=false -input=false -lockfile=readonly
-            terraform -chdir="terraform/$stack" validate
-            terraform -chdir="terraform/$stack" test
-          done
+          python3 -m pip install --disable-pip-version-check pre-commit==4.7.0
+          pre-commit run gitleaks-history --hook-stage manual --all-files
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Build the deployable package
+        run: ./scripts/package-lambda.sh
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Run pre-commit checks
+        run: pre-commit run --all-files
+
+      - name: Check Terraform formatting
+        run: terraform fmt -check -recursive terraform
+
+      - name: Validate bootstrap configuration
+        run: |
+          terraform -chdir=terraform/bootstrap init -backend=false -input=false
+          terraform -chdir=terraform/bootstrap validate
+
+      - name: Validate application configuration
+        run: |
+          terraform -chdir=terraform/app init -backend=false -input=false
+          terraform -chdir=terraform/app validate
+
+      - name: Archive validated frontend and Lambda files
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        run: tar -cf "$RUNNER_TEMP/bop-release.tar" dist .build/lambda
+
+      - name: Publish release files for the deploy job
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bop-release
+          path: ${{ runner.temp }}/bop-release.tar
+          if-no-files-found: error
+          retention-days: 1
 
   deploy:
+    name: Deploy AWS environment
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && vars.AWS_DEPLOY_ROLE_ARN != ''
     needs: validate
-    if: >-
-      github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
-      vars.AWS_ACCOUNT_ID != '' && vars.AWS_DEPLOY_ROLE_ARN != '' && vars.AWS_REGION != '' && vars.TF_STATE_BUCKET != ''
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     permissions:
       contents: read
       id-token: write
-    concurrency:
-      group: bop-application-release
-      cancel-in-progress: false
     env:
       AWS_REGION: ${{ vars.AWS_REGION }}
-      DEPLOY_ROLE: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
-      STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
-      TF_VAR_account_id: ${{ vars.AWS_ACCOUNT_ID }}
+      EXPECTED_AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+      TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+      TF_STATE_KEY: ${{ vars.TF_STATE_KEY }}
+      TF_VAR_expected_account_id: ${{ vars.AWS_ACCOUNT_ID }}
+      TF_VAR_aws_region: ${{ vars.AWS_REGION }}
       TF_VAR_repository: ${{ github.repository }}
-      TF_VAR_region: ${{ vars.AWS_REGION }}
-      TF_VAR_environment: ${{ vars.BOP_ENVIRONMENT || 'poc' }}
-      WAF_INPUT: ${{ inputs.waf_mode || 'current' }}
-      TF_IN_AUTOMATION: "true"
+      TF_VAR_shared_runtime_secret: ${{ vars.RUNTIME_SECRET_CONFIG || 'null' }}
+      TF_VAR_waf_mode: ${{ inputs.waf_mode || vars.WAF_MODE || 'count' }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Check required repository variables
+        env:
+          AWS_DEPLOY_ROLE_ARN: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+        run: |
+          set -euo pipefail
+          for name in AWS_DEPLOY_ROLE_ARN AWS_REGION EXPECTED_AWS_ACCOUNT_ID TF_STATE_BUCKET TF_STATE_KEY; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "Missing required GitHub Actions variable: $name" >&2
+              exit 1
+            fi
+          done
+
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Download validated release
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          node-version: 24
-          cache: npm
-      - run: npm ci
-      - run: npm run package:lambda
-      - uses: hashicorp/setup-terraform@v3
+          name: bop-release
+          path: ${{ runner.temp }}/bop-release
+
+      - name: Restore release files and packaging metadata
+        run: tar -xf "$RUNNER_TEMP/bop-release/bop-release.tar"
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
         with:
-          terraform_version: 1.15.8
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
-      - name: Check deployment parameters
-        run: |
-          set -euo pipefail
-          [[ "$TF_VAR_account_id" =~ ^[0-9]{8}0081$ ]]
-          [[ "$DEPLOY_ROLE" == "arn:aws:iam::${TF_VAR_account_id}:role/"* ]]
-          [[ "$TF_VAR_environment" =~ ^[a-z][a-z0-9-]{0,12}$ ]]
-      - uses: aws-actions/configure-aws-credentials@v4
+
+      - name: Assume the AWS deployment role with OIDC
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
-          aws-region: ${{ vars.AWS_REGION }}
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
-          role-session-name: bop-release-${{ github.run_id }}
-      - name: Verify the sanctioned account
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: github-bop-${{ github.run_id }}
+          mask-aws-account-id: true
+
+      - name: Verify the sanctioned AWS account
         run: |
           set -euo pipefail
-          account="$(aws sts get-caller-identity --query Account --output text)"
-          [[ "$account" == "$TF_VAR_account_id" && "$account" == *0081 ]]
-      - name: Initialize locked state
-        working-directory: terraform/app
-        run: terraform init -input=false -lockfile=readonly -backend-config="bucket=$STATE_BUCKET" -backend-config="key=bop/$TF_VAR_environment/terraform.tfstate" -backend-config="region=$AWS_REGION"
-      - name: Plan and apply the saved release
-        working-directory: terraform/app
-        run: |
-          set -euo pipefail
-          if [[ "$WAF_INPUT" == current ]]; then
-            TF_VAR_waf_mode="$(terraform output -raw waf_mode)"
-          else
-            TF_VAR_waf_mode="$WAF_INPUT"
+          actual=$(aws sts get-caller-identity --query Account --output text)
+          if [[ "$actual" != "$EXPECTED_AWS_ACCOUNT_ID" || "$actual" != *0081 ]]; then
+            echo "Refusing deployment: the assumed role is not in the sanctioned account." >&2
+            exit 1
           fi
-          [[ "$TF_VAR_waf_mode" == count || "$TF_VAR_waf_mode" == block ]]
-          export TF_VAR_waf_mode
-          terraform plan -input=false -out=release.tfplan
-          terraform apply -input=false release.tfplan
-      - name: Check public health and S3 privacy
-        working-directory: terraform/app
+          echo "Verified the configured AWS account."
+
+      - name: Initialize remote Terraform state
+        run: |
+          terraform -chdir=terraform/app init -input=false -reconfigure \
+            -backend-config="bucket=$TF_STATE_BUCKET" \
+            -backend-config="key=$TF_STATE_KEY" \
+            -backend-config="region=$AWS_REGION" \
+            -backend-config="encrypt=true" \
+            -backend-config="use_lockfile=true"
+
+      - name: Plan infrastructure
+        run: terraform -chdir=terraform/app plan -input=false -out=deploy.tfplan
+
+      - name: Apply reviewed plan
+        run: terraform -chdir=terraform/app apply -input=false deploy.tfplan
+
+      - name: Verify public and protected endpoints
         run: |
           set -euo pipefail
-          site="$(terraform output -raw site_url)"
-          origin="$(terraform output -raw frontend_origin)"
-          curl --fail --silent --show-error --retry 8 --retry-all-errors --retry-delay 5 "$site/api/health" --output /dev/null
-          direct="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' "$origin/index.html")"
-          [[ "$direct" == 403 ]]
+          public_url=$(terraform -chdir=terraform/app output -raw application_url)
+          frontend_bucket=$(terraform -chdir=terraform/app output -raw frontend_bucket_name)
+          curl --fail --silent --show-error --retry 12 --retry-all-errors --retry-delay 10 \
+            "$public_url/api/health" >/dev/null
+          status=$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            "https://$frontend_bucket.s3.$AWS_REGION.amazonaws.com/index.html")
+          if [[ "$status" != "403" ]]; then
+            echo "Private frontend origin returned $status instead of 403." >&2
+            exit 1
+          fi
+          echo "Deployment healthy; direct S3 origin access is denied."

@@ -1,8 +1,37 @@
-import { cp, mkdir, rm, stat } from 'node:fs/promises';
+import { copyFile, cp, lstat, mkdir, rm, stat } from 'node:fs/promises';
 import { build } from 'esbuild';
 await rm('dist', { force: true, recursive: true });
 await mkdir('dist/assets', { recursive: true });
-await cp('web', 'dist', { recursive: true });
+// The release only contains reviewed public files. Reject symlinks at each allowlisted path.
+const publicFiles = [
+  'app.js',
+  'booking-tasks.css',
+  'booking-tasks.js',
+  'flight-panel.js',
+  'forecast.js',
+  'index.html',
+  'integration-ui.js',
+  'liff.html',
+  'liff.js',
+  'location-suggest.css',
+  'location-suggest.js',
+  'map.js',
+  'place-details.css',
+  'place-details.js',
+  'plan-review.css',
+  'plan-review.js',
+  'sample-place-details.js',
+  'setup-extras.js',
+  'stream.js',
+  'style.css',
+  'trip-integrations.js',
+  'workspace-controls.js',
+];
+for (const name of publicFiles) {
+  const source = 'web/' + name;
+  if (!(await lstat(source)).isFile()) throw Error('Expected a regular file at ' + source);
+  await copyFile(source, 'dist/' + name);
+}
 for (const name of [
   'maplibre-gl.mjs',
   'maplibre-gl-shared.mjs',

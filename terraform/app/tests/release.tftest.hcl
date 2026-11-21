@@ -1,11 +1,20 @@
-mock_provider "aws" {}
-mock_provider "aws" { alias = "edge" }
+mock_provider "aws" {
+  mock_data "aws_iam_policy_document" {
+    defaults = { json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}" }
+  }
+  mock_data "aws_caller_identity" {
+    defaults = { account_id = "000000000081" }
+  }
+  mock_data "aws_partition" {
+    defaults = { partition = "aws", dns_suffix = "amazonaws.com" }
+  }
+}
 mock_provider "archive" {}
 
 variables {
-  account_id = "000000000081"
-  region     = "ap-southeast-1"
-  repository = "example/bop"
+  expected_account_id = "000000000081"
+  aws_region          = "us-east-1"
+  repository          = "example/bop"
 }
 
 run "protected_streaming_release" {
@@ -19,19 +28,19 @@ run "protected_streaming_release" {
     error_message = "The streaming adapter must run as a published Node.js 24 arm64 function."
   }
   assert {
-    condition     = aws_lambda_alias.live.name == "live" && aws_api_gateway_integration.stream.response_transfer_mode == "STREAM" && aws_api_gateway_integration.stream.timeout_milliseconds == 300000 && aws_api_gateway_integration.stream.type == "AWS_PROXY"
+    condition     = aws_lambda_alias.live.name == "live" && aws_api_gateway_integration.proxy.response_transfer_mode == "STREAM" && aws_api_gateway_integration.proxy.timeout_milliseconds == 300000 && aws_api_gateway_integration.proxy.type == "AWS_PROXY"
     error_message = "The REST API must stream the aliased Lambda response."
   }
   assert {
-    condition     = aws_s3_bucket_public_access_block.app["frontend"].restrict_public_buckets && aws_s3_bucket_public_access_block.app["frontend"].block_public_policy && aws_cloudfront_origin_access_control.frontend.signing_behavior == "always"
+    condition     = aws_s3_bucket_public_access_block.frontend.restrict_public_buckets && aws_s3_bucket_public_access_block.frontend.block_public_policy && aws_cloudfront_origin_access_control.frontend.signing_behavior == "always"
     error_message = "CloudFront must sign requests to a private frontend bucket."
   }
   assert {
-    condition     = alltrue([for behavior in aws_cloudfront_distribution.site.ordered_cache_behavior : behavior.path_pattern == "/api/*" && length(behavior.allowed_methods) == 7])
+    condition     = alltrue([for behavior in aws_cloudfront_distribution.app.ordered_cache_behavior : behavior.path_pattern == "/api/*" && length(behavior.allowed_methods) == 7])
     error_message = "CloudFront must forward every supported API method."
   }
   assert {
-    condition     = aws_api_gateway_stage.app.xray_tracing_enabled && one(aws_api_gateway_method_settings.stage.settings).data_trace_enabled == false && var.waf_mode == "count" && var.waf_requests_per_ip == 100
+    condition     = aws_api_gateway_stage.app.xray_tracing_enabled && one(aws_api_gateway_method_settings.all.settings).data_trace_enabled == false && var.waf_mode == "count" && var.waf_api_requests_per_five_minutes == 100
     error_message = "Default public ingress must limit traffic and avoid request-body logs."
   }
 }

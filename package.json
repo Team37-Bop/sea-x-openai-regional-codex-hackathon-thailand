@@ -10,8 +10,8 @@
     "dev": "node --watch --env-file-if-exists=.env --env-file-if-exists=.env.local server/index.mjs",
     "start": "node --env-file-if-exists=.env --env-file-if-exists=.env.local server/index.mjs",
     "build": "node scripts/build.mjs",
-    "test": "node --test",
-    "package:lambda": "npm test && npm audit --omit=dev --audit-level=high && npm run build && node scripts/package-lambda.mjs"
+    "test": "node --test test/*.test.mjs",
+    "package:lambda": "bash scripts/package-lambda.sh"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "1.12.0",
