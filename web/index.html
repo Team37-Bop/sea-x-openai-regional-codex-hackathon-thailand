@@ -316,23 +316,27 @@
               </details>
               <div class="form-group last-group">
                 <h3>รูปแบบการเที่ยว</h3>
-                <div class="fields">
-                  <label>
-                    จังหวะทริป
-                    <select name="pace">
-                      <option value="normal">พอดี ๆ</option>
-                      <option value="chill">ไปเรื่อย ๆ</option>
-                      <option value="packed">เที่ยวให้เต็มวัน</option>
-                    </select>
-                  </label>
-                  <label>
-                    การเลือกสถานที่
-                    <select name="autonomy">
-                      <option value="auto">ให้ Bop เลือก</option>
-                      <option value="ask">ให้กลุ่มเลือกก่อน</option>
-                    </select>
-                  </label>
-                </div>
+                <fieldset class="trip-preference">
+                  <legend>จังหวะทริป</legend>
+                  <div class="pace-options">
+                    <label class="preference-option"><input type="radio" name="pace" value="chill" />ไปเรื่อย ๆ</label>
+                    <label class="preference-option"><input type="radio" name="pace" value="normal" checked />พอดี ๆ</label>
+                    <label class="preference-option"><input type="radio" name="pace" value="packed" />เที่ยวให้เต็มวัน</label>
+                  </div>
+                </fieldset>
+                <fieldset class="trip-preference">
+                  <legend>การเลือกสถานที่</legend>
+                  <div class="place-options">
+                    <label class="preference-option">
+                      <input type="radio" name="autonomy" value="auto" checked />
+                      <span>ให้ Bop เลือก<small>จัดร้านอาหารและที่เที่ยวลงแผนให้เลย</small></span>
+                    </label>
+                    <label class="preference-option">
+                      <input type="radio" name="autonomy" value="ask" />
+                      <span>ให้กลุ่มเลือกก่อน<small>ดูตัวเลือกแล้วบอกว่าอยากไปที่ไหนก่อนจัดแผน</small></span>
+                    </label>
+                  </div>
+                </fieldset>
                 <p class="feedback" id="form-error" role="alert"></p>
               </div>
             </section>

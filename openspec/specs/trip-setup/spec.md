@@ -188,3 +188,17 @@ The destination, outbound origin, return destination, booked lodgings and indivi
 
 - **WHEN** the online service times out or returns no matches
 - **THEN** local matches remain available and the organizer can enter a free-text location.
+
+### Requirement: Visible pace and place-selection preferences
+
+The organizer SHALL see two separate, keyboard-operable groups for trip pace and place selection. Pace SHALL offer relaxed, balanced and packed in that order. Place selection SHALL explain the choice between letting Bop plan directly and reviewing candidate places first.
+
+#### Scenario: Create and reopen a trip
+
+- **WHEN** an organizer selects a packed trip and asks to review places first
+- **THEN** the candidate request and the final planning request both carry `pace: packed` and `autonomy: ask`, and reopening setup selects those options.
+
+#### Scenario: Unspecified preferences
+
+- **WHEN** the organizer starts a new trip or opens a saved trip with missing preferences
+- **THEN** balanced pace and automatic place selection are checked, and submission proceeds directly to planning.

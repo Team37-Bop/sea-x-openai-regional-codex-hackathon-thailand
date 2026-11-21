@@ -745,9 +745,11 @@ setupForm.city.addEventListener('change', async () => {
 });
 function restoreForm(setup, flags) {
   editingSetup = setup;
-  for (const name of ['city', 'startDate', 'endDate', 'pace', 'autonomy']) {
+  for (const name of ['city', 'startDate', 'endDate']) {
     if (setup[name]) setupForm.elements[name].value = setup[name];
   }
+  setupForm.elements.pace.value = ['chill', 'packed'].includes(setup.pace) ? setup.pace : 'normal';
+  setupForm.elements.autonomy.value = setup.autonomy === 'ask' ? 'ask' : 'auto';
   setupForm.endDate.min = setup.startDate;
   setupForm.hasCar.checked = Boolean(setup.hasCar);
   setupForm.stayMode.value = setup.stay?.mode === 'booked' ? 'booked' : 'auto';
