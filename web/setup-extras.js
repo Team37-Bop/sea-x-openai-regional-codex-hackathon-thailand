@@ -530,7 +530,7 @@ export function chooseCandidates({ dialog, reopen, result, signal, partySize, on
             : plain(raw);
         if (price) body.append(element('p', (page ? 'ราคาที่พบ ' : 'ราคาประมาณ ') + price, 'muted'));
         if (page) body.append(page);
-        const toggles = element('div', null, 'inline');
+        const toggles = element('div', null, 'candidate-answers');
         toggles.setAttribute('role', 'group');
         toggles.setAttribute('aria-label', plain(option.name));
         for (const [value, label] of [
@@ -545,12 +545,14 @@ export function chooseCandidates({ dialog, reopen, result, signal, partySize, on
             for (const item of toggles.children)
               item.setAttribute('aria-pressed', String(item.dataset.answer === answers.get(option)));
           });
+          const mark = element('span', '✓', 'answer-mark');
+          mark.setAttribute('aria-hidden', 'true');
+          toggle.prepend(mark);
           toggle.dataset.answer = value;
           toggle.setAttribute('aria-pressed', 'false');
           toggles.append(toggle);
         }
-        body.append(toggles);
-        row.append(body);
+        row.append(body, toggles);
         grid.append(row);
       }
       const next = (accept) => {

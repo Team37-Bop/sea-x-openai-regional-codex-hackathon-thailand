@@ -92,3 +92,8 @@ The server SHALL remember each option’s name, query, resolved coordinates and 
 #### Scenario: Cancelled or replaced request
 - **WHEN** another planning operation supersedes candidate discovery
 - **THEN** the UI aborts the earlier request and ignores subsequent results from the old request
+
+#### Scenario: A traveler selects an answer on a place card
+
+- **WHEN** the traveler chooses สนใจ, ไม่เอา or ไม่แน่ใจ
+- **THEN** that place immediately shows one pressed answer with a checkmark, a green, red or amber fill respectively and a matching card outline. Selecting another answer moves the mark. Selecting the same answer again clears it. Viewing the map and reopening the question preserves the answer.
