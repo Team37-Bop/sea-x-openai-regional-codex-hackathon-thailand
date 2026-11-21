@@ -1,4 +1,5 @@
-import { dateAt, minutes, validTime, clock } from './domain.mjs';
+import { minutes, validTime, clock } from './domain.mjs';
+import { visitDate, visitAvailability, thaiWeekdays, foodRestriction, hasSuitableMeal } from '../web/itinerary-facts.js';
 
 const num = (value) => (Number.isFinite(Number(value)) ? Number(value) : 0);
 const first = (stop) => stop.t0 ?? stop.start;
@@ -18,34 +19,6 @@ export function dayStats(day) {
   };
 }
 export const total = (plan) => plan.days.reduce((sum, d) => sum + dayStats(d).cost, 0);
-const weekdays = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
-const thai = ['อาทิตย์', 'จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์', 'เสาร์'];
-const numDay = (d) => (Number.isInteger(d) ? d : weekdays.indexOf(String(d).slice(0, 3).toLowerCase()));
-function hoursFor(s, wd) {
-  const spec = s.days?.hours?.[weekdays[wd]] ?? s.hours?.[wd] ?? s.hours?.default ?? s.open;
-  const pair = typeof spec === 'string' ? spec.match(/\d{1,2}:\d{2}/g) : spec;
-  if (
-    !Array.isArray(pair) ||
-    pair.length < 2 ||
-    !pair.slice(0, 2).every((t) => validTime(t) || t === '24:00')
-  )
-    return null;
-  return pair;
-}
-function withinHours(s, pair) {
-  let [open, close] = pair.map(minutes);
-  let a = minutes(first(s)),
-    b = minutes(last(s));
-  if (b < a) b += 1440;
-  if (close < open) {
-    close += 1440;
-    if (a < open) {
-      a += 1440;
-      b += 1440;
-    }
-  }
-  return a >= open && b <= close;
-}
 const price = (n) => '฿' + Math.round(n).toLocaleString('en-US');
 export const sampleMembers = [
   { id: 'member-1', name: 'มิน', budget: 2600 },
@@ -88,7 +61,7 @@ export function checks(
         m,
       );
     }
-    const avoid = m.avoid || (m.veg ? 'เนื้อสัตว์ (กินมังสวิรัติ)' : '');
+    const avoid = foodRestriction(m);
     if (avoid)
       add(
         m.id + '/food',
@@ -97,8 +70,7 @@ export function checks(
           .filter(
             ({ s }) =>
               (s.meal || (s.k ?? s.kind) === 'food') &&
-              !(Array.isArray(s.diet) ? s.diet.length > 0 : s.diet) &&
-              !(s.veg && /มังสวิรัติ|วีแกน|vegetarian|vegan|กินเจ/i.test(avoid)),
+              !hasSuitableMeal(s, m),
           )
           .map(({ s, index }) => ref(s, index) + ' ยังไม่ระบุเมนูที่ทานได้'),
         m,
@@ -135,23 +107,11 @@ export function checks(
     mealIssues = [],
     driveIssues = [];
   for (const [index, d] of plan.days.entries()) {
-    const date = setup.startDate ? dateAt(setup.startDate, index) : d.date;
-    const wd = new Date(date + 'T00:00:00Z').getUTCDay();
+    const date = visitDate(d, index, setup);
     for (const s of d.stops) {
-      const hours = hoursFor(s, wd);
-      if (hours && !withinHours(s, hours))
-        hourIssues.push(ref(s, index) + ' ' + first(s) + '–' + last(s) + ' เปิด ' + hours.join('–'));
-      const only = s.days?.only?.map(numDay),
-        closed = (s.days?.closed ?? s.closedDays ?? []).map(numDay);
-      const closure = (s.closures ?? []).find((item) => (item?.date ?? item) === date);
-      const problem =
-        only?.length && !only.includes(wd)
-          ? 'เปิดเฉพาะวัน' + only.map((k) => thai[k]).join('/')
-          : closed.includes(wd)
-            ? 'ปิดวัน' + thai[wd]
-            : closure
-              ? 'ปิดวันที่ ' + date + (closure.why ? ' (' + closure.why + ')' : '')
-              : '';
+      const { weekday, reason: problem, hours, outsideHours } = visitAvailability(s, date);
+      if (outsideHours)
+        hourIssues.push(ref(s, index) + ' ' + first(s) + '–' + last(s) + ' เปิด ' + hours);
       if (problem)
         dayIssues.push(
           (s.n ?? s.name) +
@@ -160,7 +120,7 @@ export function checks(
             ' (วันที่ ' +
             (index + 1) +
             ', วัน' +
-            thai[wd] +
+            thaiWeekdays[weekday] +
             ' ' +
             date +
             ', id ' +

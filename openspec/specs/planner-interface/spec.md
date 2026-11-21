@@ -63,6 +63,18 @@ The planner SHALL present itinerary and bookings tabs. The itinerary view SHALL 
 - **WHEN** the organizer views a trip, previews a revised duration, applies it or undoes it
 - **THEN** the day selector displays one button per itinerary day, with its Thai weekday, calendar date, walking distance and per-person cost. The dates follow the itinerary across month and year boundaries. If the selected day is removed, selection moves to the last available day. Arrow-key navigation uses the displayed buttons.
 
+#### Scenario: Availability and dated warnings
+
+- **WHEN** the planner displays an itinerary or a preview
+- **THEN** each day indicates affected visits that are closed or scheduled outside opening hours, active rain forecasts, and pending plan changes when present. Stop cards explain known weekday restrictions, dated closures within the trip and hours for the visit's weekday. Overnight opening ranges are evaluated against the scheduled visit.
+
+#### Scenario: Place and travel facts
+
+- **WHEN** a visit has known walk-in, dress, outdoor or dietary information
+- **THEN** the stop card shows applicable facts, identifies members whose suitable meal is still unknown, and suppresses a walk-in claim when there is a booking. Confirmed facts from older itineraries remain readable.
+- **WHEN** a located incoming leg records a fare, travel rationale or named rest stops
+- **THEN** its row displays the per-person fare and those supplied details. Unresolved endpoints show only an available time estimate and an indication that the route is unknown.
+
 #### Scenario: Reservation follow-up
 
 - **WHEN** the current plan has calls to make or cancellations to handle
@@ -148,3 +160,8 @@ The desktop workspace SHALL keep the timeline or booking list at the left and th
 
 - **WHEN** the organizer sends a replan request while viewing bookings or the whole-trip map
 - **THEN** the itinerary and its daily map open, any previous place sheet closes, and the day returned by Bop is selected for an automatic change as well as a group decision.
+
+#### Scenario: A long trip in a narrow itinerary panel
+
+- **WHEN** five or more date buttons exceed the available width
+- **THEN** the date buttons stay in a single horizontally scrollable row. Swiping or using a trackpad reveals later days. Arrow keys wrap focus and bring the chosen day into view, and a card update preserves the current scroll position.

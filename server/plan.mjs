@@ -88,8 +88,10 @@ function repairActions(before, after, edits) {
         changes.push(prefix + 'ปรับเวลา ' + name + ' เป็น ' + stop.start + '–' + stop.end);
       else if ((old.cost || 0) !== (stop.cost || 0) || (old.leg?.cost || 0) !== (stop.leg?.cost || 0))
         changes.push(prefix + 'ปรับค่าใช้จ่ายที่ ' + name);
-      else if (edits.some((edit) => edit?.op === 'replace' && edit.id === stop.id &&
-          changed(...Object.keys(edit.stop ?? edit.spec ?? {}))))
+      else if (changed('walkin', 'dress') || old.leg?.why !== stop.leg?.why ||
+          JSON.stringify(old.leg?.rest) !== JSON.stringify(stop.leg?.rest) ||
+          edits.some((edit) => edit?.op === 'replace' && edit.id === stop.id &&
+            changed(...Object.keys(edit.stop ?? edit.spec ?? {}))))
         changes.push(prefix + 'ปรับรายละเอียดของ ' + name);
     }
   }

@@ -6,6 +6,7 @@ import { attachLocationSuggestions, localSuggestions } from './location-suggest.
 import { bindWorkspace, renderPeople } from './workspace-controls.js';
 import { installSetupExtras, chooseCandidates } from './setup-extras.js';
 import { createForecast } from './forecast.js';
+import { visitDate, visitAvailability, stopFacts, legFacts } from './itinerary-facts.js';
 import { coordinates, drawMap } from './map.js';
 import { fetchStream, readEvents } from './stream.js';
 import {
@@ -238,7 +239,7 @@ function dayTotals(day) {
   const stops = day?.stops || [];
   const cost = stops.reduce((sum, stop) => sum + Number(stop.cost || 0) + Number(stop.leg?.cost || 0), 0);
   const walk = stops.reduce((sum, stop) => sum + Number(stop.walk || stop.walkKm || 0) +
-    (stop.leg?.mode === 'walk' ? Number(stop.leg.km || 0) : 0), 0);
+    ((stop.leg?.mode ?? stop.leg?.m) === 'walk' ? Number(stop.leg.km || 0) : 0), 0);
   return 'เดิน ' + walk.toFixed(1) + ' กม. · ฿' + cash.format(cost);
 }
 function render() {
@@ -258,7 +259,11 @@ function render() {
   $('#plan-tab').setAttribute('aria-selected', String(view === 'plan'));
   $('#book-tab').setAttribute('aria-selected', String(view === 'book'));
   $('#whole-map').textContent = allDays ? 'ดูแผนที่ของวันที่เลือก' : 'ดูแผนที่ทั้งทริป';
-  $('#tabs').replaceChildren();
+  const dateStrip = $('#tabs');
+  const retainDateFocus = dateStrip.contains(document.activeElement);
+  const dateScroll = dateStrip.scrollLeft;
+  const previousDate = dateStrip.dataset.activeDate;
+  dateStrip.replaceChildren();
   $('#itinerary').replaceChildren();
   $('#checks-list').replaceChildren();
   $('#plan-repair').replaceChildren();
@@ -286,6 +291,10 @@ function render() {
   const stops = plan.days.flatMap((row) => row?.stops ?? []);
   const total = stops.reduce((sum, stop) => sum + Number(stop.cost || 0) + Number(stop.leg?.cost || 0), 0);
   $('#totals').textContent = '฿' + cash.format(total) + ' / คน';
+  const changes = new Map((preview ? describePlanChange(state.plan, plan).changes : []).map(change => [change.id, change]));
+  const changedDays = new Set([...changes.values()].flatMap((change) => [change.before?.day, change.after?.day]));
+  const dates = plan.days.map((item, i) => visitDate(item, i, plan.setup || state.setup));
+  const availability = new Map();
   for (let i = 0; i < plan.days.length; i++) {
     const tabDay = plan.days[i];
     const tab = button(itineraryDate(tabDay, i, plan.setup || state.setup), () => {
@@ -296,35 +305,70 @@ function render() {
       render();
     });
     tab.setAttribute('aria-current', i === state.selected ? 'true' : 'false');
-    if (tabDay) tab.append(node('small', dayTotals(tabDay)));
-    $('#tabs').append(tab);
+    if (tabDay) {
+      tab.append(node('small', dayTotals(tabDay)));
+      let closed = false, outside = false;
+      for (const stop of tabDay.stops) {
+        const fact = visitAvailability(stop, dates[i]);
+        availability.set(stop, fact);
+        closed ||= Boolean(fact.reason);
+        outside ||= !fact.reason && fact.outsideHours;
+      }
+      const warnings = [
+        changedDays.has(i + 1) && 'มีการปรับแผน',
+        closed && 'มีสถานที่ปิด',
+        outside && 'นอกเวลาเปิด',
+        forecast.dayLabel(plan, i),
+      ].filter(Boolean);
+      if (warnings.length) tab.append(node('small', warnings.join(' · '), 'day-notices'));
+    }
+    dateStrip.append(tab);
   }
+  dateStrip.scrollLeft = dateScroll;
+  const dateKey = day?.date || String(state.selected);
+  if (previousDate !== dateKey || dateStrip.dataset.wasVisible !== 'true') {
+    const current = dateStrip.children[state.selected];
+    if (current && dateStrip.clientWidth) {
+      const bounds = dateStrip.getBoundingClientRect();
+      const button = current.getBoundingClientRect();
+      if (button.left < bounds.left) dateStrip.scrollLeft += button.left - bounds.left;
+      else if (button.right > bounds.right) dateStrip.scrollLeft += button.right - bounds.right;
+    }
+  }
+  if (retainDateFocus) dateStrip.children[state.selected]?.focus({ preventScroll: true });
+  dateStrip.dataset.activeDate = dateKey;
+  dateStrip.dataset.wasVisible = String(Boolean(dateStrip.clientWidth));
   if (!day?.stops.length)
     $('#itinerary').append(node('p', day ? 'ยังไม่มีจุดแวะในวันนี้' : 'Bop กำลังจัดแผนวันนี้', 'empty'));
   else {
     const title = node('h3', day.title, 'day-title');
     $('#itinerary').append(title);
-    const changes = new Map((preview ? describePlanChange(state.plan, plan).changes : []).map(change => [change.id, change]));
-    for (const stop of day.stops) {
-      if (stop.leg)
-        $('#itinerary').append(
-          node(
-            'p',
-            (travel[stop.leg.mode] || 'เดินทาง') +
-              ' · ' +
-              stop.leg.min +
-              ' นาที · ' +
-              Number(stop.leg.km || 0).toFixed(1) +
-              ' กม.' +
-              (stop.leg.real ? ' · ตามถนนจริง' : ' · เส้นทางโดยประมาณ'),
-            'leg',
-          ),
-        );
+    for (const [order, stop] of day.stops.entries()) {
+      if (order && stop.leg) {
+        const leg = stop.leg;
+        const unlocated = leg.unlocated || stop.place?.fallback || day.stops[order - 1].place?.fallback;
+        const parts = unlocated ? [
+          'ยังไม่ทราบเส้นทางระหว่างจุดแวะ',
+          Number.isFinite(leg.min) && leg.min > 0 && 'เวลาเดินทางประมาณ ' + leg.min + ' นาที',
+        ] : [
+          travel[leg.mode ?? leg.m] || 'เดินทาง',
+          Number.isFinite(leg.min) && leg.min + ' นาที',
+          Number.isFinite(leg.km) && leg.km.toFixed(1) + ' กม.',
+          Number.isFinite(leg.cost) && '฿' + cash.format(leg.cost) + ' / คน',
+          leg.minSrc === 'web' ? 'เวลาตามแหล่งข้อมูล' : leg.real ? 'ตามถนนจริง' : 'เส้นทางโดยประมาณ',
+        ];
+        const line = node('p', parts.filter(Boolean).join(' · '), 'leg');
+        if (!unlocated)
+          for (const detail of legFacts(leg)) line.append(node('small', detail, 'leg-detail'));
+        $('#itinerary').append(line);
+      }
       const row = node('article', null, 'stop');
       row.dataset.stopId = stop.id;
       row.dataset.focused = String(stop.id === focusedStop);
-      const time = node('time', stop.start);
-      if (stop.end && stop.end !== stop.start) time.append(node('small', stop.end));
+      const name = stop.name || stop.n;
+      const start = stop.start || stop.t0, end = stop.end || stop.t1;
+      const time = node('time', start);
+      if (end && end !== start) time.append(node('small', end));
       const content = node('div');
       const meta = node('div', null, 'stop-meta');
       const chip = (text, status) => {
@@ -332,16 +376,24 @@ function render() {
         if (status) item.dataset.status = status;
         meta.append(item);
       };
-      const label = kind[stop.kind] || stop.kind || 'กิจกรรม';
+      const kindId = stop.kind || stop.k;
+      const label = kind[kindId] || kindId || 'กิจกรรม';
       chip(label);
       if (Number.isFinite(stop.cost)) chip('฿' + cash.format(stop.cost) + ' / คน');
-      const opening = Array.isArray(stop.open) ? stop.open.join('–') : stop.open;
-      if (typeof opening === 'string' && opening.trim()) chip('เปิด ' + opening);
-      const closure = (stop.closures || []).find(c => (c?.date ?? c) === day.date);
-      if (closure) chip('ปิดวันที่เลือก' + (closure.why ? ' · ' + closure.why : ''), 'closed');
+      const visit = availability.get(stop);
+      if (visit.reason) chip('ปิดในวันที่วางแผน · ' + visit.reason, 'closed');
+      else if (visit.weekRule) chip(visit.weekRule);
+      const opening = visit.hours || (typeof stop.open === 'string' ? stop.open.trim() : '');
+      if (opening && !visit.reason)
+        chip('เปิด ' + opening + (visit.outsideHours ? ' · แผนอยู่นอกเวลาเปิด' : ''), visit.outsideHours ? 'warn' : '');
+      for (const item of Array.isArray(stop.closures) ? stop.closures : []) {
+        const date = item?.date ?? item;
+        if (date !== dates[state.selected] && dates.includes(date))
+          chip('ปิด ' + dateLabel(date) + (item?.why ? ' · ' + item.why : ''));
+      }
       const interested = state.setup.members?.find(person => stop.star && person.id === stop.star);
       if (interested) chip(interested.name + ' อยากไป', 'wish');
-      if (stop.veg) chip('มีตัวเลือกมังสวิรัติ', 'done');
+      for (const [label, status] of stopFacts(stop, (plan.setup || state.setup).members, state.bookings[stop.id])) chip(label, status);
       const change = changes.get(stop.id);
       if (change?.kinds.includes('retimed')) time.append(node('del', change.before.start));
       if (change) {
@@ -351,8 +403,8 @@ function render() {
         content.append(note);
       }
       const heading = node('h3');
-      const openStop = button(stop.name, () => place(stop), 'stop-open');
-      openStop.setAttribute('aria-label', stop.name + ' ' + stop.start + ' ดูรายละเอียดสถานที่');
+      const openStop = button(name, () => place(stop), 'stop-open');
+      openStop.setAttribute('aria-label', name + ' ' + start + ' ดูรายละเอียดสถานที่');
       openStop.setAttribute('aria-controls', 'place-panel');
       if (stop.id === focusedStop) openStop.setAttribute('aria-current', 'true');
       heading.append(openStop);
@@ -1288,10 +1340,8 @@ async function adjust(command, day = state.selected) {
         }
         const key = counts[0][1] === counts[1][1] ? tie.querySelector('select').value : counts[0][0];
         const selected = pendingVotes?.options.find((option) => option.key === key);
-        if (selected) {
-          applyOption(selected, result.routes);
-          setBusy(false);
-        } else voteStatus.textContent = 'คะแนนเสมอ ให้ผู้จัดทริปเลือก';
+        if (selected) void chooseLocal(selected);
+        else voteStatus.textContent = 'คะแนนเสมอ ให้ผู้จัดทริปเลือก';
       },
       'primary',
     ),
@@ -1331,8 +1381,11 @@ if (localTrip)
   task(async () => {
     const response = await fetch('/api/local-trips/' + localTrip[1]);
     if (!response.ok) {
+      $('#form-error').textContent = response.status === 404
+        ? 'ไม่พบแผนที่บันทึกไว้ในเครื่องนี้แล้ว เริ่มสร้างทริปใหม่ได้'
+        : 'เปิดทริปที่บันทึกไว้ไม่ได้ ลองโหลดหน้าอีกครั้ง';
       setupDialog.showModal();
-      throw Error('ไม่พบลิงก์ทริปนี้แล้ว เริ่มสร้างทริปใหม่ได้');
+      return;
     }
     const saved = await response.json();
     state = {

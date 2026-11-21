@@ -912,13 +912,20 @@ dialog::backdrop {
   font-size: 1.12rem;
 }
 .day-tabs {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 90px), 1fr));
+  display: flex;
+  flex-wrap: nowrap;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  scrollbar-width: thin;
   align-items: stretch;
   padding: 6px 12px 8px;
   gap: 4px;
 }
 .day-tabs button {
+  flex: 1 0 max-content;
+  white-space: nowrap;
   display: grid;
   align-content: center;
   justify-content: stretch;
@@ -1072,6 +1079,8 @@ button[aria-pressed="true"] {
 .stop .stop-actions, .stop details, .stop .stop-menu { position: relative; z-index: 1; }
 .stop .stop-actions { width: fit-content; }
 .stop .stop-note { margin-top: 4px; }
+.day-tabs .day-notices { color: var(--red); }
+.leg .leg-detail { display: block; font-size: inherit; }
 .stop-note a { position: relative; z-index: 1; overflow-wrap: anywhere; }
 .leg {
   margin: 0 0 0 66px;
