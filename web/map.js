@@ -52,6 +52,60 @@ let map,
   pending,
   markers = [],
   previousCamera;
+
+const pinSpacing = 35;
+const detailZoom = 17.5;
+
+// Search outward in screen pixels. Each marker keeps its true geographic coordinate.
+function spreadPins() {
+  if (!map || !markers.length) return;
+  const placed = [];
+  const { clientWidth: width, clientHeight: height } = map.getContainer();
+  const clear = (x, y) => placed.every((point) => Math.hypot(x - point.x, y - point.y) >= pinSpacing - 0.1);
+  const focused = markers.find((item) => item.marker.getElement().dataset.focused === 'true');
+  const order = focused ? [focused, ...markers.filter((item) => item !== focused)] : markers;
+  for (const { marker, leader } of order) {
+    const anchor = map.project(marker.getLngLat());
+    if (![anchor.x, anchor.y].every(Number.isFinite)) continue;
+    let dx = 0,
+      dy = 0;
+    if (!clear(anchor.x, anchor.y)) {
+      let fallback;
+      const onScreen = anchor.x >= 0 && anchor.x <= width && anchor.y >= 0 && anchor.y <= height;
+      search: for (let ring = 1; ; ring++) {
+        const candidates = ring * 6;
+        for (let j = 0; j < candidates; j++) {
+          const angle = (2 * Math.PI * j) / candidates;
+          const x = Math.round(Math.cos(angle) * pinSpacing * ring);
+          const y = Math.round(Math.sin(angle) * pinSpacing * ring);
+          const left = anchor.x + x,
+            top = anchor.y + y;
+          if (!clear(left, top)) continue;
+          fallback ??= [x, y];
+          if (onScreen && (left < 16 || left > width - 16 || top < 16 || top > height - 16)) continue;
+          [dx, dy] = [x, y];
+          break search;
+        }
+        if (fallback && ring * pinSpacing > Math.min(width, height) / 2) {
+          [dx, dy] = fallback;
+          break;
+        }
+      }
+    }
+    placed.push({ x: anchor.x + dx, y: anchor.y + dy });
+    const old = marker.getOffset();
+    if (old.x === dx && old.y === dy) continue;
+    marker.setOffset([dx, dy]);
+    const length = Math.hypot(dx, dy);
+    leader.hidden = !length;
+    if (length) {
+      // Start the connector outside the numbered circle and finish at the actual route endpoint.
+      leader.style.width = length - 13 + 'px';
+      leader.style.transform = 'rotate(' + Math.atan2(-dy, -dx) + 'rad) translateX(13px)';
+    }
+  }
+}
+
 function paint() {
   if (!map?.isStyleLoaded() && !map?.getSource('trip')) return;
   const { days, routes, before, open, focusedStop } = pending;
@@ -59,7 +113,8 @@ function paint() {
   const points = [],
     features = [],
     modesUsed = new Set();
-  for (const marker of markers) marker.remove();
+  const activePin = document.activeElement?.closest('.map-pin')?.dataset.mapStop;
+  for (const { marker } of markers) marker.remove();
   markers = [];
   function pin(stop, p, index, ghost) {
     points.push(p);
@@ -67,12 +122,34 @@ function paint() {
     const el = document.createElement('button');
     el.className = 'map-pin' + (ghost ? ' removed' : '');
     el.type = 'button';
+    el.setAttribute('role', 'button');
+    el.dataset.mapStop = stop.id;
     el.dataset.focused = String(stop.id === focusedStop);
     el.textContent = ghost ? '−' : String(index + 1);
     el.title = (ghost ? 'นำออก · ' : '') + stop.name;
     el.setAttribute('aria-label', el.title);
-    el.onclick = () => open(stop);
-    markers.push(new library.Marker({ element: el }).setLngLat(p).addTo(map));
+    const leader = document.createElement('span');
+    leader.hidden = true;
+    leader.setAttribute('aria-hidden', 'true');
+    Object.assign(leader.style, {
+      position: 'absolute',
+      pointerEvents: 'none',
+      left: '50%',
+      top: '50%',
+      height: '2px',
+      background: '#53657b',
+      boxShadow: '0 0 1px white',
+      transformOrigin: 'left center',
+    });
+    el.append(leader);
+    el.onclick = (event) => {
+      event.stopPropagation();
+      previousCamera = undefined;
+      open(stop);
+    };
+    const marker = new library.Marker({ element: el }).setLngLat(p).addTo(map);
+    markers.push({ marker, leader });
+    if (stop.id === activePin) el.focus({ preventScroll: true });
   }
   for (const day of days.filter(Boolean)) {
     const stops = day.stops || [];
@@ -130,11 +207,12 @@ function paint() {
     [...modesUsed].map((m) => labels[m] || m).join(' · ') +
     (features.some((f) => f.properties.approx) ? ' · เส้นประโดยประมาณ' : '');
   map.resize();
-  const camera = JSON.stringify([focusedStop, days.map(d => d?.stops?.map(s => [s.id, s.ll]))]);
+  spreadPins();
+  const camera = JSON.stringify([focusedStop, days.map((d) => d?.stops?.map((s) => [s.id, s.ll]))]);
   if (camera === previousCamera) return;
   previousCamera = camera;
   if (focusPoint) {
-    map.easeTo({ center: focusPoint, zoom: Math.max(map.getZoom(), 14), duration: 220 });
+    map.easeTo({ center: focusPoint, zoom: Math.max(map.getZoom(), detailZoom), duration: 280 });
   } else if (points.length) {
     const bounds = points.reduce((box, p) => box.extend(p), new library.LngLatBounds(points[0], points[0]));
     map.fitBounds(bounds, { padding: 35, maxZoom: 14, duration: 0 });
@@ -156,6 +234,7 @@ export function drawMap(days, routes, open, before, focusedStop) {
       const dark = matchMedia('(prefers-color-scheme: dark)');
       const style = () => 'https://tiles.openfreemap.org/styles/' + (dark.matches ? 'dark' : 'positron');
       map = new lib.Map({ container, style: style(), center: [100.5, 13.75], zoom: 5, scrollZoom: false });
+      for (const event of ['zoom', 'rotate', 'pitch', 'resize', 'moveend']) map.on(event, spreadPins);
       let baseReady = false;
       map.on('error', () => {
         if (!baseReady && !map.isStyleLoaded()) {
