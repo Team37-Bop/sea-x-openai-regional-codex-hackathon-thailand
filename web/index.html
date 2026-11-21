@@ -241,13 +241,17 @@
                 <button id="day-map" type="button" aria-pressed="true">เฉพาะวันที่เลือก</button>
                 <button id="whole-map" type="button" aria-pressed="false">ทั้งทริป</button>
               </div>
+              <span id="overview-hint" hidden>เลือกจุดแวะเพื่อดูเส้นทางของวันนั้น</span>
+              <details id="map-key" hidden>
+                <summary><span id="map-strokes" aria-hidden="true"></span>สัญลักษณ์เส้นทาง</summary>
+                <ul id="leg-label" aria-label="วิธีเดินทางและลักษณะเส้นบนแผนที่"></ul>
+              </details>
               <span id="map-location-status" class="map-accessible-text" role="status" hidden></span>
             </div>
             <div class="map-viewport">
               <div id="map" aria-label="แผนที่สถานที่และเส้นทาง">
                 <p class="empty" id="map-fallback">แผนที่กำลังโหลด</p>
               </div>
-              <ul id="leg-label" aria-label="วิธีเดินทางในทริปและสัญลักษณ์เส้นทาง" hidden></ul>
               <aside id="place-panel" class="place-reader" hidden aria-labelledby="place-title">
                 <div id="place-panel-content"></div>
               </aside>

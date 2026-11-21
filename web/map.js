@@ -27,7 +27,12 @@ function routeLabel({ mode, stroke, gap }) {
   return (labels[mode] || mode || 'การเดินทาง') + (stroke === 'estimate' ? ' · เส้นทางโดยประมาณ' : '');
 }
 const modeStroke = mode => mode === 'walk' ? 'walk' : mode === 'transit' || isScheduledService(mode) ? 'transit' : 'road';
-export function routeLegendEntries(tripDays, features = []) {
+export function routeLegendEntries(tripDays, features) {
+  if (features) {
+    const used = new Map();
+    for (const { properties } of features) used.set(routeLabel(properties), properties);
+    return [...used.values()];
+  }
   const modes = new Set();
   for (const day of tripDays) {
     for (const stop of day?.stops || []) {
@@ -40,17 +45,16 @@ export function routeLegendEntries(tripDays, features = []) {
   for (const mode of new Set([...Object.keys(labels), ...modes])) {
     if (modes.has(mode)) entries.push({ mode, stroke: modeStroke(mode), color: colors[mode] || '#426353' });
   }
-  const extra = new Map();
-  for (const { properties } of features) {
-    if (properties.approx || ['estimate', 'removed', 'sequence', 'access'].includes(properties.stroke))
-      extra.set(routeLabel(properties), properties);
-  }
-  return [...entries, ...extra.values()];
+  return entries;
 }
-function renderLegend(tripDays, features) {
+function renderLegend(days, features, overview) {
+  const key = document.querySelector('#map-key');
   const legend = document.querySelector('#leg-label');
+  const preview = document.querySelector('#map-strokes');
+  document.querySelector('#overview-hint').hidden = !overview;
+  preview.replaceChildren();
   const items = [];
-  for (const entry of routeLegendEntries(tripDays, features)) {
+  for (const entry of overview ? [] : routeLegendEntries(days, features)) {
     const { color, stroke } = entry;
     const style = strokes[stroke];
     const item = document.createElement('li');
@@ -65,11 +69,12 @@ function renderLegend(tripDays, features) {
     if (style.opacity) line.setAttribute('opacity', style.opacity);
     if (style.dash) line.setAttribute('stroke-dasharray', style.dash.map(n => n * style.width).join(' '));
     swatch.append(line);
+    if (items.length < 3) preview.append(swatch.cloneNode(true));
     item.append(swatch, document.createTextNode(routeLabel(entry)));
     items.push(item);
   }
   legend.replaceChildren(...items);
-  legend.hidden = !items.length;
+  key.hidden = !items.length;
 }
 export function coordinates(value) {
   const pair = Array.isArray(value)
@@ -128,13 +133,19 @@ export function dayRouteFeatures(day, routes, drafting = false) {
     const point = visitCoordinates(stop);
     if (!point) continue;
     const prior = previous;
-    previous = { point, index: i, ordinal: stop.ordinal };
+    previous = { point, index: i, ordinal: stop.ordinal, stop };
     if (!prior || distance(prior.point, point) === 0) continue;
     const leg = stop.leg;
     const gap = prior.index !== i - 1 || (Number.isInteger(prior.ordinal) &&
       Number.isInteger(stop.ordinal) && stop.ordinal !== prior.ordinal + 1);
+    const stops = { from: prior.stop.name || prior.stop.n || 'จุดที่ ' + (prior.index + 1),
+      to: stop.name || stop.n || 'จุดที่ ' + (i + 1), date: day.date || '' };
     if (gap || !leg || leg.unlocated) {
-      if (!drafting) features.push(connector(prior.point, point, 'sequence', gap));
+      if (!drafting) {
+        const hint = connector(prior.point, point, 'sequence', gap);
+        Object.assign(hint.properties, stops);
+        features.push(hint);
+      }
       continue;
     }
     const recorded = leg.mode || leg.m;
@@ -143,16 +154,19 @@ export function dayRouteFeatures(day, routes, drafting = false) {
     const stored = !drafting && !service && leg.real === true && Array.isArray(leg.geometry) ? leg.geometry : null;
     const record = service && !leg.key?.startsWith(mode + '|') ? null : routes?.[leg.key] || stored;
     const line = segment(prior.point, point, record, mode, false, service || leg.real === false);
+    Object.assign(line.properties, stops);
     if (drafting && line.properties.approx) continue;
     features.push(line);
     const geometry = line.geometry.coordinates;
     if (leg.km >= 100) longPoints.push(...geometry);
     if (!drafting && !line.properties.approx) {
       // Routers snap their endpoints to the street. Keep the measured polyline intact.
-      if (distance(prior.point, geometry[0]) > 1e-12)
-        features.push(connector(prior.point, geometry[0], 'access'));
-      if (distance(geometry.at(-1), point) > 1e-12)
-        features.push(connector(geometry.at(-1), point, 'access'));
+      for (const [a, b] of [[prior.point, geometry[0]], [geometry.at(-1), point]]) {
+        if (distance(a, b) <= 1e-12) continue;
+        const access = connector(a, b, 'access');
+        Object.assign(access.properties, stops);
+        features.push(access);
+      }
     }
   }
   return { features, longPoints };
@@ -175,8 +189,8 @@ const lineFilter = stroke => ['all', ['==', ['get', 'stroke'], stroke], ['==', [
 // room below the chat than between the chat and the place sheet.
 function visibleFrame(mapBox) {
   let areas = [mapBox];
-  for (const id of ['place-panel', 'chat-response']) {
-    const dock = document.getElementById(id)?.getBoundingClientRect();
+  for (const selector of ['#place-panel', '#chat-response', '#map .maplibregl-ctrl-attrib']) {
+    const dock = document.querySelector(selector)?.getBoundingClientRect();
     if (!dock?.width || !dock.height) continue;
     areas = areas.flatMap(area => {
       if (dock.left >= area.right || dock.right <= area.left || dock.top >= area.bottom || dock.bottom <= area.top)
@@ -344,7 +358,7 @@ function queuePins() {
 
 function paint() {
   if (!map?.isStyleLoaded() && !map?.getSource('trip')) return;
-  const { days, routes, before, open, focusedStop, drafting, center } = pending;
+  const { days, routes, before, open, focusedStop, drafting, center, overview } = pending;
   let focusPoint;
   const points = [], features = [];
   const activePin = document.activeElement?.closest('.map-pin')?.dataset.mapStop;
@@ -364,8 +378,8 @@ function paint() {
     const when = [Number.isFinite(date) && visitDate.format(date), (drafting && open ? 'ตัวเลือก ' : 'จุดที่ ') + ordinal, stop.start].filter(Boolean).join(' · ');
     const title = (ghost ? 'นำออก · ' : '') + (stop.name || stop.n || 'จุดแวะ') +
       (stop.place?.source === 'model' ? ' · ตำแหน่งโดยประมาณ' : '');
-    const overview = days.length > 1;
-    el.classList.toggle('overview-pin', overview);
+    const overviewPin = overview || (drafting && days.length > 1);
+    el.classList.toggle('overview-pin', overviewPin);
     const [face, badge, tag] = ['map-pin-face', 'map-pin-count', 'map-pin-name'].map(cls => {
       const span = document.createElement('span');
       span.className = cls;
@@ -375,7 +389,7 @@ function paint() {
     });
     tag.textContent = stop.name || stop.n;
     const marker = new library.Marker({ element: el }).setLngLat(p).addTo(map);
-    const entry = {marker, el, stop, title, when, number: ghost ? '−' : String(ordinal), overview, open, face, badge, tag, order: markers.length};
+    const entry = {marker, el, stop, title, when, number: ghost ? '−' : String(ordinal), overview: overviewPin, open, face, badge, tag, order: markers.length};
     el.onclick = event => { event.stopPropagation(); showVisits(entry); };
     markers.push(entry);
     if (stop.id === activePin) el.focus({ preventScroll: true });
@@ -386,6 +400,7 @@ function paint() {
       const p = visitCoordinates(stop);
       if (p) pin(stop, p, i, false, day);
     });
+    if (overview) continue;
     const lines = dayRouteFeatures(day, routes, drafting);
     features.push(...lines.features);
     points.push(...lines.longPoints);
@@ -423,24 +438,27 @@ function paint() {
       });
       map.on('click', id, (event) => {
         routePopup?.remove();
+        const leg = event.features[0].properties;
+        const date = Date.parse(leg.date);
+        const path = [leg.from, leg.to].filter(Boolean).join(' → ');
+        const description = [Number.isFinite(date) && visitDate.format(date), path, routeLabel(leg)].filter(Boolean);
         routePopup = new library.Popup()
           .setLngLat(event.lngLat)
-          .setText(routeLabel(event.features[0].properties) +
-            (event.features[0].properties.approx ? '' : ' · ตามถนนจริง'))
+          .setText(description.join(' · '))
           .addTo(map);
       });
     }
   }
-  renderLegend(pending.tripDays, features);
+  renderLegend(days, features, overview);
   arrangePins();
   const bounds = points.length && points.reduce((box, p) => box.extend(p), new library.LngLatBounds()).toArray();
   const visibleDays = days.map(day => day && [day.date, day.stops?.map(stop => stop.id)]);
   cameraTarget = { bounds, focus: focusPoint, focusedStop, drafting, center, visibleDays };
   scheduleCamera();
 }
-export function drawMap(days, routes, open, before, focusedStop, draft, tripDays = days) {
+export function drawMap(days, routes, open, before, focusedStop, draft, overview = false) {
   const drafting = Boolean(draft), center = coordinates(draft?.cityLL);
-  if (draft?.restart || pending?.drafting !== drafting || (!drafting && pending?.days[0] !== days[0])) {
+  if (draft?.restart || pending?.drafting !== drafting || pending?.overview !== overview || (!drafting && pending?.days[0] !== days[0])) {
     // MapLibre's worker can still be painting the preceding GeoJSON tiles.
     // Hide that revision immediately while the new source data is being indexed.
     overlayRevision++;
@@ -457,13 +475,13 @@ export function drawMap(days, routes, open, before, focusedStop, draft, tripDays
     cameraTarget = drafting ? { drafting, center } : null;
     if (map) scheduleCamera();
   }
-  pending = { days, routes, open, before, focusedStop, drafting, center, tripDays };
+  pending = { days, routes, open, before, focusedStop, drafting, center, overview };
   if (map && (map.isStyleLoaded() || map.getSource('trip'))) {
     paint();
     return;
   }
   // A saved trip already has travel modes while the map worker is still loading.
-  renderLegend(tripDays);
+  renderLegend(days, undefined, overview);
   if (map || loading || (!draft && !days.some((day) => day?.stops?.length))) return;
   loading = import('/assets/maplibre-gl.mjs?v=6.19.0')
     .then((lib) => {
@@ -493,13 +511,11 @@ export function drawMap(days, routes, open, before, focusedStop, draft, tripDays
       map.addControl(new lib.NavigationControl({ showCompass: false }), 'bottom-right');
       const mapCard = container.closest('.map-card');
       const attribution = container.querySelector('.maplibregl-ctrl-attrib');
-      const legend = document.querySelector('#leg-label');
       const controlSizes = new ResizeObserver(() => {
         mapCard.style.setProperty('--map-credit-space', (attribution?.offsetHeight || 0) + 18 + 'px');
-        mapCard.style.setProperty('--map-legend-height', (legend?.offsetHeight || 0) + 'px');
+        scheduleCamera();
       });
       if (attribution) controlSizes.observe(attribution);
-      if (legend) controlSizes.observe(legend);
       map.on('style.load', () => {
         baseReady = true;
         for (const layer of map.getStyle().layers || []) {

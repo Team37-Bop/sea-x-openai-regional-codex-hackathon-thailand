@@ -23,4 +23,5 @@ export function legMode(value) {
   if (Object.hasOwn(legLabels, key)) return key;
   if (Object.hasOwn(aliases, key)) return aliases[key];
 }
-export const isScheduledService = mode => ['rail', 'metro', 'ferry', 'bus'].includes(legMode(mode));
+// A road router cannot determine the route of public transport, even when its subtype is unknown.
+export const isScheduledService = mode => ['transit', 'rail', 'metro', 'ferry', 'bus'].includes(legMode(mode));

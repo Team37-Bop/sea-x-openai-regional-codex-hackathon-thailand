@@ -1873,40 +1873,46 @@ body:has(.planning-map) { height: 100dvh; overflow: hidden; }
   inset: 0;
   height: 100%;
 }
-.map-stage #leg-label {
-  position: absolute;
-  z-index: 1;
-  inset-inline-start: max(12px, env(safe-area-inset-left));
-  max-inline-size: calc(100% - 68px);
-  bottom: max(var(--map-credit-space, 44px), calc(env(safe-area-inset-bottom) + 8px));
-  width: fit-content;
-  margin: 0;
-  padding: 5px 10px;
-  list-style: none;
-  color: var(--ink);
-  background: var(--paper);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  box-shadow: 0 2px 8px #24311e14;
-  pointer-events: none;
+#overview-hint {
+  margin-inline-start: auto;
+  color: var(--muted);
+  font-size: .77rem;
 }
-.map-stage #leg-label:not([hidden]) {
+#map-key { margin-inline-start: auto; min-width: 0; }
+#map-key summary {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 28px;
+  cursor: pointer;
+  color: var(--ink);
+  font-size: .78rem;
+  font-weight: 600;
+}
+#map-key summary::-webkit-details-marker { display: none; }
+#map-key summary::after { content: '⌄'; }
+#map-key[open] summary::after { transform: rotate(180deg); }
+#map-strokes { display: inline-flex; }
+#map-strokes svg { width: 18px; height: 10px; }
+.map-stage #leg-label {
+  position: static;
   display: flex;
   flex-wrap: wrap;
   gap: 4px 12px;
+  max-height: 5rem;
+  overflow-y: auto;
+  margin: 0;
+  padding: 3px 0 5px;
+  list-style: none;
+  border: 0;
+  background: none;
+  color: var(--ink);
+  font-size: .77rem;
 }
-#leg-label li {
-  min-width: 0;
-  overflow-wrap: anywhere;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-#leg-label svg {
-  width: 38px;
-  height: 10px;
-  flex: none;
-}
+#leg-label li { display: flex; align-items: center; gap: 4px; }
+#leg-label svg { width: 32px; height: 10px; flex: none; }
+.map-toolbar:has(#map-key[open]) { align-items: flex-start; }
+.map-toolbar { gap: 5px 10px; flex-wrap: wrap; }
 #chat-response {
   grid-area: 2 / 1;
   place-self: start end;
@@ -1929,15 +1935,9 @@ body:has(.planning-map) { height: 100dvh; overflow: hidden; }
 @media (min-width: 861px) {
   .map-stage .map-card { container: map-workspace / inline-size; }
   .map-viewport #place-panel { inset-block-end: var(--map-credit-space, 44px); }
-  @container map-workspace (min-width: 836px) {
-    .map-viewport:has(#place-panel:not([hidden])) #leg-label {
-      inset-inline-start: calc(min(370px, 61%) + 22px);
-      max-inline-size: calc(100% - min(370px, 61%) - 78px);
-    }
-  }
   @container map-workspace (max-width: 835px) {
     .map-viewport #place-panel {
-      inset-block-end: calc(var(--map-credit-space, 44px) + var(--map-legend-height, 0px) + 8px);
+      inset-block-end: calc(var(--map-credit-space, 44px) + 8px);
     }
     .map-viewport:has(#place-panel:not([hidden])) + #chat-response {
       grid-row: 3;

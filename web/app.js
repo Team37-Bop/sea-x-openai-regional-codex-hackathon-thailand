@@ -125,7 +125,7 @@ function newTrip() {
   pendingVotes = null;
   history.length = 0;
   view = 'plan';
-  allDays = !state.demo;
+  allDays = false;
   setItineraryExpanded(true);
   clearChat();
   $('#command').value = '';
@@ -665,7 +665,7 @@ function render() {
       preview && !allDays ? state.plan.days[state.selected] : null,
       focusedStop,
       undefined,
-      plan.days,
+      allDays,
     );
 }
 window.addEventListener(
@@ -731,6 +731,7 @@ function place(stop) {
   const plan = preview?.plan || state.plan;
   const index = plan.days.findIndex(day => day?.stops?.some(item => item.id === stop.id));
   if (index >= 0) state.selected = index;
+  allDays = false;
   if (view !== 'plan') view = 'plan';
   focusedStop = stop.id;
   if (!preview && !state.sample && !state.demo && needsLodgingChoice(plan) && isLodgingStop(stop)) {

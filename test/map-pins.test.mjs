@@ -21,7 +21,7 @@ test('coincident visits retain every target at one true anchor; zoom separates n
   ]);
 });
 
-test('the trip key lists modes from every known day, including unresolved legs, before any line is available', () => {
+test('the pending key uses supplied days and the rendered key describes only visible strokes', () => {
   const trip = [
     { stops: [{}, { leg: { mode: 'car' } }] },
     undefined,
@@ -33,7 +33,7 @@ test('the trip key lists modes from every known day, including unresolved legs, 
   assert.deepEqual(routeLegendEntries([{ stops: [{ name: 'Candidate' }] }]), []);
   const feature = stroke => ({ properties: { mode: 'transit', stroke, color: '#695396' } });
   const entries = routeLegendEntries(trip, [feature('transit'), feature('estimate'), feature('estimate'), feature('removed')]);
-  assert.deepEqual(entries.map(e => e.stroke), ['walk', 'transit', 'road', 'estimate', 'removed']);
+  assert.deepEqual(entries.map(e => e.stroke), ['transit', 'estimate', 'removed']);
 });
 
 test('the key names each identified public service and keeps an unspecified transit leg generic', async () => {
@@ -78,4 +78,19 @@ test('a road snapped away from the POIs keeps its exact measured geometry and ge
   assert.deepEqual(dayRouteFeatures(day,{r:{geom:geometry}},true).features.map(f=>f.properties.stroke), ['road']);
   day.stops[1].leg.geometry=geometry.map(([lng, lat])=>[lat, lng]);
   assert.deepEqual(dayRouteFeatures(day,{}).features[0].geometry.coordinates, geometry);
+});
+
+test('a saved generic transit leg identifies its date and endpoints without reusing a car route', () => {
+  const key = 'car|100,15;101,15';
+  const geometry = [[100, 15], [100.6, 15.08], [101, 15]];
+  const day = { date: '2026-11-26', stops: [
+    { name: 'Station', ll: [15, 100] },
+    { n: 'Museum', ll: [15, 101], leg: { m: 'transit', real: true, key, geometry } },
+  ] };
+  const { features: [line] } = dayRouteFeatures(day, { [key]: { geom: geometry } });
+  const { date, from, to, mode, stroke } = line.properties;
+  assert.deepEqual({ date, from, to, mode, stroke }, {
+    date: day.date, from: 'Station', to: 'Museum', mode: 'transit', stroke: 'estimate',
+  });
+  assert.deepEqual(line.geometry.coordinates, [[100, 15], [101, 15]]);
 });
