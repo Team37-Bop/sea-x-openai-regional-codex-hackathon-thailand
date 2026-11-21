@@ -39,6 +39,7 @@
   }
 }
 @media (max-width: 860px) {
+  html:has(#place-panel:not([hidden])) { overflow-anchor: none; }
   #place-panel {
     order: 2;
     border-inline-start: 0;

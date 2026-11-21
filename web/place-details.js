@@ -381,6 +381,7 @@ export async function openPlaceSheet(context) {
   );
   if ((sample && !context.liveResearch) || initial) return;
   async function research() {
+    content.querySelector('.pd-heading').after(live);
     live.textContent = 'กำลังค้นรายละเอียดและรูปสถานที่…';
     try {
       const response = await fetch('/api/place-info', {
@@ -412,6 +413,7 @@ export async function openPlaceSheet(context) {
         expires: Date.now() + 30 * 60_000,
       });
       paintInfo(reader, visit, stop, terminal.info, false);
+      content.append(live);
       live.textContent =
         terminal.info.confidence === 'web'
           ? 'รายละเอียดจากแหล่งข้อมูลที่ระบุ'

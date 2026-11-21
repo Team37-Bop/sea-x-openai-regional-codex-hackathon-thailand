@@ -317,20 +317,29 @@ function render() {
       if (stop.end && stop.end !== stop.start) time.append(node('small', stop.end));
       const content = node('div');
       const meta = node('div', null, 'stop-meta');
-      const chip = (text, style = '') => meta.append(node('span', text, 'stop-chip ' + style));
+      const chip = (text, status) => {
+        const item = node('span', text, 'stop-chip');
+        if (status) item.dataset.status = status;
+        meta.append(item);
+      };
       const label = kind[stop.kind] || stop.kind || 'กิจกรรม';
       chip(label);
       if (Number.isFinite(stop.cost)) chip('฿' + cash.format(stop.cost) + ' / คน');
       const opening = Array.isArray(stop.open) ? stop.open.join('–') : stop.open;
       if (typeof opening === 'string' && opening.trim()) chip('เปิด ' + opening);
       const closure = (stop.closures || []).find(c => (c?.date ?? c) === day.date);
-      if (closure) chip('ปิดวันที่เลือก' + (closure.why ? ' · ' + closure.why : ''), 'warning');
+      if (closure) chip('ปิดวันที่เลือก' + (closure.why ? ' · ' + closure.why : ''), 'closed');
       const interested = state.setup.members?.find(person => stop.star && person.id === stop.star);
       if (interested) chip(interested.name + ' อยากไป', 'wish');
-      if (stop.veg) chip('มีตัวเลือกมังสวิรัติ', 'diet');
+      if (stop.veg) chip('มีตัวเลือกมังสวิรัติ', 'done');
       const change = changes.get(stop.id);
       if (change?.kinds.includes('retimed')) time.append(node('del', change.before.start));
-      if (change) content.append(node('small', change.kinds.includes('added') ? 'เพิ่มในแผน' : 'ปรับจากแผนเดิม', 'stop-change'));
+      if (change) {
+        const added = change.kinds.includes('added');
+        const note = node('small', added ? 'เพิ่มในแผน' : 'ปรับจากแผนเดิม', 'stop-change');
+        note.dataset.status = added ? 'added' : 'moved';
+        content.append(note);
+      }
       content.append(node('h3', stop.name), meta);
       const badge = forecast.badge(stop, state.selected, plan);
       if (badge) content.append(badge);
