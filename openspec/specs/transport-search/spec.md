@@ -6,6 +6,20 @@ Find one-way travel to or from a trip and carry the selected option into the iti
 
 ## Requirements
 
+### Requirement: Travel preferences for each direction
+
+The setup form SHALL provide separate visible outbound and return mode groups. Each defaults to “ให้ Bop เลือกให้” and offers flight, bus, train and driving. In recommendation mode, the organizer can enter the outbound origin or return destination and Bop compares services while planning. An empty location SHALL stay empty and skip service lookup for that direction.
+
+#### Scenario: Mix a recommendation with a fixed service
+
+- **WHEN** the organizer delegates the outbound mode and enters a train departure time for the return
+- **THEN** Bop searches outbound services from the supplied origin and preserves the return train and time. Reopening setup restores those two preferences independently.
+
+#### Scenario: Ask Bop to find a service of a chosen mode
+
+- **WHEN** the organizer selects flight, bus or train on one leg
+- **THEN** they can ask Bop to find a service of that mode during planning, compare and choose one in setup, or turn off the finder and supply their own time. Switching modes clears any previously selected service and time for that leg.
+
 ### Requirement: Direction and response envelope
 
 `POST /api/transport-options` SHALL accept a JSON object containing `setup` and `dir` (`go` or `back`). It SHALL normalize the setup, select the corresponding `arrive` or `depart` leg and return Thai NDJSON progress followed by one terminal event. Success carries `options`, elapsed `ms` and model `usage`.

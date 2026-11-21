@@ -52,7 +52,7 @@ function project(setup, summary) {
     if (members.length === 20) break;
   }
   return {
-    title: compact(setup.title || setup.city, 200) || 'ทริปของเรา',
+    title: compact(setup.title, 200) || compact(setup.city, 200) || 'ทริปของเรา',
     summary: compact(summary, 2000),
     startDate: setup.startDate,
     endDate,
@@ -179,6 +179,8 @@ export function createLineService(store = operationalStore, request = (...args) 
       headers: { ...(auth ? { Authorization: 'Bearer ' + token() } : {}), ...options.headers },
       signal: AbortSignal.timeout(10000),
     });
+    if (response.status === 409 && options.headers?.['X-Line-Retry-Key'] && response.headers.get('x-line-accepted-request-id'))
+      return {};
     if (!response.ok)
       throw failure(
         response.status === 429
@@ -190,19 +192,20 @@ export function createLineService(store = operationalStore, request = (...args) 
       );
     return response.status === 204 ? {} : response.json();
   }
-  const send = (endpoint, body) =>
+  const send = (endpoint, body, retryKey) =>
     lineApi('/v2/bot/message/' + endpoint, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...(retryKey && { 'X-Line-Retry-Key': retryKey }) },
       body: JSON.stringify({ ...body, messages: body.messages.slice(0, 5) }),
     });
   const reply = async (event, ...messages) => {
     if (event.replyToken) await send('reply', { replyToken: event.replyToken, messages });
   };
-  async function push(trip, ...messages) {
+  async function push(trip, message, retryKey) {
     if (!trip.groupId) return { posted: false };
-    if (!(await store.consumePush())) return { posted: false, quotaReached: true };
-    await send('push', { to: trip.groupId, messages });
+    required();
+    if (!(await store.consumePush(retryKey))) return { posted: false, quotaReached: true };
+    await send('push', { to: trip.groupId, messages: [message] }, retryKey);
     return { posted: true };
   }
   async function create(input) {
@@ -259,7 +262,16 @@ export function createLineService(store = operationalStore, request = (...args) 
     if (action === 'post') {
       const message = compact(input.text, 5000);
       if (!message) throw invalid('กรุณาใส่ข้อความ');
-      return push(trip, text('Bop: ' + message.replace(/^(?:Bop:\s*)+/i, '')));
+      const outgoing = text('Bop: ' + message.replace(/^(?:Bop:\s*)+/i, ''));
+      let retryKey;
+      if (input.retryKey != null) {
+        if (!/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(input.retryKey))
+          throw invalid('รหัสส่งข้อความไม่ถูกต้อง');
+        // Scope supplier retries to this linked group and this exact text.
+        const hex = hash(JSON.stringify([trip.tripId, trip.groupId, outgoing.text, input.retryKey])).slice(0, 32);
+        retryKey = hex.replace(/^(........)(....)(....)(....)(............)$/, '$1-$2-$3-$4-$5');
+      }
+      return push(trip, outgoing, retryKey);
     }
     if (action === 'vote.start') {
       const options = [];
@@ -292,16 +304,20 @@ export function createLineService(store = operationalStore, request = (...args) 
       return { vote: voteView(vote), ...(await push(next, voteFlex(next))) };
     }
     if (action === 'vote.close') {
+      const expectedVoteId = input.voteId ?? trip.vote?.id;
+      let closedHere;
       const next = await store.mutateTrip(id, (current) => {
         const vote = current.vote;
-        if (!vote?.options.some((o) => o.key === input.option)) throw invalid('ไม่พบตัวเลือกนี้');
-        if (vote.status === 'CLOSED') return;
+        if (!vote || vote.id !== expectedVoteId) throw invalid('โหวตนี้ไม่ใช่โหวตปัจจุบัน');
+        if (!vote.options.some((o) => o.key === input.option)) throw invalid('ไม่พบตัวเลือกนี้');
+        closedHere = vote.status !== 'CLOSED';
+        if (!closedHere) return;
         vote.winner = input.option;
         vote.status = 'CLOSED';
         return current;
       });
       if (!next) throw deny();
-      if (trip.vote?.status === 'CLOSED') return { vote: voteView(next.vote), posted: false };
+      if (!closedHere) return { vote: voteView(next.vote), posted: false };
       return { vote: voteView(next.vote), ...(await push(next, text(resultText(next.vote)))) };
     }
     throw invalid('คำขอไม่ถูกต้อง');

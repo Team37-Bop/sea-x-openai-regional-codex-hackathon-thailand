@@ -114,3 +114,23 @@ The browser SHALL normalize array, object and comma-separated stop coordinates i
 #### Scenario: Progressive or incomplete coordinates
 - **WHEN** only some planned days have arrived
 - **THEN** the browser fits the valid positions of the available days. A marker or line with insufficient usable coordinates is omitted; other itinerary entries remain available in the list
+
+### Requirement: Route strokes and map key
+
+The visible map SHALL display a compact bottom-left key for the lines currently drawn. Each entry SHALL pair its Thai label with the line's color and stroke. Confirmed walks use dots, public transit uses long dashes and road vehicles use solid lines. Estimated geometry uses a distinct faded dash-dot pattern and names the estimate explicitly. A removed preview route has its own key. The key SHALL update with the day, preview and incoming routing data and stay hidden when there are no lines.
+
+#### Scenario: Exact and estimated public transit
+- **WHEN** the visible day includes both confirmed and estimated transit legs
+- **THEN** the map and its key distinguish the long-dashed transit service from the dash-dot estimated transit segment. A resolved leg that first appears during planning adds its own matching swatch.
+
+### Requirement: Framing the active destination and map overlays
+
+Each setup submission or retry SHALL begin with an empty itinerary overlay, even when the destination is unchanged. The camera SHALL show the requested city as soon as its coordinates are available. The draft SHALL display only places and routes received for the current request. Returning to the saved trip SHALL restore its markers, routes and bounds. Focusing a stop and fitting visible routes SHALL use map space clear of the open place sheet and chat dock, including when both overlap the map.
+
+#### Scenario: Rebuilding a trip in the same city
+- **WHEN** the organizer regenerates an existing trip without changing its destination
+- **THEN** previous pins, route lines, popups and legend entries clear before discovery. Canceling restores the committed itinerary and ignores delayed events. Completing the request replaces the provisional layer with its final itinerary.
+
+#### Scenario: Inspecting a stop with the response dock open
+- **WHEN** the user selects a stop and its sheet opens alongside a visible Bop response
+- **THEN** the camera places the stop in the available map area. At narrow widths the camera can use the space below the dock. A response outside the map does not consume map space.

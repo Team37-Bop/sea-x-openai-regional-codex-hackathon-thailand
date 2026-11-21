@@ -2,7 +2,7 @@ import { isIP } from 'node:net';
 import { publicDispatcher } from './public-fetch.mjs';
 import { setTimeout as delay } from 'node:timers/promises';
 import { coordinates, distance } from './domain.mjs';
-import { boundedStrings, httpsUrl, placeText, rawUrl } from './place-text.mjs';
+import { boundedStrings, httpsUrl, placeText, rawUrl, sourceIdentity } from './place-text.mjs';
 
 const agent = 'BopTripPlanner/1.0 (group trip planner; place media)';
 const commons = 'https://commons.wikimedia.org/w/api.php';
@@ -65,7 +65,7 @@ export function publicPage(value) {
   return href;
 }
 
-function containsName(text, stop) {
+export function containsName(text, stop) {
   const tokens = ' ' + words(text).join(' ') + ' ';
   return names(stop).some((name) => {
     const target = words(name).join(' ');
@@ -93,19 +93,19 @@ function rasterPreview(value) {
     value,
   );
 }
+export function namesVenue(head, page, stop) {
+  const host = new URL(page).hostname.replace(/^www\./i, '').split('.')[0];
+  let path = new URL(page).pathname;
+  try { path = decodeURIComponent(path); } catch { /* Retain literal path. */ }
+  const meta = tags(head);
+  const title = strip(head.match(/<title\b[^>]*>([\s\S]*?)<\/title>/i)?.[1]);
+  return [title, meta.get('og:title'), path, host + ' ' + path].some((value) => containsName(value, stop));
+}
 export function previewFromHead(head, page, stop) {
   page = publicPage(page);
-  if (!page) return null;
+  if (!page || !namesVenue(head, page, stop)) return null;
   const meta = tags(head);
-  let path;
-  try {
-    path = decodeURIComponent(new URL(page).pathname);
-  } catch {
-    path = new URL(page).pathname;
-  }
-  const title = strip(head.match(/<title\b[^>]*>([\s\S]*?)<\/title>/i)?.[1]);
-  if (![title, meta.get('og:title'), path].some((value) => containsName(value, stop))) return null;
-  const raw = rawUrl(meta.get('og:image:secure_url') || meta.get('og:image') || '');
+  const raw = rawUrl(meta.get('og:image:secure_url') || meta.get('og:image') || meta.get('twitter:image') || '');
   if (!raw) return null;
   let url;
   try {
@@ -128,7 +128,7 @@ export function previewFromHead(head, page, stop) {
     match: 'likely',
   };
 }
-export async function pagePhoto(value, stop, signal) {
+export async function readPublicDocument(value, signal, { headOnly = true, limit = 300_000, json = false } = {}) {
   let page = publicPage(value);
   if (!page) return null;
   const timed = AbortSignal.any([signal, AbortSignal.timeout(5000)]);
@@ -152,7 +152,7 @@ export async function pagePhoto(value, stop, signal) {
         continue;
       }
       const type = response.headers.get('content-type');
-      if (!response.ok || (type && !/html/i.test(type))) {
+      if (!response.ok || (type && !/html/i.test(type) && !(json && /json/i.test(type)))) {
         await response.body?.cancel();
         return null;
       }
@@ -161,23 +161,28 @@ export async function pagePhoto(value, stop, signal) {
         decoder = new TextDecoder();
       let head = '';
       try {
-        while (head.length < 300_000 && !/<\/head\s*>/i.test(head)) {
+        while (head.length < limit && !(headOnly && /<\/head\s*>/i.test(head))) {
           const next = await reader.read();
           if (next.done) {
             head += decoder.decode();
             break;
           }
-          head += decoder.decode(next.value, { stream: true }).slice(0, 300_000 - head.length);
+          head += decoder.decode(next.value, { stream: true }).slice(0, limit - head.length);
         }
       } finally {
         await reader.cancel().catch(() => {});
       }
-      return previewFromHead(head.split(/<\/head\s*>/i)[0], final, stop);
+      return { text: headOnly ? head.split(/<\/head\s*>/i)[0] : head, page: final };
     }
   } catch {
     signal.throwIfAborted();
   }
   return null;
+}
+
+export async function pagePhoto(value, stop, signal) {
+  const document = await readPublicDocument(value, signal);
+  return document ? previewFromHead(document.text, document.page, stop) : null;
 }
 
 let nextStart = 0,
@@ -252,7 +257,7 @@ const rasterFile = (title) => /\.(?:jpe?g|png|webp|tiff?|gif)$/i.test(title ?? '
 function commonsPhoto(page, match) {
   const info = page?.imageinfo?.[0];
   if (!info || !rasterFile(page.title) || /svg/i.test(info.mime ?? '')) return null;
-  const url = httpsUrl(info.thumburl || info.url);
+  const url = httpsUrl(info.url) || httpsUrl(info.thumburl);
   const filePage = httpsUrl(
     info.descriptionurl ||
       'https://commons.wikimedia.org/wiki/' + encodeURIComponent(page.title.replaceAll(' ', '_')),
@@ -373,13 +378,15 @@ export async function collectPhotos(stop, pages, exact, signal) {
   const add = (photo) => {
     if (photo && !photos.some((p) => p.url === photo.url)) photos.push(photo);
   };
-  add(await exact);
-  for (const page of new Set(pages.map(publicPage).filter(Boolean))) {
-    if (photos.length >= 4) break;
-    add(await pagePhoto(page, stop, signal));
+  const urls = [...new Set(pages.map(sourceIdentity).map(publicPage).filter(Boolean))];
+  const initial = await Promise.all([exact, ...urls.slice(0, 2).map((url) => pagePhoto(url, stop, signal))]);
+  initial.forEach(add);
+  for (let i = 2; i < urls.length && photos.length < 4; i += 2) {
+    const pair = await Promise.all(urls.slice(i, i + 2).map((url) => pagePhoto(url, stop, signal)));
+    pair.forEach(add);
   }
   if (!photos.length) add(await nearbyPhoto(stop, signal));
-  return photos;
+  return photos.slice(0, 4);
 }
 export function wikipediaPhoto(name, ll, lang, signal) {
   return exactPhoto({ n: name, ll, k: 'sight' }, signal);

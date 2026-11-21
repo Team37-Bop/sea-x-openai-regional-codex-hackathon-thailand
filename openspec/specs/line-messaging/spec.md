@@ -66,6 +66,18 @@ Bop SHALL reply to a group join with instructions for sending the link code, acc
 - **WHEN** the trip is linked but the monthly push allowance has been consumed
 - **THEN** manual post and vote-start respond with `posted:false` and `quotaReached:true`, skip the supplier push, and retain any newly created vote. A plan update still returns its saved summary with `posted:false`.
 
+### Requirement: Send the applied change to the group
+
+The applied replan card SHALL display the selected option's exact group-facing text with line breaks. A linked trip SHALL send it once when an ordinary change is applied. A preview, re-render, undo or a result selected by a LINE vote SHALL not trigger a duplicate automatic post. The same group link SHALL follow a changed trip duration. The result card SHALL distinguish a pending request, a LINE-accepted post, an unlinked group, an unavailable channel, an exhausted quota and an unconfirmed delivery.
+
+#### Scenario: Apply an ordinary change
+- **WHEN** Bop applies a restaurant change for a trip linked to LINE
+- **THEN** the result card displays the message sent to the authenticated trip endpoint and confirms submission only after LINE accepts it. During LINE's 24-hour retry window, a retry after an uncertain response reuses the same key and monthly quota reservation for this message and group. After the window closes the organizer is asked to check the group.
+
+#### Scenario: Review a vote or an unlinked trip
+- **WHEN** a LINE vote selects an option
+- **THEN** the result card displays the selected summary and allows the organizer to send that summary separately. An unlinked trip displays the proposed text and, when the service is configured, offers access to group linking.
+
 ### Requirement: Open a vote and publish the choices
 
 `POST /api/trips/{id}/vote` SHALL require a linked trip and at least one option. It stores a new current vote with a UUID, status `OPEN`, capped reason (500 characters), up to three compact options, empty ballots, creation time and deadline. Deadline defaults to 120 minutes and is clamped to 5–1,440 minutes. The group receives a Flex carousel with each option's key, title, optional head and vote postback. An optional LIFF button deep-links to this trip. The result includes the vote and delivery state.
@@ -74,6 +86,16 @@ Bop SHALL reply to a group join with instructions for sending the link code, acc
 
 - **WHEN** a signed group postback provides the group's active vote ID, a valid option and a LINE user ID
 - **THEN** Bop resolves the group-to-trip mapping, attempts a display name lookup and records the ballot. If profile lookup fails it uses a generic LINE member label. It replies with a Thai acknowledgement or final result.
+
+#### Scenario: The planner asks the linked group to decide
+
+- **WHEN** a replan returns choices requiring a decision for a linked trip
+- **THEN** the planner starts one LINE vote for that decision, shows accepted delivery, the names and choices of recorded voters, and the roster members still pending. The organizer may close an open or tied ballot by choosing an option. An unconfirmed or quota-limited card leaves local choice and local ballots available.
+
+#### Scenario: The organizer sends pending reservation work
+
+- **WHEN** the organizer chooses to send booking tasks to the linked group
+- **THEN** the message identifies the organizer and lists outstanding calls, reschedules and cancellations with their dates and times. Confirmed and handled work is omitted. With no pending tasks the organizer sees that the list is empty and no message is sent.
 
 ### Requirement: Identify LIFF participants and protect member mappings
 

@@ -51,6 +51,9 @@ test('canonicalizes Markdown and rejects unsafe page inputs and previews', async
   assert.equal(previewFromHead(make('https://cdn.example/logo.svg'), page, stop), null);
   assert.equal(previewFromHead(make(undefined, 'Wat Uma'), page, stop), null);
   assert.equal(previewFromHead(make(undefined, undefined, 120), page, stop), null);
+  const og = make(undefined, 'Indian restaurant in Covent Garden | Dishoom');
+  assert.ok(previewFromHead(og, 'https://www.dishoom.com/covent-garden/', { n: 'Dishoom Covent Garden' }));
+  assert.equal(previewFromHead(og, 'https://www.dishoom.com/shoreditch/', { n: 'Dishoom Kensington' }), null);
   let calls = 0;
   t.mock.method(globalThis, 'fetch', async () => {
     calls++;
@@ -59,6 +62,89 @@ test('canonicalizes Markdown and rejects unsafe page inputs and previews', async
   assert.equal(await pagePhoto(page, stop, signal()), null);
   assert.equal(calls, 1);
 });
+test('removes source parentheticals before bounding facts while keeping distinct cited pages', () => {
+  const base = 'https://venue.example/menu';
+  const cited = [base + '?utm_source=openai', base];
+  const note = 'เมนูวันอาทิตย์ (ตัวอย่าง) (venue.example)';
+  const info = normalizeInfo({
+    cited, verified: cited, value: {
+      details: { what: note, highlights: [note], hours: 'เปิด (อา.) ([ร้าน](https://venue.example/hours))' },
+      summary: note, tips: [note], dishes: [{ name: 'ต้มยำ (venue.example)', why: note, veg: true }],
+    },
+  }, { k: 'food' });
+  assert.equal(info.details.what, 'เมนูวันอาทิตย์ (ตัวอย่าง)');
+  assert.deepEqual(info.details.highlights, [info.details.what]);
+  assert.equal(info.summary, info.tips[0]);
+  assert.equal(info.details.hours, 'เปิด (อา.)');
+  assert.deepEqual(info.dishes[0], { name: 'ต้มยำ', price: null, why: info.summary, veg: true });
+  assert.deepEqual(info.sources.map(s => s.url), [base]);
+});
+test('reads Sunday dishes with listed prices from a branch’s public embedded menu', async (t) => {
+  const { publishedMenu } = await import('../server/menu-source.mjs');
+  const base = 'https://venue.example', page = base + '/food/menu';
+  const items = (name) => [{ '@type': 'MenuItem', name, offers: { price: '22.95', priceCurrency: 'GBP' }, suitableForDiet: 'https://schema.org/VegetarianDiet' }];
+  const json = { '@type':'Menu', hasMenuSection: [
+    { '@type':'MenuSection', name:'Mains', hasMenuItem: items('Pasta') },
+    { '@type':'MenuSection', name:'Sunday Roasts', hasMenuItem: items('Nut roast') },
+  ] };
+  const requests = [];
+  t.mock.method(globalThis, 'fetch', async url => {
+    requests.push(String(url));
+    if (String(url) === page)
+      return new Response('<head><title>The Wellington | Menus</title></head><script src="https://menus.tenkites.com/Scripts/embed.js"></script><script>var options={url:"/api/tenkites?menuId=branch"}</script>', { headers:{ 'content-type':'text/html' } });
+    return Response.json('<script type="application/ld+json">' + JSON.stringify(json) + '</script>');
+  });
+  const stop = { n: 'The Wellington', src: { url: page }, date:'2026-11-22' };
+  const result = await publishedMenu(stop, [], signal());
+  assert.equal(result.page, page);
+  assert.deepEqual(result.dishes.map(d => d.name), ['Nut roast','Pasta']);
+  assert.deepEqual(result.dishes[0].priceLocal, { amount: 22.95, currency: 'GBP' });
+  assert.equal(result.dishes[0].veg, true);
+  assert.equal((await publishedMenu({ ...stop, date: '2026-11-23' }, [], signal())).dishes.length, 1);
+  assert.equal(await publishedMenu({ ...stop, n: 'Other venue' }, [], signal()), null);
+  assert.ok(requests.every(url => url.startsWith(base + '/')));
+});
+test('uses only the named restaurant’s linked menu on a multi-venue page', async (t) => {
+  const { publishedMenu } = await import('../server/menu-source.mjs');
+  const page = 'https://directory.example/alpha-restaurant/menu';
+  const item = name => ({ '@type': 'MenuItem', name });
+  const graph = [
+    { '@type': 'Restaurant', name: 'Beta Restaurant', hasMenu: { '@type': 'Menu', hasMenuItem: item('Beta special') } },
+    { '@type': 'Restaurant', name: 'Alpha Restaurant', hasMenu: { '@id': '#alpha-menu' } },
+    { '@type': 'Menu', '@id': '#alpha-menu', hasMenuItem: { '@id': '#alpha-special' } },
+    { ...item('Alpha special'), '@id': '#alpha-special' },
+    item('Unattributed special'),
+  ];
+  t.mock.method(globalThis, 'fetch', async () => new Response(
+    '<head><title>Alpha Restaurant and Gamma Restaurant menus</title></head>' +
+    '<script type="application/ld+json">' + JSON.stringify({ '@graph': graph }) + '</script>',
+    { headers: { 'content-type': 'text/html' } },
+  ));
+  const lookup = n => publishedMenu({ n }, [{ url: page }], signal());
+  assert.deepEqual((await lookup('Alpha Restaurant')).dishes.map(d => d.name), ['Alpha special']);
+  assert.equal(await lookup('Gamma Restaurant'), null);
+  graph[1].hasMenu = undefined;
+  assert.equal(await lookup('Alpha Restaurant'), null);
+});
+
+test('uses the visit weekday price for a dish listed in multiple menu sections', async (t) => {
+  const { publishedMenu } = await import('../server/menu-source.mjs');
+  const page = 'https://venue.example/alpha-restaurant/menu';
+  const section = (name, prices) => ({ '@type': 'MenuSection', name,
+    hasMenuItem: Object.entries(prices).map(([dish, price]) => ({ '@type': 'MenuItem', name: dish,
+      offers: { priceCurrency: 'GBP', price } })) });
+  const menu = { '@type': 'Menu', hasMenuSection: [
+    section('Monday specials', { Roast: 15 }), section('Mains', { Pasta: 10 }),
+    section('Sunday specials', { Roast: 20, Pasta: 12 }),
+  ] };
+  t.mock.method(globalThis, 'fetch', async () => new Response(
+    '<script type="application/ld+json">' + JSON.stringify(menu) + '</script>',
+    { headers: { 'content-type': 'text/html' } },
+  ));
+  const result = await publishedMenu({ n: 'Alpha Restaurant', date: '2026-11-22' }, [{ url: page }], signal());
+  assert.deepEqual(Object.fromEntries(result.dishes.map(d => [d.name, d.priceLocal.amount])), { Roast: 20, Pasta: 12 });
+});
+
 test('places confirmed citations first, converts local prices, bounds text and hides photo hints', () => {
   const verified = new Set(['https://one.example/', 'https://two.example/']);
   const value = {
@@ -178,7 +264,7 @@ test('limits candidate output and keeps research-only inputs internal; must pick
   assert.equal(b.option.src.checked, 'web');
   assert.equal(a.option.tags.length, 4);
   assert.equal(a.option.tags[0].length, 24);
-  assert.equal(a.option.price.length, 60);
+  assert.equal(a.option.price, duplicate.price);
   assert.equal(a.option.why.length, 200);
   const picks = resolvePicks({ must: [{ id: 'gone', name: 'Wat Umong', ll: [18, 99] }], avoid: ['gone'] });
   assert.ok(matchesPick({ ll: [18.0001, 99] }, picks.must[0]));
@@ -296,7 +382,8 @@ test('Commons exact match requires name and distance, uses P18 and credited file
   const image = await exactPhoto({ n: 'วัดตัวอย่าง', ll: [18.8, 99] }, signal());
   assert.equal(image.match, 'exact');
   assert.equal(image.credit, 'Artist · CC BY 4.0 · Wikimedia Commons');
-  assert.equal(image.url, 'https://upload.wikimedia.org/thumb.jpg');
+  assert.equal(image.thumb, 'https://upload.wikimedia.org/thumb.jpg');
+  assert.equal(image.url, 'https://upload.wikimedia.org/temple.jpg');
   assert.equal(fileCalls, 1);
 });
 test('persistent Wikimedia 429 retries once then holds further file lookups', async (t) => {

@@ -1,3 +1,16 @@
+function disconnected(message, code, cause) {
+  return Object.assign(new Error(message, { cause }), { code });
+}
+
+export async function fetchStream(path, options) {
+  try {
+    return await fetch(path, options);
+  } catch (error) {
+    if (options?.signal?.aborted) throw options.signal.reason;
+    throw disconnected('ติดต่อ Bop ไม่ได้ ตรวจการเชื่อมต่อแล้วลองอีกครั้ง', 'offline', error);
+  }
+}
+
 export async function readEvents(response, onEvent) {
   if (!response.ok || !response.body) throw new Error('Bop ติดต่อบริการไม่ได้');
   const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
@@ -16,7 +29,14 @@ export async function readEvents(response, onEvent) {
   }
   try {
     while (true) {
-      const { value, done } = await reader.read();
+      let chunk;
+      try {
+        chunk = await reader.read();
+      } catch (error) {
+        if (error.name === 'AbortError') throw error;
+        throw disconnected('การเชื่อมต่อกับ Bop ขาดก่อนรับผลครบ ลองอีกครั้งได้', 'cut', error);
+      }
+      const { value, done } = chunk;
       partial += value || '';
       const lines = partial.split('\n');
       partial = lines.pop();

@@ -90,15 +90,11 @@
           <p id="trip-summary"></p>
         </div>
         <div id="poc-people" aria-label="ผู้ร่วมทริป"></div>
-        <nav aria-label="เมนูหลัก">
-          <small id="usage-note"></small>
-          <button class="quiet sample-link" id="demo" type="button">ทริปตัวอย่าง</button>
-        </nav>
+        <small id="usage-note" hidden></small>
       </div>
     </header>
     <main class="trip-page shell">
       <p id="status" class="status" role="status"></p>
-      <button class="quiet" id="cancel-plan" type="button" hidden>กลับไปแก้ข้อมูลทริป</button>
       <div class="empty-plan">
         <span class="tile-icon">
           <svg class="icon" aria-hidden="true"><use href="#i-map" /></svg>
@@ -146,7 +142,48 @@
         </div>
       </section>
       <div class="trip-board">
-        <aside class="trip-sidebar" aria-label="รายละเอียดแผนการเดินทาง">
+        <button id="itinerary-toggle" class="panel-toggle" type="button" aria-controls="trip-sidebar" aria-expanded="true" aria-label="ย่อแผนเที่ยว" title="ย่อแผนเที่ยว"><span>ย่อแผนเที่ยว</span></button>
+        <section id="chat-response" aria-label="คำตอบจาก Bop" hidden>
+          <button id="chat-toggle" class="panel-toggle" type="button" aria-controls="chat-content" aria-expanded="true" aria-label="ย่อแผงคุยกับ Bop" title="ย่อแผงคุยกับ Bop"><span aria-live="polite">ย่อแผง</span></button>
+          <div id="chat-content">
+            <div class="chat-request-line">
+              <p>คำขอของคุณ <strong id="chat-command"></strong></p>
+              <button type="button" id="chat-cancel" class="quiet">ยกเลิกคำขอ</button>
+              <button type="button" id="chat-dismiss" class="quiet" hidden>ปิดผลการปรับแผน</button>
+            </div>
+            <h2 id="chat-state" tabindex="-1" aria-live="polite"></h2>
+            <p id="chat-description" hidden></p>
+            <ol id="chat-steps" class="operation-trace" role="list" aria-label="ขั้นตอนการปรับแผน" aria-live="polite" aria-relevant="additions"></ol>
+            <button type="button" id="chat-retry" class="quiet" hidden>ลองอีกครั้ง</button>
+            <div id="options" aria-label="ทางเลือกในการปรับแผน"></div>
+            <details id="chat-result" hidden>
+              <summary>ดูสิ่งที่เปลี่ยนในแผน</summary>
+              <div id="chat-review"></div>
+            </details>
+            <div id="chat-line"></div>
+          </div>
+        </section>
+        <aside id="planning-progress" aria-labelledby="planning-phase" hidden>
+          <header class="draft-heading">
+            <p id="planning-context"></p>
+            <h2 id="planning-phase" tabindex="-1" aria-live="polite"></h2>
+          </header>
+          <ol id="planning-steps" class="operation-trace" role="list" aria-label="ขั้นตอนการจัดทริป" aria-live="polite" aria-relevant="additions"></ol>
+          <div id="planning-day-progress" hidden>
+            <p id="planning-day-count" aria-live="polite"></p>
+            <progress id="planning-day-meter" aria-labelledby="planning-day-count"></progress>
+            <ol id="planning-days" aria-label="วันที่จัดแผนแล้ว"></ol>
+          </div>
+          <p id="planning-error" role="alert" hidden></p>
+          <div class="planning-actions">
+            <button class="primary" id="planning-reopen" type="button" aria-haspopup="dialog" aria-controls="planning-survey" hidden>เปิดคำถามอีกครั้ง</button>
+            <button class="quiet" id="cancel-plan" type="button">ยกเลิก</button>
+            <button class="primary" id="planning-retry" type="button" hidden>ลองใหม่</button>
+            <button class="quiet" id="planning-auto" type="button" hidden>ให้ Bop จัดให้เลย</button>
+            <button class="quiet" id="planning-edit" type="button" hidden>แก้ข้อมูลทริป</button>
+          </div>
+        </aside>
+        <aside id="trip-sidebar" class="trip-sidebar" aria-label="รายละเอียดแผนการเดินทาง">
           <div class="tabs view-tabs" role="tablist" id="views" aria-label="มุมมองทริป" hidden>
             <button type="button" role="tab" id="plan-tab" aria-controls="plan-panel" aria-selected="true">
               <svg class="icon" aria-hidden="true"><use href="#i-route" /></svg>
@@ -159,10 +196,9 @@
             </button>
           </div>
           <section id="plan-panel" role="tabpanel" aria-labelledby="plan-tab" class="workspace">
-            <details id="plan-summary" class="summary-note" hidden>
-              <summary>อ่านรายละเอียดจาก Bop</summary>
+            <section id="plan-summary" class="summary-note" aria-label="สรุปแผนจาก Bop" hidden>
               <p></p>
-            </details>
+            </section>
             <section class="checks panel">
               <div class="panel-heading">
                 <span class="tile-icon warm">
@@ -174,6 +210,7 @@
                 <span id="checks-count" class="total"></span>
               </div>
               <div id="checks-list"></div>
+              <div id="plan-repair"></div>
             </section>
             <div id="alerts"></div>
             <section class="planner panel">
@@ -216,19 +253,18 @@
               <span class="tile-icon aqua">
                 <svg class="icon" aria-hidden="true"><use href="#i-map" /></svg>
               </span>
-              <h2>แผนที่ทริป</h2>
+              <h2 id="map-title">แผนที่ทริป</h2>
               <button id="whole-map" type="button" class="quiet">ดูแผนที่ทั้งทริป</button>
             </div>
             <div id="map" aria-label="แผนที่สถานที่และเส้นทาง">
               <p class="empty" id="map-fallback">แผนที่กำลังโหลด</p>
             </div>
-            <p id="leg-label"></p>
+            <ul id="leg-label" aria-label="สัญลักษณ์เส้นทาง" hidden></ul>
           </section>
+          <aside id="place-panel" class="place-reader" hidden aria-labelledby="place-title">
+            <div id="place-panel-content"></div>
+          </aside>
         </div>
-        <aside id="place-panel" class="place-reader" hidden aria-labelledby="place-title">
-          <div id="place-panel-content"></div>
-        </aside>
-        <aside id="options" aria-label="ทางเลือกในการปรับแผน"></aside>
       </div>
     </main>
     <dialog id="setup-dialog" aria-labelledby="setup-title">
@@ -267,6 +303,10 @@
               </div>
               <div class="form-group first-group">
                 <label>
+                  ชื่อทริป
+                  <input name="tripTitle" maxlength="200" placeholder="เช่น เชียงใหม่กับเพื่อน" />
+                </label>
+                <label>
                   เมืองปลายทาง
                   <span class="input-icon">
                     <svg class="icon" aria-hidden="true">
@@ -288,18 +328,44 @@
                 </div>
               </div>
               <div class="form-group">
-                <label>
-                  ที่พัก
-                  <select name="stayMode">
-                    <option value="auto">ให้ Bop แนะนำ</option>
-                    <option value="booked">จองไว้แล้ว</option>
-                  </select>
+                <fieldset class="trip-preference">
+                  <legend>ให้ Bop วางแผนแบบไหน</legend>
+                  <div class="place-options">
+                    <label class="preference-option">
+                      <input type="radio" name="autonomy" value="auto" checked />
+                      <span>ไม่ต้องถาม จัดแผนเลย<small>ให้ Bop เลือกร้านและที่เที่ยวให้ แก้แผนทีหลังได้</small></span>
+                    </label>
+                    <label class="preference-option">
+                      <input type="radio" name="autonomy" value="ask" />
+                      <span>ให้ Bop ถามก่อน<small>ดูร้านและที่เที่ยวที่ Bop แนะนำ แล้วเลือกที่สนใจก่อนจัดแผน</small></span>
+                    </label>
+                  </div>
+                </fieldset>
+                <fieldset class="trip-preference">
+                  <legend>จังหวะทริป</legend>
+                  <div class="pace-options">
+                    <label class="preference-option"><input type="radio" name="pace" value="chill" />ไปเรื่อย ๆ</label>
+                    <label class="preference-option"><input type="radio" name="pace" value="normal" checked />พอดี ๆ</label>
+                    <label class="preference-option"><input type="radio" name="pace" value="packed" />เที่ยวให้เต็มวัน</label>
+                  </div>
+                </fieldset>
+              </div>
+              <div class="form-group">
+                <fieldset id="stay-mode">
+                  <legend>ที่พัก</legend>
+                  <div class="stay-options">
+                    <label class="stay-option"><input type="radio" name="stayMode" value="auto" checked />ให้ Bop แนะนำ</label>
+                    <label class="stay-option"><input type="radio" name="stayMode" value="booked" />จองไว้แล้ว</label>
+                  </div>
+                </fieldset>
+                <label id="stay-area">ย่านที่สนใจพัก (ถ้ามี)
+                  <input name="hotelArea" maxlength="120" />
                 </label>
-                <div id="stays" hidden>
+                <fieldset id="stays" aria-label="รายละเอียดที่พักที่จองไว้" hidden disabled>
                   <div id="stay-rows"></div>
                   <button class="quiet" id="add-stay" type="button">+ เพิ่มที่พัก</button>
                   <p id="stay-total" class="muted"></p>
-                </div>
+                </fieldset>
               </div>
               <details class="form-disclosure" open>
                 <summary>การเดินทางไป–กลับ</summary>
@@ -312,24 +378,6 @@
                 </div>
               </details>
               <div class="form-group last-group">
-                <h3>รูปแบบการเที่ยว</h3>
-                <div class="fields">
-                  <label>
-                    จังหวะทริป
-                    <select name="pace">
-                      <option value="normal">พอดี ๆ</option>
-                      <option value="chill">ไปเรื่อย ๆ</option>
-                      <option value="packed">เที่ยวให้เต็มวัน</option>
-                    </select>
-                  </label>
-                  <label>
-                    การเลือกสถานที่
-                    <select name="autonomy">
-                      <option value="auto">ให้ Bop เลือก</option>
-                      <option value="ask">ให้กลุ่มเลือกก่อน</option>
-                    </select>
-                  </label>
-                </div>
                 <p class="feedback" id="form-error" role="alert"></p>
               </div>
             </section>
@@ -368,15 +416,8 @@
               </div>
             </div>
             <div class="setup-buttons">
-              <button id="setup-demo" type="button" class="quiet sample-link">
-                <svg class="icon" aria-hidden="true">
-                  <use href="#i-route" />
-                </svg>
-                ลองทริปตัวอย่าง
-                <span class="wide-text">เชียงใหม่</span>
-              </button>
               <button class="primary start-plan" type="submit">
-                เริ่มวางแผน
+                <span id="start-plan-label">เริ่มวางแผน</span>
                 <svg class="icon" aria-hidden="true">
                   <use href="#i-arrow" />
                 </svg>
@@ -386,9 +427,6 @@
         </footer>
       </form>
     </dialog>
-    <dialog id="detail" aria-label="รายละเอียดทริป">
-      <div id="detail-content"></div>
-      <button class="quiet" id="detail-close" type="button">ปิด</button>
-    </dialog>
+    <dialog id="planning-survey" class="candidate-survey" aria-labelledby="survey-question"></dialog>
   </body>
 </html>

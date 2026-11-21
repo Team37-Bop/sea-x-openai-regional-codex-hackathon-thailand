@@ -1,6 +1,30 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { reservationStatus, setReservationDone } from '../web/booking-tasks.js';
+import { pendingReservationMessage, reservationStatus, setReservationDone } from '../web/booking-tasks.js';
+
+test('LINE reservation work names the organizer, dates and pending calls, moves and cancellations', () => {
+  const state = {
+    setup: { members: [{ name: 'เอ' }, { name: 'บี', role: 'organizer' }] },
+    plan: { days: [{ date: '2026-12-10', stops: [
+      { id: 'a', name: 'ร้านใหม่', start: '12:00', res: { todo: true } },
+      { id: 'b', name: 'ร้านเลื่อนเวลา', start: '19:15' },
+      { id: 'c', name: 'จองแล้ว', res: { done: true } },
+      { id: 'd', name: 'เดินเล่น' },
+    ] }] },
+    bookings: { b: { state: 'move' } },
+    cancellations: [
+      { name: 'ร้านที่นำออก', day: '2026-12-09', time: '18:00' },
+      { name: 'ยกเลิกแล้ว', handled: true },
+    ],
+  };
+  const text = pendingReservationMessage(state);
+  assert.match(text, /งานโทรจองของบี/);
+  assert.match(text, /โทรจอง ร้านใหม่ · 10 .*12:00/);
+  assert.match(text, /โทรเลื่อน ร้านเลื่อนเวลา · 10 .*19:15/);
+  assert.match(text, /โทรยกเลิก ร้านที่นำออก · 9 .*18:00/);
+  assert.doesNotMatch(text, /จองแล้ว|ยกเลิกแล้ว|เดินเล่น/);
+  assert.equal(pendingReservationMessage({}), '');
+});
 
 test('reservation state keeps the date, contact and newly confirmed time for subsequent itinerary edits', () => {
   const stop = {

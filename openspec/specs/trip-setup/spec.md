@@ -7,6 +7,13 @@ The organizer enters a destination, dates, travel, stays and the needs of each m
 Reference implementation in the prep repository at `292ba5f` includes `src/ui/setup.js` (`validate`, `toSetup`, `addStay`, `delStay`), `server/agent.mjs` (`normalizeSetup`), `src/plan.js` (`bookedStays`) and `server/api.mjs` (`readJson` and the city route). Executable examples for old and multiple hotels are in `scripts/test-stays.mjs`.
 
 ## Requirements
+### Requirement: Name a trip
+The organizer SHALL be able to name a trip in the first field of trip details, above the destination. Trip names SHALL accept up to 200 characters. Submitting the form SHALL send the trimmed name in `setup.title` and use the destination as the name when the field is blank.
+
+#### Scenario: Open and edit a named trip
+- **WHEN** a traveler opens a saved trip with a custom title
+- **THEN** the itinerary heading shows that name with the destination in the summary, and reopening trip settings shows the saved name in an editable field.
+
 ### Requirement: Destination with any-city lookup
 The UI SHALL offer a fixed list of suggested destinations (Thai and Asian cities with coordinates, ISO country, currency and main airport) and SHALL resolve any other typed city through `GET /api/city?q=`, which returns `{ name, cc, ll }` from Nominatim (then Photon) or HTTP 404 `{ error: 'not_found' }`.
 
@@ -55,6 +62,10 @@ The setup SHALL describe each direction as `arrive`/`depart` with `by` in flight
 ### Requirement: Stay mode
 The setup SHALL carry `stay` as `{ mode: 'auto' }` or `{ mode: 'booked', stays: [{ name, nights }] }`, defaulting to auto, and SHALL accept the older `{ mode: 'booked', name }` shape as one stay for every night. The independent legacy `hotelArea` string is an area hint. A booked stay requires `stay.mode = booked`. Stays SHALL be in trip order, the first starting on night 1, and their nights SHALL add up to the trip's nights (days - 1).
 
+#### Scenario: Choosing how to arrange accommodation
+- **WHEN** the organizer opens trip setup
+- **THEN** the accommodation section displays “ให้ Bop แนะนำ” and “จองไว้แล้ว” together as a keyboard-accessible single-choice group. A new trip selects recommendations by default. Selecting booked accommodation reveals hotel names and nights; selecting recommendations reveals the neighborhood field. Switching preserves entered values for the current draft and excludes inactive booked rows from form validation.
+
 #### Scenario: Booked hotel
 - **WHEN** the organizer chooses "จองไว้แล้ว" and types one hotel name
 - **THEN** the setup sends `stay: { mode: 'booked', stays: [{ name, nights: days - 1 }] }`
@@ -71,12 +82,21 @@ The setup SHALL carry `stay` as `{ mode: 'auto' }` or `{ mode: 'booked', stays: 
 The setup SHALL have 1-12 members, each with a unique slug id, a name and optional `avoid` (free text ≤120 chars: allergies / foods they do not eat, entered in the field "แพ้/ไม่ทาน"; replaces the vegetarian toggle), `maxWalkKm` (per day), `budget` (THB per person for the trip, excluding flights), up to 5 `wants` and a free-text `note` that is context only.
 
 #### Scenario: No members
+- **WHEN** a traveler opens a new trip
+- **THEN** its first member has the editable name “ผู้จัดทริป”, allowing immediate planning with the default settings.
+
+#### Scenario: Empty group from an API caller
 - **WHEN** `members` is empty
 - **THEN** the endpoint ends with `bad_request` "ต้องมีสมาชิกอย่างน้อย 1 คน"
 
 #### Scenario: Duplicate ids
 - **WHEN** two members share an id
 - **THEN** the second id gets a suffix so ids stay unique
+
+#### Scenario: Adding and removing member wishes
+- **WHEN** the organizer chooses a place suggestion, or types an activity and presses Enter or “เพิ่ม”
+- **THEN** the member's wish appears as an individually removable item. The field shows a limit notice only when all five places are filled. Removing an item restores entry.
+- **AND** planning and transport searches include a nonempty draft wish even before it is added. Pasted comma-separated wishes are also accepted, and saved wishes reopen as individual items in their original order.
 
 #### Scenario: Note is not an instruction
 - **WHEN** a member note contains text that looks like an instruction to the agent
@@ -173,9 +193,23 @@ The destination, outbound origin, return destination, booked lodgings and indivi
 #### Scenario: Selecting a partial name
 
 - **WHEN** the organizer types part of a place name and selects a result by pointer or keyboard
-- **THEN** the field accepts the canonical name and uses known coordinates for that selection. Editing the text invalidates the selection. A wish selection updates only the entry being edited in the comma-separated list.
+- **THEN** the field accepts the canonical name and uses known coordinates for that selection. Editing the text invalidates the selection. In a member's wish field, selecting a result adds its name as a new item and clears the field for the next wish.
 
 #### Scenario: Search service unavailable
 
 - **WHEN** the online service times out or returns no matches
 - **THEN** local matches remain available and the organizer can enter a free-text location.
+
+### Requirement: Visible pace and place-selection preferences
+
+Immediately after the dates, the organizer SHALL see the choices “ไม่ต้องถาม จัดแผนเลย” and “ให้ Bop ถามก่อน”. Both SHALL remain visible alongside their descriptions. The submit action SHALL change to “ดูตัวเลือกจาก Bop” when the organizer asks to review suggestions first. A separate keyboard-operable pace group SHALL offer relaxed, balanced and packed in that order.
+
+#### Scenario: Create and reopen a trip
+
+- **WHEN** an organizer selects a packed trip and asks to review places first
+- **THEN** the candidate request and the final planning request both carry `pace: packed` and `autonomy: ask`, and reopening setup selects those options.
+
+#### Scenario: Unspecified preferences
+
+- **WHEN** the organizer starts a new trip or opens a saved trip with missing preferences
+- **THEN** balanced pace and automatic place selection are checked, and submission proceeds directly to planning.

@@ -29,6 +29,11 @@ Trips shorter than `BOP_SPLIT_MIN_DAYS` (default 3) SHALL be designed in one des
 - **WHEN** the destination is outside Thailand and one direction is undecided
 - **THEN** the cap is 8 searches
 
+#### Scenario: Incomplete short design
+- **WHEN** the first design omits a requested day or returns an empty stop list for it
+- **THEN** the planner requests a daily design for each missing day and retains the supplied days
+- **AND** an incomplete daily response fails the request before a shortened plan is committed
+
 ### Requirement: Skeleton and parallel days for long trips
 When the selected model adapter implements both the skeleton and per-day calls, trips of `BOP_SPLIT_MIN_DAYS` or more days SHALL first get a skeleton call (themes, area per day, one hotel, which day covers each wish, meals, 3-6 main places per day, no repeats; 1 search only for example hotels in auto stay mode), then one deep-model design call per day, `BOP_DAY_CONCURRENCY` (default 3) at a time, with up to 2 searches each.
 
@@ -41,7 +46,9 @@ When the selected model adapter implements both the skeleton and per-day calls, 
 - **THEN** missing days are filled with an empty "วันว่าง" row before the day calls
 
 ### Requirement: Progressive day events
-In split mode the endpoint SHALL send `{ type: 'day', index, day, routes }` as soon as each day is designed, geocoded, routed and scheduled; days MAY arrive out of order and the final `done` plan SHALL be authoritative.
+The initial planning endpoint SHALL send cumulative `{ type: 'map', index, day: { date, title, stops }, routes }` previews as individual coordinates and routes become available for both short and split trips. Stop positions use `ll` in latitude/longitude order and a one-based `ordinal`. The source distinguishes catalog, geocoded, selected and model-estimated coordinates. Synthetic fallback coordinates SHALL be excluded. A stop SHALL gain an incoming `leg.key` only after routing returns geometry for both located endpoints. Route geometry uses longitude/latitude order and estimated geometry carries `approx: true`.
+
+The endpoint SHALL send one `{ type: 'day', index, day, routes }` when the day is scheduled. Days MAY arrive out of order. The terminal `done` plan remains authoritative after transport adjustments and repair. A client that ignores intermediate events SHALL still receive the complete result.
 
 #### Scenario: First day ready
 - **WHEN** day 3 finishes before day 1
@@ -49,7 +56,12 @@ In split mode the endpoint SHALL send `{ type: 'day', index, day, routes }` as s
 
 #### Scenario: Streaming a day fails
 - **WHEN** geocoding or routing a single day throws (not an abort)
-- **THEN** the failure is logged, no `day` event is sent for it, and planning continues
+- **THEN** split planning retries that day and publishes its completed event only on success
+
+#### Scenario: Pins arrive before routes
+- **WHEN** stop coordinates have been resolved and a route request is still pending
+- **THEN** the preview contains the located pins in itinerary order and includes only routes that have already returned
+- **AND** subsequent transport adjustments and constraint repairs do not repeat the preview stream
 
 ### Requirement: Geocoding of model places
 Every stop spec SHALL be resolved to coordinates in this order: catalog id (Chiang Mai), coordinates the group picked or a booked hotel (`pick`), an OSM hit (`geocoded`) from Photon then Nominatim that is a real POI within 3 km of the model's coordinates (40 km of the city centre when it gave none), else the model's own coordinates (`model`).
@@ -100,7 +112,7 @@ The server SHALL compare each available stop-level `src` labelled `web` with the
 - **THEN** a step "ตรวจจากเว็บ N จุด · ประมาณการ M จุด" is emitted
 
 ### Requirement: Transport search in parallel with design
-When a direction has `by` flight, bus, train or undecided and either `auto` is set or no time is given (and no `choice`), the plan SHALL search transport options in parallel with the design, design around placeholder times (arrive 10:00, depart 20:30), and afterwards retime a first or last transit stop to the chosen arrival or to departure minus 90 min (flight) or 40 min (bus/train), respectively.
+When a direction has a supplied origin or return destination, `by` flight, bus, train or undecided and either `auto` is set or no time is given (and no `choice`), the plan SHALL search transport options in parallel with the design, design around placeholder times (arrive 10:00, depart 20:30), and afterwards retime a first or last transit stop to the chosen arrival or to departure minus 90 min (flight) or 40 min (bus/train), respectively.
 
 #### Scenario: Recommended flight outside the window
 - **WHEN** the recommended outbound option arrives at 19:00
@@ -114,12 +126,16 @@ When a direction has `by` flight, bus, train or undecided and either `auto` is s
 - **WHEN** the search finds options
 - **THEN** the direction entry in `plan.flags.transport` contains `options` and a `chosen` string matching one option ID
 
-### Requirement: Suggested arrival mode
-When a direction was undecided, the plan SHALL set `plan.flags.arrivalSuggested = { by, why }` from a chosen transport option when available. Otherwise it uses a nonempty model suggestion other than `none` if a direction remains undecided.
+### Requirement: Suggested travel mode per direction
+When a direction was undecided, the plan SHALL store `{ by, why }` from its chosen option in `flags.arrivalSuggested` for outbound travel or `flags.departureSuggested` for return travel. If the outbound direction has a known origin but no chosen service, it can use a nonempty model arrival suggestion other than `none`. The plan SHALL preserve the requested mode alongside an automatically selected service so reopening setup retains the organizer's preference.
 
 #### Scenario: Undecided trip
 - **WHEN** `arrive.by` is undecided and the search recommends a train
 - **THEN** `flags.arrivalSuggested.by` is `train`
+
+#### Scenario: Independent return recommendation
+- **WHEN** a return service is chosen for an undecided return leg
+- **THEN** the plan records the return recommendation in `flags.departureSuggested`. A return without a recommendation SHALL NOT inherit an outbound suggestion from an older plan.
 
 ### Requirement: Stay selection
 The plan SHALL set `plan.flags.stay = { area, why, booked?, examples[] }`; in auto mode the model SHALL pick the area that minimises travel and fits budgets and give 2-3 real example hotels found with at most one web search (`priceNight` THB per room per night, `checked: 'web'` only for a real search URL), and split design SHALL prefer the first example with usable coordinates as the hotel supplied to the per-day designer; in booked mode the server SHALL geocode every booked stay (also trying its first 3 and 2 words, then a 200 km radius around the city for a stay in another town), make no hotel search, and set `flags.stay.stays` to each stay with `nights`, `checkIn` and `checkOut` dates.
@@ -166,12 +182,12 @@ When `setup.picks` is present, must-picks SHALL be pinned to the coordinates the
 - **WHEN** the design includes a place the group answered "ไม่เอา"
 - **THEN** the repair report says "ต้องเอา "…" ออก (กลุ่มไม่เอา)"
 
-### Requirement: Offline sample without a model
-When `/api/health` reports no usable model, the UI SHALL offer the built-in Chiang Mai sample plan and its pre-built offline scenarios, and agent endpoints SHALL answer with `no_key` (no provider) or `auth` (subscription CLI logged out).
+### Requirement: Planner availability
+When `/api/health` reports no usable model, the UI SHALL display the service status. Agent endpoints that require a provider SHALL answer with `no_key` (no provider) or `auth` (subscription CLI logged out).
 
 #### Scenario: No provider
 - **WHEN** neither an API key nor the CLI is available
-- **THEN** `/api/plan` ends with `error` code `no_key` and the UI offers the sample plan as an explicit action. The sample is also available on the demo URL.
+- **THEN** `/api/plan` ends with `error` code `no_key`. Opening the planner with a legacy demo query shows trip setup.
 
 ### Requirement: Per-day start and end hotel
 With booked stays, day 1 SHALL start at the arrival point and end at the hotel of night 1, every day i in between SHALL start at the hotel of night i-1 and end at the hotel of night i, and the last day SHALL start at its hotel (check-out) and end at the departure point. The model SHALL be told each day's hotels (`TripSetup.stayPlan`, per-day role and hotel lines in split design, `planBrief` day headers in repair and replan). The server SHALL pin the day's hotel stops to that day's hotels (by name, else the first stop to the start hotel, else the nearest), add a hotel stop when the model leaves out the start or the end, and put a check-out/luggage note on the start hotel stop of a day that changes hotel. Replans SHALL pin inserted or replaced hotel stops to that day's hotels. Auto mode SHALL keep its single recommended hotel.

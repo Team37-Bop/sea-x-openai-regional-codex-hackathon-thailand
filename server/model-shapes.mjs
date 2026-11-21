@@ -160,6 +160,7 @@ const dishes = array(
   object({
     name: string,
     why: string,
+    veg: boolean,
     description: string,
     price: { type: ['number', 'null'] },
     priceLocal: object({ amount: number, currency: string }),
@@ -335,6 +336,7 @@ export const claudeShapes = {
           {
             name: string,
             why: string,
+            veg: boolean,
             price: { type: ['number', 'null'] },
             priceLocal: requiredObject({ amount: number, currency: string }),
           },

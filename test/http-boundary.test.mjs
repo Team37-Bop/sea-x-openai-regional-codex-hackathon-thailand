@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { Readable, Writable } from 'node:stream';
-import { readEvents } from '../web/stream.js';
+import { fetchStream, readEvents } from '../web/stream.js';
 import { coordinates } from '../web/map.js';
 process.env.BOP_FAKE_LLM = '1';
 globalThis.awslambda = { streamifyResponse: (f) => f };
@@ -63,4 +63,14 @@ test('place photo connections only use publicly routable addresses', async () =>
   const records = ['1.1.1.1','10.0.0.1','169.254.169.254','127.0.0.1','::1','fd00::1','::ffff:192.168.1.1','2606:4700:4700::1111']
     .map(address => ({address}));
   assert.deepEqual(publicAddresses(records).map(item => item.address),['1.1.1.1','2606:4700:4700::1111']);
+});
+
+test('interrupted planner connections offer a retry and preserve cancellation', async (t) => {
+  const error = new TypeError('network error');
+  const broken = new ReadableStream({ start(controller) { controller.error(error); } });
+  await assert.rejects(readEvents(new Response(broken), () => {}), { code: 'cut', cause: error });
+  t.mock.method(globalThis, 'fetch', async () => { throw error; });
+  await assert.rejects(fetchStream('/api/plan'), { code: 'offline', cause: error });
+  const signal = AbortSignal.abort();
+  await assert.rejects(fetchStream('/api/plan', { signal }), { name: 'AbortError' });
 });

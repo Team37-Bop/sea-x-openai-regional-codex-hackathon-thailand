@@ -56,6 +56,8 @@ test('normalizes historical setup and stays by night', () => {
     stay: { mode: 'booked', name: 'Old Hotel' },
   });
   assert.equal(result.days, 4);
+  assert.equal(result.title, 'ทริปของเรา');
+  assert.equal(normalize({ ...setup, title: 'x'.repeat(201) }).title.length, 200);
   assert.equal(result.arrive.by, 'flight');
   assert.deepEqual(result.stay.stays, [{ name: 'Old Hotel', nights: 3 }]);
   assert.deepEqual(
@@ -69,10 +71,18 @@ test('plans from candidate picks, streams days, and anchors both booked stays', 
   assert.ok(candidates.questions[0].options[0].id.startsWith('c'));
   const pick = candidates.questions[0].options[0];
   const { events, last } = await stream('/api/plan', {
-    setup: { ...setup, picks: { must: [pick], avoid: [] } },
+    setup: { ...setup, title: '  วันหยุดกับเพื่อน  ', picks: { must: [pick], avoid: [] } },
   });
   assert.equal(last.type, 'done');
+  assert.equal(last.plan.setup.title, 'วันหยุดกับเพื่อน');
   assert.equal(events.filter((event) => event.type === 'day').length, 4);
+  for (const index of [0, 1, 2, 3]) {
+    const updates = events.filter(event => event.index === index && ['map', 'day'].includes(event.type));
+    assert.equal(updates[0].type, 'map');
+    assert.deepEqual(updates[0].routes, {});
+    assert.equal(updates.at(-1).type, 'day');
+    assert.equal(updates.filter(event => event.type === 'day').length, 1);
+  }
   assert.equal(last.plan.days[0].stops[0].start, '09:15');
   assert.deepEqual(last.plan.days[0].stops[0].ll, pick.ll);
   assert.equal(last.plan.days[0].stops[0].place.source, 'pick');
@@ -87,10 +97,15 @@ test('plans from candidate picks, streams days, and anchors both booked stays', 
 test('removes an offline stop without altering unrelated days and rejects empty commands', async () => {
   const { last: demo } = await stream('/api/demo');
   assert.equal(demo.plan.city, 'เชียงใหม่');
+  assert.equal(demo.plan.setup.title, 'ทริปของเรา');
   assert.equal(demo.plan.setup.members.length, 4);
-  const result = (
-    await stream('/api/replan', { plan: demo.plan, command: 'ตัดน้ำตกบัวตองออก', day: 1, demo: true })
-  ).last;
+  const { events, last: result } = await stream('/api/replan', {
+    plan: demo.plan, command: 'ตัดน้ำตกบัวตองออก', day: 1, demo: true,
+  });
+  const steps = events.filter((event) => event.type === 'step').map((event) => event.text);
+  assert.match(steps[0], /แผนเดิม/);
+  assert.match(steps[1], /ตรวจเวลา.*1 ทางเลือก/);
+  assert.match(steps.at(-1), /ทางเลือก A.*฿/);
   assert.equal(result.type, 'done');
   assert.equal(result.needs_vote, false);
   const revised = result.options[0].plan;
@@ -100,6 +115,26 @@ test('removes an offline stop without altering unrelated days and rejects empty 
   );
   assert.equal(revised.days[0].stops[0].name, demo.plan.days[0].stops[0].name);
   assert.equal((await stream('/api/replan', { plan: demo.plan, command: '' })).last.code, 'bad_request');
+});
+test('replanning an existing trip preserves its title when an older caller omits it', async () => {
+  const { last: demo } = await stream('/api/demo');
+  const plan = demo.plan;
+  const oldSetup = { ...plan.setup };
+  delete oldSetup.title;
+  plan.setup.title = 'วันหยุดกับเพื่อน';
+  for (const [draft, expected] of [
+    [oldSetup, 'วันหยุดกับเพื่อน'],
+    [{ ...oldSetup, title: '  เที่ยวกับครอบครัว  ' }, 'เที่ยวกับครอบครัว'],
+  ]) {
+    const { last: result } = await stream('/api/replan', {
+      plan,
+      setup: draft,
+      command: 'ตัดน้ำตกบัวตองออก',
+      demo: true,
+    });
+    assert.equal(result.type, 'done');
+    assert.equal(result.options[0].plan.setup.title, expected);
+  }
 });
 test('validates API inputs and serves the Thai interface', async () => {
   assert.equal((await stream('/api/plan', { setup: { ...setup, members: [] } })).last.code, 'bad_request');

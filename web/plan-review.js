@@ -1,4 +1,4 @@
-import { action, el } from './integration-ui.js';
+import { el } from './integration-ui.js';
 
 const currency = new Intl.NumberFormat('th-TH', {
   style: 'currency',
@@ -8,6 +8,37 @@ const currency = new Intl.NumberFormat('th-TH', {
 const amount = (value) => (Number.isFinite(Number(value)) ? Number(value) : 0);
 const format = (value) => currency.format(value);
 const signed = (value) => (value > 0 ? '+' : value < 0 ? '−' : '') + format(Math.abs(value));
+
+export function renderRepairOutcome(container, outcome) {
+  if (!['applied', 'kept'].includes(outcome?.status) || !outcome.before || !outcome.after) return;
+  const applied = outcome.status === 'applied';
+  const report = el('details', null, 'repair-outcome');
+  const title = el('summary', applied ? 'Bop ปรับรายละเอียดแผนแล้ว' : 'Bop คงแผนก่อนแก้ไว้');
+  const score = (result) => result.passed + '/' + result.total;
+  title.append(el('small', 'ผ่าน ' + score(outcome.before) + ' → ' + score(outcome.after) + ' เงื่อนไข'));
+  report.append(title);
+  const explanation = {
+    worse: 'วิธีที่ลองทำให้ผลตรวจโดยรวมแย่ลง',
+    unavailable: 'Bop ลองแก้รายละเอียดแล้ว แต่ตรวจแผนที่แก้ไม่สำเร็จ',
+    unchanged: 'การตรวจรอบนี้ไม่ได้เปลี่ยนกำหนดการหรือรายละเอียดทริป',
+  };
+  if (!applied && explanation[outcome.reason]) report.append(el('p', explanation[outcome.reason]));
+  function list(label, rows) {
+    if (!rows.length) return;
+    const items = el('ul');
+    for (const row of rows) items.append(el('li', row));
+    report.append(el('strong', label), items);
+  }
+  list('สิ่งที่ปรับในแผน', outcome.changes || []);
+  const prior = outcome.before.failures || [], final = outcome.after.failures || [];
+  const remaining = new Set(final.map((rule) => rule.id));
+  const failedAtStart = new Set(prior.map((rule) => rule.id));
+  const describe = (rule) => [rule.label, rule.detail].filter(Boolean).join(' · ');
+  list('เงื่อนไขที่แก้จนผ่าน', prior.filter((rule) => !remaining.has(rule.id)).map(describe));
+  list('เงื่อนไขที่ยังไม่ผ่าน', final.filter((rule) => failedAtStart.has(rule.id)).map(describe));
+  list('เงื่อนไขที่เพิ่งไม่ผ่าน', final.filter((rule) => !failedAtStart.has(rule.id)).map(describe));
+  container.append(report);
+}
 
 function visits(plan) {
   const result = new Map();
@@ -138,28 +169,6 @@ export function renderPlanReview(container, beforePlan, option) {
       list.append(el('li', issue));
     }
     review.append(list);
-  }
-  const shareText = option.line?.trim();
-  if (shareText) {
-    const note = el('small', '', 'muted');
-    note.setAttribute('role', 'status');
-    const clipboard = action('คัดลอกข้อความให้เพื่อน', async () => {
-      try {
-        await navigator.clipboard.writeText(shareText);
-        note.textContent = 'คัดลอกแล้ว';
-      } catch {
-        // Leave the group-facing message selectable when clipboard access is unavailable.
-        const field = el('textarea');
-        field.setAttribute('aria-label', 'ข้อความสำหรับเพื่อนร่วมทริป');
-        field.readOnly = true;
-        field.value = shareText;
-        clipboard.replaceWith(field);
-        field.focus();
-        field.select();
-        note.textContent = 'เลือกข้อความไว้แล้ว กดคัดลอกบนอุปกรณ์ของคุณ';
-      }
-    });
-    review.append(clipboard, note);
   }
   container.append(review);
   return diff;

@@ -27,12 +27,16 @@ Research SHALL use the selected provider’s fast tier and request at most three
 ### Requirement: Details
 `details` SHALL hold `what` and up to 5 `highlights`, and MAY hold `price`, `hours`, `rating`, `booking` and `address` strings taken from the research; hours and phone are optional best-effort text fields. The normalizer trims them to 80 and 40 characters respectively and records confidence at the overall response level.
 
+Research prose, tips and dishes SHALL omit parenthetical source hosts before length limits are applied. Links to the cited pages SHALL remain under แหล่งข้อมูล. Variants that differ only by campaign tracking SHALL share one link.
+
 #### Scenario: Phone not found
 - **WHEN** the research response supplies no phone number
 - **THEN** the normalized response omits `phone` and the sheet omits that fact row
 
 ### Requirement: Dishes with THB prices
 Up to 6 recommended dishes SHALL carry `price` in THB per item, converted from a local price with the model's stated `rate` (THB per unit) and keeping `priceLocal: { amount, currency }`; a price that cannot be interpreted SHALL be `null`.
+
+The inline meal control and place panel SHALL share one restaurant lookup and show the dishes, available prices, descriptions, and source links. If research yields few dishes or no prices, the server SHALL look for structured MenuItem data on the venue’s menu page, including a publicly linked same-origin Ten Kites menu. It SHALL prefer sections for the visit weekday, keep an explicitly marked vegetarian dish, and retain the first research result when no published menu can be read. The reader SHALL preserve local price precision and explain an empty result.
 
 #### Scenario: Vietnamese price
 - **WHEN** the model reports a dish at 80,000 VND with rate 0.0014
@@ -65,8 +69,12 @@ Up to 6 recommended dishes SHALL carry `price` in THB per item, converted from a
 - **THEN** no photo is taken from it
 
 #### Scenario: Stop without coordinates
-- **WHEN** `ll` is missing
+- **WHEN** `ll` is missing or the plan marks the coordinates as a fallback
 - **THEN** no Wikimedia photo is attempted
+
+#### Scenario: Meal title includes an activity
+- **WHEN** the stop title appends the activity after a spaced dash and has a previously checked venue page
+- **THEN** the lookup can match the venue name and retrieve a credited image from that page. A failed thumbnail falls back to the supplied original image.
 
 ### Requirement: Canonical image and source URLs
 Server and browser normalization SHALL unwrap direct HTTPS URLs, Markdown images, Markdown links and angle-bracket URLs before storage or rendering. The server SHALL require HTTPS, reject credential-bearing URLs, and require normalized URLs under 2,000 characters, and user-facing place text SHALL not display raw Markdown wrappers.
@@ -94,7 +102,7 @@ The server SHALL send at most 2 Wikimedia requests at a time at least 250 ms apa
 - **THEN** photos during the next 60 s are web-only or empty
 
 ### Requirement: Place info cache
-Results SHALL be cached in memory per `stop.id|n` for the server process (concurrent requests share one lookup), a hit SHALL answer with `cached: true`, and a failed lookup SHALL be evicted.
+Results SHALL be cached in memory per stop ID, name, available venue-source URL and visit date for the server process (concurrent requests share one lookup), a hit SHALL answer with `cached: true`, and a failed lookup SHALL be evicted.
 
 #### Scenario: Second open of the sheet
 - **WHEN** the same stop is requested again
@@ -105,7 +113,7 @@ Results SHALL be cached in memory per `stop.id|n` for the server process (concur
 The server SHALL trim incoming names to 120 characters, kinds to 20, notes to 300 and queries to 120. Explicit stop query takes precedence over the nested place query. Explicit and nested aliases together supply at most eight strings of 80 characters. The response SHALL include a summary of up to 300 characters (default `ยังไม่มีข้อมูล`), a details description of up to 400, up to five highlights and up to five tips. A new successful lookup includes elapsed milliseconds and model usage. A cache hit includes elapsed milliseconds and `cached: true`.
 
 #### Scenario: Same stop reopened while the first lookup is running
-- **WHEN** two requests have the same stop ID and name
+- **WHEN** two requests have the same stop ID, name, venue-source URL and visit date
 - **THEN** the second awaits the first lookup, even if it supplies another city or note. A renamed stop creates a new cache key
 
 #### Scenario: Model supplies both a valid fact URL and a photo page

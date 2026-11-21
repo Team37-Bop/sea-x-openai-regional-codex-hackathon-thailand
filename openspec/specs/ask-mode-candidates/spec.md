@@ -39,11 +39,19 @@ Each option SHALL get at most one https photo `{ url, credit, page, match }` in 
 - **THEN** the step "ได้ N คำถาม · M ตัวเลือก · มีรูป K" is emitted
 
 ### Requirement: Answering in the UI
-The UI SHALL show questions one at a time with each option answered สนใจ, ไม่เอา or ไม่แน่ใจ, and SHALL send `picks = { must: [full option objects answered สนใจ], avoid: [ids answered ไม่เอา] }`; ไม่แน่ใจ, skipped questions and "ให้ Bop เลือกที่เหลือเอง" SHALL add nothing.
+Once candidates are ready, the UI SHALL present one question at a time in a native modal over the planning map, centered on desktop and attached to the viewport bottom on narrow screens. Focus SHALL move to the question heading on opening and on advancing. Each option can be answered สนใจ, ไม่เอา or ไม่แน่ใจ. The next planning request SHALL send `picks = { must: [full option objects answered สนใจ], avoid: [ids answered ไม่เอา] }`. Skipped questions and uncertain options contribute no picks.
 
 #### Scenario: Skip to auto
 - **WHEN** the organizer presses Escape in the ask dialog
 - **THEN** planning starts directly with the original setup and the answers collected so far
+
+#### Scenario: Inspect the map between answers
+- **WHEN** the organizer chooses ดูแผนที่ while answering
+- **THEN** the dialog closes temporarily. The planning rail offers เปิดคำถามอีกครั้ง and ยกเลิก. Reopening restores the current question and its answers. Canceling from the rail returns to the existing trip draft.
+
+#### Scenario: Candidate discovery fails
+- **WHEN** the candidate request fails before returning questions
+- **THEN** the planning rail offers ลองใหม่, ให้ Bop จัดให้เลย and แก้ข้อมูลทริป. Choosing direct planning retains the trip details and skips candidate discovery.
 
 #### Scenario: Photo badge
 - **WHEN** an option photo has `match: 'likely'`
@@ -59,11 +67,15 @@ The candidate handler SHALL validate the setup as for normal planning, omit prev
 
 #### Scenario: Descriptive metadata
 - **WHEN** the model supplies a long name, explanation, price hint and tags
-- **THEN** the name is limited to 120 characters, the explanation to 200, the optional price hint to 60, and at most four nonempty tags of 24 characters each survive. A displayed source requires both a web check and a URL recorded by the search
+- **THEN** the name is limited to 120 characters, the explanation to 200, and the optional price hint to 240. Longer price text ends at a word boundary with an ellipsis when possible. Up to four nonempty tags of 24 characters each survive. A displayed source requires both a web check and a URL recorded by the search
 
 #### Scenario: Photo metadata and failures
 - **WHEN** an option lacks its own confirmed source but the model supplied a public page as a photo hint
 - **THEN** the collector can inspect the page for a matched image independently of source verification. The option returns a successful photo or omits it. Research-only queries, aliases, page hints and temporary geocoding inputs are removed from the response
+
+#### Scenario: Official page for a restaurant branch
+- **WHEN** the venue’s domain identifies the restaurant and the URL path identifies its branch
+- **THEN** a matching page preview can appear in the question as Wikimedia is checked. If the supplied thumbnail fails, the card tries the original image.
 
 ### Requirement: Pick continuity and limits
 
@@ -84,3 +96,8 @@ The server SHALL remember each option’s name, query, resolved coordinates and 
 #### Scenario: Cancelled or replaced request
 - **WHEN** another planning operation supersedes candidate discovery
 - **THEN** the UI aborts the earlier request and ignores subsequent results from the old request
+
+#### Scenario: A traveler selects an answer on a place card
+
+- **WHEN** the traveler chooses สนใจ, ไม่เอา or ไม่แน่ใจ
+- **THEN** that place immediately shows one pressed answer with a checkmark, a green, red or amber fill respectively and a matching card outline. Selecting another answer moves the mark. Selecting the same answer again clears it. Viewing the map and reopening the question preserves the answer.

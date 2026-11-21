@@ -79,6 +79,90 @@ test('single design caps searches at zero, uses exact picks, drops extra days an
   assert.equal(result.usage.provider, 'openai');
   assert.equal(result.plan.report.pass, result.plan.checks.length);
 });
+test('short plans recover omitted days with a daily design and stream pins, routes and completed days once', async (t) => {
+  const requests = [], events = [];
+  const day = (suffix) => ({ title: suffix, stops: [
+    stop('lunch' + suffix, 'Lunch ' + suffix, '12:00', '12:40', { k: 'food', meal: 'lunch' }),
+    stop('dinner' + suffix, 'Dinner ' + suffix, '18:00', '18:40', { k: 'food', meal: 'dinner' }),
+  ] });
+  mockProvider(t, { bop_design: { days: [day('one')] }, bop_daily: { days: [day('two')] } }, requests);
+  const picks = ['one', 'two'].flatMap(s => ['Lunch ', 'Dinner '].map(n => ({ name: n + s, ll: point })));
+  const result = await planTrip(normalize({ ...d, days: 2, picks: { must: picks } }), {
+    ...ctx(), emit: event => events.push(event),
+  });
+  assert.deepEqual(requests.map(r => r.op), ['bop_design', 'bop_daily']);
+  assert.deepEqual(result.plan.days.map(day => day.title), ['one', 'two']);
+  for (const i of [0, 1]) {
+    const sequence = events.filter(e => e.index === i);
+    assert.deepEqual(sequence.map(e => e.type), ['map', 'map', 'map', 'day']);
+    assert.deepEqual(sequence.slice(0, 3).map(e => [e.day.stops.length, Object.keys(e.routes).length]), [[1,0],[2,0],[2,1]]);
+    const routed = sequence[2], key = routed.day.stops[1].leg.key;
+    assert.ok(routed.routes[key].approx);
+    assert.equal(routed.day.date, result.plan.days[i].date);
+  }
+});
+test('a missing day with an empty daily response rejects the shortened trip', async t => {
+  const requests = [];
+  mockProvider(t, { bop_design: { days: [{ stops: [] }] }, bop_daily: { days: [{ stops: [] }] } }, requests);
+  await assert.rejects(planTrip(normalize(d), ctx()), /วันที่ 1/);
+  assert.deepEqual(requests.map(r=>r.op), ['bop_design', 'bop_daily']);
+});
+test('the final plan keeps the earlier checks when a repair is worse, empty or an invalid edit', async (t) => {
+  const lunch = stop('lunch', 'ตลาดกลางวัน', '12:00', '12:40', { k: 'food', meal: 'lunch', diet: false });
+  const dinner = stop('dinner', 'ตลาดเย็น', '18:00', '18:40', { k: 'food', meal: 'dinner', diet: true });
+  const input = normalize({
+    ...d, members: [{ name: 'มิน', avoid: 'กุ้ง' }],
+    picks: { must: [lunch, dinner].map((s) => ({ name: s.n, ll: point })) },
+  });
+  const repair = { edits: [] };
+  mockProvider(t, { bop_design: { days: [{ stops: [lunch, dinner] }] }, bop_repair: repair }, []);
+  for (const [edits, reason] of [
+    [[{ op: 'remove', id: 'dinner' }], 'worse'],
+    [[], 'unchanged'],
+    [[{ op: 'remove', id: 'missing-stop' }], 'unchanged'],
+  ]) {
+    repair.edits = edits;
+    const { plan, repaired } = await planTrip(input, ctx());
+    assert.equal(repaired, false);
+    assert.equal(plan.repairOutcome.status, 'kept');
+    assert.equal(plan.repairOutcome.reason, reason);
+    assert.deepEqual(plan.repairOutcome.changes, []);
+    assert.deepEqual(plan.repairOutcome.after, plan.repairOutcome.before);
+    assert.ok(plan.repairOutcome.after.failures.some((rule) => rule.label.includes('กุ้ง')));
+    assert.equal(plan.days[0].stops.length, 2);
+  }
+});
+test('a repair belongs only to its own proposed option and a stale outcome stays with the original trip', async (t) => {
+  const setup = normalize(d);
+  const original = {
+    city: setup.city, setup, flags: {}, repairOutcome: { status: 'earlier' },
+    days: [{ date: setup.startDate, stops: [
+      stop('lunch', 'ข้าวเที่ยง', '12:00', '12:40', { k: 'food', meal: 'lunch', place: { source: 'pick' } }),
+      stop('dinner', 'ข้าวเย็น', '18:00', '18:40', { k: 'food', meal: 'dinner', place: { source: 'pick' } }),
+    ] }],
+  };
+  const replies = {
+    bop_replan: { needs_vote: true, options: [
+      { title: 'ปรับมื้อเที่ยง', edits: [{ op: 'replace', id: 'lunch', stop: { meal: 'breakfast' } }] },
+      { title: 'คงมื้อเที่ยง', edits: [] },
+    ] },
+    bop_repair: { edits: [{ op: 'replace', id: 'lunch', stop: { meal: 'lunch' } }] },
+  };
+  mockProvider(t, replies, []);
+  const result = await replan({ plan: original, command: 'ช่วยดูมื้อเที่ยง' }, ctx());
+  assert.equal(result.repaired, true);
+  const [changed, untouched] = result.options;
+  assert.equal(changed.plan.repairOutcome.status, 'applied');
+  assert.equal(changed.plan.repairOutcome.after.passed, changed.plan.repairOutcome.before.passed + 1);
+  assert.deepEqual(changed.plan.repairOutcome.changes, ['วันที่ 1 · ปรับมื้ออาหารที่ ข้าวเที่ยง']);
+  assert.equal(untouched.plan.repairOutcome, undefined);
+  assert.equal(original.repairOutcome.status, 'earlier');
+  replies.bop_repair.edits = [];
+  const kept = await replan({ plan: original, command: 'ช่วยดูมื้อเที่ยง' }, ctx());
+  assert.equal(kept.repaired, false);
+  assert.equal(kept.options[0].plan.repairOutcome.status, 'kept');
+  assert.equal(kept.options[1].plan.repairOutcome, undefined);
+});
 test('replan obeys model vote decision with independent candidate plans, even for equal costs', async (t) => {
   const setup = normalize(d),
     requests = [];
@@ -121,6 +205,13 @@ test('replan obeys model vote decision with independent candidate plans, even fo
   assert.equal(result.options[1].plan.days[0].stops[1].start, '18:00');
   assert.equal(result.setup, undefined);
   assert.equal(result.vote_reason, answer.vote_reason);
+  answer.vote_reason = ' ';
+  const undecided = await replan({ plan: base, setup, command: 'เลือกมื้อที่จะเลื่อน' }, ctx());
+  for (const option of undecided.options) {
+    assert.ok(undecided.vote_reason.includes(option.title));
+    assert.equal(option.vote_reason, undecided.vote_reason);
+  }
+  assert.match(undecided.summary, /ให้กลุ่มตัดสินใจ/);
   answer.needs_vote = false;
   answer.options[0].edits = [{ op: 'replace', id: 'a', stop: { cost: 1000 } }];
   const second = await replan({ plan: base, setup, command: 'เลือกแผนเดียว' }, ctx());
@@ -128,6 +219,7 @@ test('replan obeys model vote decision with independent candidate plans, even fo
   assert.equal(second.options.length, 1);
   assert.equal(second.vote_reason, undefined);
   assert.equal(second.options[0].vote_reason, undefined);
+  assert.equal(second.summary, second.options[0].title);
 });
 test('a booked choice bypasses search, new transport uses the fitting estimated price and retimes the endpoints', async (t) => {
   const requests = [];
@@ -153,7 +245,9 @@ test('a booked choice bypasses search, new transport uses the fitting estimated 
   const result = await planTrip(setup, ctx());
   const { flags } = result.plan;
   assert.equal(flags.transport.go.chosen, 'go-2');
+  assert.equal(flags.transport.go.requestedBy, 'undecided');
   assert.equal(flags.transport.back.chosen, 'back-kept');
+  assert.equal(flags.transport.back.requestedBy, undefined);
   assert.equal(flags.transport.back.options.length, 1);
   assert.equal(flags.arrivalSuggested.by, 'train');
   assert.equal(result.plan.days[0].stops[0].t0, '09:30');
@@ -162,6 +256,52 @@ test('a booked choice bypasses search, new transport uses the fitting estimated 
   assert.equal(requests.find((q) => q.op === 'bop_transport').body.max_tool_calls, 4);
   const only = await transport(setup, 'back', ctx());
   assert.equal(only[0].id, 'back-kept');
+});
+
+test('a live extension designs only the added day and schedules its stops on the correct date', async (t) => {
+  const requests = [];
+  const setup = normalize({ ...d, picks: { must: [{ name: 'ตลาดใหม่', ll: point }] } });
+  const original = {
+    setup, city: setup.city, flags: {},
+    days: [{ date: setup.startDate, stops: [stop('old', 'ตลาดเดิม', '10:00', '11:00', { place: { source: 'pick' } })] }],
+  };
+  mockProvider(t, { bop_daily: { days: [{ title: 'ตลาดใหม่', stops: [
+    stop('new', 'ตลาดใหม่', '11:20', '12:10', { k: 'food', meal: 'lunch' }),
+  ] }] } }, requests);
+  const result = await replan({ plan: original, command: 'เพิ่มอีกหนึ่งวัน' }, ctx());
+  const updated = result.options[0].plan;
+  assert.deepEqual(requests.map((r) => r.op), ['bop_daily']);
+  assert.equal(updated.setup.endDate, '2026-11-22');
+  assert.equal(updated.days[1].date, updated.setup.endDate);
+  assert.equal(updated.days[1].stops[0].name, 'ตลาดใหม่');
+  assert.equal(updated.days[0].stops[0].id, 'old');
+  assert.equal(original.days.length, 1);
+});
+
+test('a return recommendation leaves a blank outbound location unresolved', async (t) => {
+  const requests = [];
+  mockProvider(t, {
+    bop_transport: { options: [{ by: 'train', carrier: 'Rail', dep: '20:30', arr: '22:00' }] },
+    bop_repair: { edits: [] },
+    bop_design: {
+      days: [{ stops: [stop('station', 'สถานี', '19:30', '19:40', { k: 'transit' })] }],
+      arrivalSuggested: { by: 'flight', why: 'outbound suggestion' },
+    },
+  }, requests);
+  const setup = normalize({
+    ...d,
+    arrive: { by: 'undecided', from: '', auto: true },
+    depart: { by: 'undecided', to: 'กรุงเทพฯ', auto: true },
+    picks: { must: [{ name: 'สถานี', ll: point }] },
+  });
+  const { plan } = await planTrip(setup, ctx());
+  assert.equal(requests.filter(({ op }) => op === 'bop_transport').length, 1);
+  assert.equal(plan.setup.arrive.from, '');
+  assert.equal(plan.flags.transport.go, undefined);
+  assert.equal(plan.flags.arrivalSuggested, undefined);
+  assert.equal(plan.flags.departureSuggested.by, 'train');
+  assert.equal(plan.flags.transport.back.requestedBy, 'undecided');
+  assert.equal(plan.setup.depart.time, '20:30');
 });
 
 test('design, daily planning and edit schemas identify units and constrain categories for both providers', async () => {

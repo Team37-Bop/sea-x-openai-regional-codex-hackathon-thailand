@@ -1,22 +1,26 @@
 import { renderBookingTasks, reservationStatus, setReservationDone } from './booking-tasks.js';
-import { describePlanChange, renderPlanReview } from './plan-review.js';
-import { openPlaceSheet, closePlaceSheet } from './place-details.js';
-import { attachLocationSuggestions } from './location-suggest.js';
+import { describePlanChange, renderPlanReview, renderRepairOutcome } from './plan-review.js';
+import { openPlaceSheet, closePlaceSheet, createStopMenu } from './place-details.js';
+import { renderStopNote } from './stop-note.js';
+import { attachLocationSuggestions, localSuggestions } from './location-suggest.js';
 import { bindWorkspace, renderPeople } from './workspace-controls.js';
 import { installSetupExtras, chooseCandidates } from './setup-extras.js';
 import { createForecast } from './forecast.js';
-import { drawMap } from './map.js';
-import { readEvents } from './stream.js';
+import { coordinates, drawMap } from './map.js';
+import { fetchStream, readEvents } from './stream.js';
 import {
+  bindTripIntegrations,
+  newTripIntegrationKey,
   renderTripIntegrations,
   renderLineVote,
+  renderAppliedLine,
+  lineMessageBubble,
   canNotifyWeather,
   notifyWeather,
 } from './trip-integrations.js';
 const $ = (selector) => document.querySelector(selector);
 const setupForm = $('#setup-form');
 const setupDialog = $('#setup-dialog');
-const detail = $('#detail');
 const status = $('#status');
 const cash = new Intl.NumberFormat('th-TH', { maximumFractionDigits: 0 });
 const calendar = new Intl.DateTimeFormat('th-TH', {
@@ -33,7 +37,7 @@ const presets = {
   ไทเป: ['TW', 'TWD', 25.033, 121.5654],
   โซล: ['KR', 'KRW', 37.5665, 126.978],
 };
-const modes = { undecided: 'ยังไม่เลือก', flight: 'เครื่องบิน', drive: 'ขับรถ', bus: 'รถบัส', train: 'รถไฟ' };
+const modes = { undecided: 'ให้ Bop เลือกให้', flight: 'เครื่องบิน', drive: 'ขับรถ', bus: 'รถบัส', train: 'รถไฟ' };
 const travel = { transit: 'ขนส่งสาธารณะ', red: 'รถแดง', walk: 'เดิน', car: 'รถรับจ้าง', own: 'รถส่วนตัว', van: 'รถตู้' };
 const kind = {
   food: 'อาหาร',
@@ -64,10 +68,9 @@ function savedLocation(input) {
   const hit = selectedLocations.get(input);
   return hit?.name === input.value.trim() ? hit : undefined;
 }
-function withSuggestions(input, kind, multiple = false) {
+function withSuggestions(input, kind, onSelect) {
   attachLocationSuggestions(input, {
     kind,
-    multiple,
     getContext: () => {
       if (kind === 'city') return {};
       const city = setupForm.city.value.trim();
@@ -77,6 +80,7 @@ function withSuggestions(input, kind, multiple = false) {
     onSelect: (item) => {
       selectedLocations.set(input, item);
       if (kind === 'city') lookupCache.set(item.name, item);
+      onSelect?.(item);
     },
   });
 }
@@ -85,14 +89,14 @@ const history = [];
 let state = { plan: null, routes: {}, setup: {}, selected: 0, demo: true, bookings: {}, cancellations: [] };
 let busy = false;
 let focusedStop;
-let original, preview, activePlanning, timer;
+let menuScope;
+let original, preview, activePlanning, activeReplan;
 let allDays = false,
   view = 'plan',
   readiness;
 function presentSummary(text) {
   const summary = $('#plan-summary');
   summary.hidden = !text;
-  summary.open = false;
   summary.querySelector('p').textContent = text || '';
   status.textContent = '';
 }
@@ -100,6 +104,7 @@ function updateTripLink() {
   if (state.localTripId) window.history.replaceState(null, '', '#trip=' + state.localTripId);
 }
 function newTrip() {
+  bindTripIntegrations(state);
   closePlaceSheet($('#place-panel'), { restoreFocus: false });
   focusedStop = null;
   presentSummary('');
@@ -110,20 +115,24 @@ function newTrip() {
   history.length = 0;
   view = 'plan';
   allDays = !state.demo;
-  $('#options').replaceChildren();
+  setItineraryExpanded(true);
+  clearChat();
+  $('#command').value = '';
   $('#alerts').replaceChildren();
 }
-async function checkHealth() {
+async function checkHealth(signal) {
   try {
-    const reply = await fetch('/api/health', { signal: AbortSignal.timeout(10000) });
+    const timeout = AbortSignal.timeout(10000);
+    const reply = await fetch('/api/health', { signal: signal ? AbortSignal.any([signal, timeout]) : timeout });
     if (!reply.ok) throw Error();
     readiness = await reply.json();
     $('#readiness').textContent = readiness.ai
       ? 'Bop พร้อมวางแผน'
-      : 'ยังไม่ได้ตั้งค่าบริการ AI บนเซิร์ฟเวอร์ คุณลองทริปตัวอย่างได้';
+      : 'ยังไม่ได้ตั้งค่าบริการ AI บนเซิร์ฟเวอร์';
   } catch {
+    signal?.throwIfAborted();
     readiness = null;
-    $('#readiness').textContent = 'ติดต่อ Bop ไม่ได้ คุณลองทริปตัวอย่างได้';
+    $('#readiness').textContent = 'ติดต่อ Bop ไม่ได้';
   }
   return readiness;
 }
@@ -182,12 +191,11 @@ function clean(value, key = '') {
       : value.replace(/Claude|Anthropic/gi, 'Bop');
   if (Array.isArray(value)) return value.map((item) => clean(item, key));
   if (value && typeof value === 'object')
-    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, clean(v, k)]));
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, key === 'setup' && k === 'title' ? v : clean(v, k)]));
   return value;
 }
-async function api(path, payload, onDay) {
-  const signal = activePlanning?.signal;
-  const response = await fetch(path, {
+async function api(path, payload, onDay, { signal = activePlanning?.signal, onStep, onMap } = {}) {
+  const response = await fetchStream(path, {
     signal,
     ...(payload === undefined
       ? {}
@@ -195,14 +203,19 @@ async function api(path, payload, onDay) {
   });
   const result = await readEvents(response, (event) => {
     signal?.throwIfAborted();
-    if (event.type === 'step') status.textContent = clean(event.text || '');
+    if (event.type === 'step') {
+      const text = clean(event.text || '');
+      if (onStep) onStep(text);
+      else status.textContent = text;
+    }
     if (event.type === 'day') onDay?.(clean(event));
+    if (event.type === 'map') onMap?.(clean(event));
   });
   return clean(result);
 }
 function setBusy(value) {
   busy = value;
-  for (const selector of ['#demo', '#open-setup', '#hero-setup', '#replan button'])
+  for (const selector of ['#open-setup', '#hero-setup', '#replan button'])
     $(selector).disabled = value;
   $('#undo').disabled = value || !history.length;
   $('#reset-plan').disabled = value || !original;
@@ -218,12 +231,29 @@ async function task(action) {
     setBusy(false);
   }
 }
-function formatDay(day) {
-  return day?.date ? dateLabel(day.date) : '';
+function itineraryDate(day, index, setup) {
+  const recorded = Date.parse(day?.date);
+  if (Number.isFinite(recorded)) return calendar.format(recorded);
+  const start = Date.parse(setup?.startDate);
+  return Number.isFinite(start) ? calendar.format(start + index * dayMs) : 'วันที่ ' + (index + 1);
+}
+function dayTotals(day) {
+  const stops = day?.stops || [];
+  const cost = stops.reduce((sum, stop) => sum + Number(stop.cost || 0) + Number(stop.leg?.cost || 0), 0);
+  const walk = stops.reduce((sum, stop) => sum + Number(stop.walk || stop.walkKm || 0) +
+    (stop.leg?.mode === 'walk' ? Number(stop.leg.km || 0) : 0), 0);
+  return 'เดิน ' + walk.toFixed(1) + ' กม. · ฿' + cash.format(cost);
 }
 function render() {
   const plan = preview?.plan || state.plan;
+  if (plan?.days.length) state.selected = Math.max(0, Math.min(state.selected, plan.days.length - 1));
   const day = plan?.days[state.selected];
+  const menuDay = view === 'plan' && !preview ? day : null;
+  const liveResearch = hasLiveService();
+  if (menuScope?.day !== menuDay || menuScope?.liveResearch !== liveResearch) {
+    menuScope?.controller.abort();
+    menuScope = { day: menuDay, liveResearch, controller: new AbortController(), menus: new Map() };
+  }
   $('#views').hidden = !plan;
   $('#plan-panel').hidden = view !== 'plan';
   $('#book-panel').hidden = view !== 'book';
@@ -234,6 +264,8 @@ function render() {
   $('#tabs').replaceChildren();
   $('#itinerary').replaceChildren();
   $('#checks-list').replaceChildren();
+  $('#plan-repair').replaceChildren();
+  if (!preview) renderRepairOutcome($('#plan-repair'), plan?.repairOutcome);
   $('#totals').textContent = '';
   $('#checks-count').textContent = '';
   if (!plan) {
@@ -243,18 +275,23 @@ function render() {
   renderPeople(state.setup, plan);
   const usageNote = $('#usage-note');
   if (usageNote) {
-    usageNote.textContent = state.sample ? 'ทริปตัวอย่าง' : state.usage?.provider === 'fake' ? 'ข้อมูลทดสอบ' : '';
+    usageNote.textContent = state.usage?.provider === 'fake' ? 'ข้อมูลทดสอบ' : '';
     usageNote.hidden = !usageNote.textContent;
   }
-  $('#city-title').textContent = plan.city;
-  $('#trip-summary').textContent =
-    plan.days.length + ' วัน · เพื่อน ' + (state.setup.members?.length ?? 0) + ' คน';
+  const tripTitle = state.setup.title || plan.city;
+  $('#city-title').textContent = tripTitle;
+  $('#trip-summary').textContent = [
+    tripTitle !== plan.city ? plan.city : '',
+    plan.days.length + ' วัน',
+    'เพื่อน ' + (state.setup.members?.length ?? 0) + ' คน',
+  ].filter(Boolean).join(' · ');
   if (preview) $('#itinerary').append(node('p', 'กำลังดูตัวอย่างแผน · รอผลโหวต', 'preview-note'));
   const stops = plan.days.flatMap((row) => row?.stops ?? []);
   const total = stops.reduce((sum, stop) => sum + Number(stop.cost || 0) + Number(stop.leg?.cost || 0), 0);
   $('#totals').textContent = '฿' + cash.format(total) + ' / คน';
   for (let i = 0; i < plan.days.length; i++) {
-    const tab = button('วันที่ ' + (i + 1), () => {
+    const tabDay = plan.days[i];
+    const tab = button(itineraryDate(tabDay, i, plan.setup || state.setup), () => {
       focusedStop = null;
       state.selected = i;
       closePlaceSheet($('#place-panel'), { restoreFocus: false });
@@ -262,26 +299,13 @@ function render() {
       render();
     });
     tab.setAttribute('aria-current', i === state.selected ? 'true' : 'false');
+    if (tabDay) tab.append(node('small', dayTotals(tabDay)));
     $('#tabs').append(tab);
   }
   if (!day?.stops.length)
     $('#itinerary').append(node('p', day ? 'ยังไม่มีจุดแวะในวันนี้' : 'Bop กำลังจัดแผนวันนี้', 'empty'));
   else {
     const title = node('h3', day.title, 'day-title');
-    const dayCost = day.stops.reduce((sum, stop) => sum + (stop.cost || 0) + (stop.leg?.cost || 0), 0);
-    const walk = day.stops.reduce(
-      (sum, stop) =>
-        sum +
-        Number(stop.walk || stop.walkKm || 0) +
-        (stop.leg?.mode === 'walk' ? Number(stop.leg.km || 0) : 0),
-      0,
-    );
-    title.append(
-      node(
-        'small',
-        formatDay(day) + ' · เดิน ' + walk.toFixed(1) + ' กม. · ฿' + cash.format(dayCost) + ' / คน',
-      ),
-    );
     $('#itinerary').append(title);
     const changes = new Map((preview ? describePlanChange(state.plan, plan).changes : []).map(change => [change.id, change]));
     for (const stop of day.stops) {
@@ -300,19 +324,8 @@ function render() {
           ),
         );
       const row = node('article', null, 'stop');
-      row.tabIndex = 0;
       row.dataset.stopId = stop.id;
-      row.addEventListener('click', (event) => {
-        if (!event.target.closest('button, a, input')) place(stop);
-      });
       row.dataset.focused = String(stop.id === focusedStop);
-      row.setAttribute('aria-label', stop.name + ' รายละเอียด');
-      row.addEventListener('keydown', (event) => {
-        if (event.target === row && [' ', 'Enter'].includes(event.key)) {
-          event.preventDefault();
-          place(stop);
-        }
-      });
       const time = node('time', stop.start);
       if (stop.end && stop.end !== stop.start) time.append(node('small', stop.end));
       const content = node('div');
@@ -340,11 +353,18 @@ function render() {
         note.dataset.status = added ? 'added' : 'moved';
         content.append(note);
       }
-      content.append(node('h3', stop.name), meta);
+      const heading = node('h3');
+      const openStop = button(stop.name, () => place(stop), 'stop-open');
+      openStop.setAttribute('aria-label', stop.name + ' ' + stop.start + ' ดูรายละเอียดสถานที่');
+      openStop.setAttribute('aria-controls', 'place-panel');
+      if (stop.id === focusedStop) openStop.setAttribute('aria-current', 'true');
+      heading.append(openStop);
+      content.append(heading, meta);
       const badge = forecast.badge(stop, state.selected, plan);
       if (badge) content.append(badge);
+      const note = renderStopNote(stop.note, 'stop-note', stop.src);
+      if (note) content.append(note);
       const actions = node('div', null, 'stop-actions');
-      actions.append(button('รายละเอียด', () => place(stop)));
       if (stop.res?.todo || stop.res?.done || state.bookings[stop.id]) {
         const booked = reservationStatus(state, stop);
         const mark = button(booked === 'move' ? 'ต้องโทรเลื่อน' : booked === 'done' ? 'จองแล้ว ✓' : 'ทำเครื่องหมายว่าจองแล้ว', () => {
@@ -354,7 +374,15 @@ function render() {
         mark.dataset.status = booked;
         actions.append(mark);
       }
-      content.append(actions);
+      if (actions.childElementCount) content.append(actions);
+      if (menuDay) {
+        if (!menuScope.menus.has(stop.id))
+          menuScope.menus.set(stop.id, createStopMenu({
+            city: plan.city, stop, day: menuDay, sample: state.sample === true, liveResearch, signal: menuScope.controller.signal,
+          }));
+        const menu = menuScope.menus.get(stop.id);
+        if (menu) content.append(menu);
+      }
       row.append(time, content);
       $('#itinerary').append(row);
     }
@@ -373,9 +401,6 @@ function render() {
     for (const problem of item.problems || []) row.append(node('p', problem));
     $('#checks-list').append(row);
   }
-  $('#leg-label').textContent = day?.stops.some((stop) => stop.leg && !stop.leg.real)
-    ? 'เส้นประเป็นเส้นทางประมาณ'
-    : '';
   const todo = renderBookingTasks($('#reservations'), state, {
     run: task,
     rerender: render,
@@ -388,7 +413,7 @@ function render() {
   if (todo) $('#itinerary').append(button('ดูรายการที่ต้องติดต่อ ' + todo + ' รายการ', () => switchView('book')));
   forecast.renderStrip($('#alerts'), plan, state.selected);
   renderTripIntegrations($('#reservations'), state);
-  drawMap(
+  if ($('#planning-progress').hidden) drawMap(
       allDays ? plan.days : [day],
       { ...state.routes, ...preview?.routes },
       place,
@@ -403,7 +428,18 @@ window.addEventListener(
   },
   { once: true },
 );
+function setItineraryExpanded(expanded) {
+  const toggle = $('#itinerary-toggle');
+  const label = expanded ? 'ย่อแผนเที่ยว' : 'เปิดแผนเที่ยว';
+  $('#trip-sidebar').hidden = !expanded;
+  toggle.setAttribute('aria-expanded', String(expanded));
+  toggle.setAttribute('aria-label', label);
+  toggle.title = label;
+  toggle.querySelector('span').textContent = label;
+}
+$('#itinerary-toggle').onclick = () => setItineraryExpanded($('#trip-sidebar').hidden);
 function switchView(next) {
+  setItineraryExpanded(true);
   if (view !== next) closePlaceSheet($('#place-panel'), { restoreFocus: false });
   view = next;
   render();
@@ -419,9 +455,9 @@ $('#views').onkeydown = (event) => {
 $('#tabs').onkeydown = (event) => {
   if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
   event.preventDefault();
-  const next =
-    (state.selected + (event.key === 'ArrowRight' ? 1 : -1) + state.plan.days.length) %
-    state.plan.days.length;
+  const count = $('#tabs').children.length;
+  if (!count) return;
+  const next = (state.selected + (event.key === 'ArrowRight' ? 1 : -1) + count) % count;
   $('#tabs').children[next].click();
   $('#tabs').children[next].focus();
 };
@@ -440,8 +476,6 @@ $('#reset-plan').onclick = () => {
     status.textContent = 'กลับไปยังแผนแรกแล้ว';
   }
 };
-const detailContent = $('#detail-content');
-$('#detail-close').addEventListener('click', () => detail.close());
 function place(stop) {
   const plan = preview?.plan || state.plan;
   const index = plan.days.findIndex(day => day?.stops?.some(item => item.id === stop.id));
@@ -449,7 +483,8 @@ function place(stop) {
   if (view !== 'plan') view = 'plan';
   focusedStop = stop.id;
   render();
-  document.querySelector('.stop[data-focused="true"]')?.scrollIntoView({ block: 'nearest' });
+  if (matchMedia('(max-width: 860px)').matches) $('#map').scrollIntoView({ block: 'start' });
+  else document.querySelector('.stop[data-focused="true"]')?.scrollIntoView({ block: 'nearest' });
   return openPlaceSheet({
     panel: $('#place-panel'),
     content: $('#place-panel-content'),
@@ -459,42 +494,13 @@ function place(stop) {
     setup: state.setup,
     stay: plan.flags?.stay,
     bookingStatus: state.bookings[stop.id]?.state,
-    opener: [...document.querySelectorAll('[data-stop-id]')].find(row => row.dataset.stopId === stop.id),
+    opener: $('#trip-sidebar').hidden
+      ? document.activeElement?.closest('.map-pin') || $('#itinerary-toggle')
+      : document.querySelector('.stop[data-focused="true"] .stop-open'),
     sample: state.sample === true,
     liveResearch: hasLiveService(),
   });
 }
-async function demo() {
-  let result;
-  try {
-    result = await api('/api/demo');
-  } catch {
-    const reply = await fetch('/assets/sample.json');
-    if (!reply.ok) throw new Error('เปิดทริปตัวอย่างไม่ได้');
-    result = await reply.json();
-  }
-  setupDialog.close();
-  if (location.hash.startsWith('#trip=')) window.history.replaceState(null, '', location.pathname + '?demo');
-  history.length = 0;
-  pendingVotes = null;
-  $('#options').replaceChildren();
-  $('#alerts').replaceChildren();
-  state = {
-    plan: result.plan,
-    routes: result.routes,
-    setup: result.plan.setup,
-    selected: 0,
-    demo: true,
-    sample: true,
-    bookings: {},
-    cancellations: [],
-  };
-  newTrip();
-  status.textContent = 'กำลังดูทริปตัวอย่างเชียงใหม่';
-  render();
-}
-$('#setup-demo').onclick = () => task(demo);
-$('#demo').addEventListener('click', () => task(demo));
 for (const selector of ['#open-setup', '#hero-setup'])
   $(selector).addEventListener('click', () => {
     if (state.plan && editingSetup !== state.setup) restoreForm(state.setup, state.plan.flags);
@@ -505,13 +511,24 @@ for (const [dir, title, placeName] of [
   ['arrive', 'ขาไป', 'ออกจาก'],
   ['depart', 'ขากลับ', 'กลับไปที่'],
 ]) {
-  const area = node('fieldset');
-  area.append(
-    node('legend', title),
-    selectField('วิธีเดินทาง', dir + 'By', modes, 'undecided'),
+  const area = node('fieldset', null, 'travel-leg');
+  const options = node('div', null, 'travel-modes');
+  for (const [value, label] of Object.entries(modes)) {
+    const option = node('label', null, 'travel-mode');
+    const radio = node('input');
+    radio.type = 'radio';
+    radio.name = dir + 'By';
+    radio.value = value;
+    radio.checked = value === 'undecided';
+    option.append(radio, document.createTextNode(label));
+    options.append(option);
+  }
+  const fields = node('div', null, 'travel-leg-fields');
+  fields.append(
     field(placeName, dir + 'Place', { maxLength: 90 }),
     field(dir === 'arrive' ? 'เวลาถึง' : 'เวลาออก', dir + 'Time', { type: 'time' }),
   );
+  area.append(node('legend', title), options, fields);
   $('#directions').append(area);
   withSuggestions(setupForm.elements[dir + 'Place'], 'transport');
 }
@@ -520,7 +537,83 @@ const augmentSetup = installSetupExtras(setupForm, async () =>
 );
 let nextMember = 0;
 let editingSetup;
-function addMember(name = '') {
+const memberWishReaders = new WeakMap();
+function addWishEditor(row, savedWishes) {
+  const editor = node('div', null, 'wish-editor');
+  const label = node('label', 'อยากไปหรืออยากทำ');
+  const limitNotice = node('small', null, 'muted');
+  limitNotice.setAttribute('role', 'status');
+  limitNotice.hidden = true;
+  const list = node('ul', null, 'wish-list');
+  list.setAttribute('aria-label', 'รายการที่อยากไปหรืออยากทำ');
+  const entry = node('div', null, 'wish-entry');
+  const input = node('input');
+  input.type = 'text';
+  input.name = 'wants';
+  input.id = row.dataset.id + '-wish';
+  label.htmlFor = input.id;
+  const add = button('เพิ่ม', () => commit(pending()));
+  entry.append(input, add);
+  editor.append(label, list, entry, limitNotice);
+
+  const limit = 5;
+  const pending = () => input.value.split(/[,，]/).map((wish) => wish.trim()).filter(Boolean);
+  function validate(wishes) {
+    const remaining = limit - list.children.length;
+    let message = '';
+    if (wishes.length > remaining) message = 'เพิ่มได้อีก ' + remaining + ' รายการ';
+    else if (wishes.some((wish) => wish.length > 120)) message = 'แต่ละรายการยาวได้ไม่เกิน 120 ตัวอักษร';
+    input.setCustomValidity(message);
+  }
+  function refresh() {
+    const size = list.children.length;
+    const wishes = pending();
+    const full = size === limit;
+    input.disabled = full;
+    input.placeholder = 'เช่น เดินตลาดเช้า';
+    add.disabled = full || !wishes.length;
+    entry.hidden = full;
+    limitNotice.hidden = !full;
+    limitNotice.textContent = full ? 'ครบ 5 รายการแล้ว ลบรายการเดิมเพื่อเพิ่มรายการใหม่' : '';
+    list.hidden = !size;
+    validate(wishes);
+  }
+  function appendWish(wish) {
+    const item = node('li');
+    const remove = button('×', () => {
+      item.remove();
+      refresh();
+      input.focus();
+    }, 'wish-remove');
+    remove.setAttribute('aria-label', 'ลบ ' + wish);
+    item.append(node('span', wish), remove);
+    list.append(item);
+  }
+  function commit(wishes) {
+    validate(wishes);
+    if (!wishes.length || !input.reportValidity()) return;
+    wishes.forEach(appendWish);
+    input.value = '';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    if (input.disabled) list.lastElementChild.querySelector('button').focus();
+    else input.focus();
+  }
+  for (const wish of savedWishes.slice(0, limit)) appendWish(wish);
+  withSuggestions(input, 'place', (item) => commit([item.name]));
+  input.addEventListener('input', refresh);
+  input.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' || event.defaultPrevented || event.isComposing || event.keyCode === 229) return;
+    event.preventDefault();
+    commit(pending());
+  });
+  refresh();
+  memberWishReaders.set(row, () => {
+    if (!input.checkValidity()) throw Error(input.validationMessage);
+    return Array.from(list.children, (item) => item.firstElementChild.textContent).concat(pending());
+  });
+  return editor;
+}
+function addMember(name = '', wants = []) {
   if ($('#members').children.length >= 12) return;
   const row = node('div', null, 'member');
   do { row.dataset.id = 'member-' + ++nextMember; } while ([...$('#members').children].some(member => member.dataset.id === row.dataset.id));
@@ -541,15 +634,14 @@ function addMember(name = '') {
     }),
     info,
     limits,
-    field('อยากไปหรืออยากทำ (คั่นด้วยจุลภาค)', 'wants', { maxLength: 250 }),
+    addWishEditor(row, wants),
     field('หมายเหตุ', 'note', { maxLength: 250 }),
   );
   $('#members').append(row);
-  withSuggestions(row.querySelector('[name=wants]'), 'place', true);
   return row;
 }
 $('#add-member').addEventListener('click', () => addMember());
-addMember();
+addMember('ผู้จัดทริป');
 function addStay(nights) {
   const row = node('div', null, 'stay-row');
   const fields = node('div', null, 'fields');
@@ -576,9 +668,12 @@ function addStay(nights) {
 }
 function updateStay(reset = false) {
   const nights = tripLength() - 1;
-  $('#stays').hidden = setupForm.stayMode.value !== 'booked';
-  if ($('#stays').hidden) return;
+  const booked = setupForm.elements.stayMode.value === 'booked';
+  $('#stay-area').hidden = booked;
+  $('#stays').hidden = !booked;
+  $('#stays').disabled = !booked;
   const area = $('#stay-rows');
+  if (!booked && !area.children.length) return;
   if (!area.children.length) addStay(nights);
   if (!nights && area.children.length > 1) while (area.children.length > 1) area.lastElementChild.remove();
   if (reset && area.children.length === 1)
@@ -614,7 +709,7 @@ $('#add-stay').addEventListener('click', () => {
   updateStay();
 });
 $('#stay-rows').addEventListener('input', () => updateStay());
-setupForm.stayMode.addEventListener('change', () => updateStay(true));
+$('#stay-mode').addEventListener('change', () => updateStay());
 const now = Date.now();
 setupForm.startDate.value = ymd(now + dayMs);
 setupForm.endDate.value = ymd(now + dayMs * 3);
@@ -625,14 +720,14 @@ for (const input of [setupForm.startDate, setupForm.endDate])
       setupForm.endDate.value = setupForm.startDate.value;
     updateStay(true);
   });
-async function locate(city) {
+async function locate(city, signal) {
   if (!city) return null;
   if (lookupCache.has(city)) return lookupCache.get(city);
   if (Object.hasOwn(presets, city)) {
     const [cc, currency, lat, lon] = presets[city];
     return { cc, currency, ll: [lat, lon] };
   }
-  const response = await fetch('/api/city?q=' + encodeURIComponent(city));
+  const response = await fetch('/api/city?q=' + encodeURIComponent(city), { signal });
   const found = response.ok ? await response.json() : null;
   if (found)
     found.currency =
@@ -654,9 +749,12 @@ setupForm.city.addEventListener('change', async () => {
 });
 function restoreForm(setup, flags) {
   editingSetup = setup;
-  for (const name of ['city', 'startDate', 'endDate', 'pace', 'autonomy']) {
+  setupForm.elements.tripTitle.value = setup.title || '';
+  for (const name of ['city', 'startDate', 'endDate']) {
     if (setup[name]) setupForm.elements[name].value = setup[name];
   }
+  setupForm.elements.pace.value = ['chill', 'packed'].includes(setup.pace) ? setup.pace : 'normal';
+  setupForm.elements.autonomy.value = setup.autonomy === 'ask' ? 'ask' : 'auto';
   setupForm.endDate.min = setup.startDate;
   setupForm.hasCar.checked = Boolean(setup.hasCar);
   setupForm.stayMode.value = setup.stay?.mode === 'booked' ? 'booked' : 'auto';
@@ -666,11 +764,11 @@ function restoreForm(setup, flags) {
   $('#city-result').textContent = [setup.country, setup.currency].filter(Boolean).join(' · ');
   $('#members').replaceChildren();
   for (const member of setup.members || []) {
-    const row = addMember(member.name);
+    const row = addMember(member.name, Array.isArray(member.wants) ? member.wants : []);
     if (member.id) row.dataset.id = member.id;
     if (member.role) row.dataset.role = member.role;
     for (const [key, value] of Object.entries({
-      budget: member.budget, walk: member.maxWalkKm, avoid: member.avoid, note: member.note, wants: member.wants?.join(', '),
+      budget: member.budget, walk: member.maxWalkKm, avoid: member.avoid, note: member.note,
     })) row.querySelector('[name=' + key + ']').value = value ?? '';
   }
   if (!$('#members').children.length) addMember();
@@ -730,16 +828,14 @@ function setupInput(found, transportOnly = false) {
       avoid: read('avoid'),
       maxWalkKm: read('walk'),
       budget: read('budget'),
-      wants: read('wants')
-        .split(/[,，]/)
-        .map((item) => item.trim())
-        .filter(Boolean),
+      wants: memberWishReaders.get(row)(),
       note: read('note'),
     };
   });
   if (transportOnly) members.forEach((m, i) => { m.name ||= 'สมาชิก ' + (i + 1); });
   if (!members.some((m) => m.name)) throw Error('ต้องมีสมาชิกที่ระบุชื่ออย่างน้อย 1 คน');
   return augmentSetup({
+    title: setupForm.elements.tripTitle.value.trim() || setupForm.city.value.trim(),
     city: setupForm.city.value.trim(),
     cityLL: found?.ll,
     cityAirport: found?.airport,
@@ -755,101 +851,257 @@ function setupInput(found, transportOnly = false) {
     autonomy: setupForm.autonomy.value,
   });
 }
+const planningPanel = $('#planning-progress');
+function finishTrace(list, state = 'done') {
+  const current = list.lastElementChild;
+  if (current?.dataset.state !== 'active') return;
+  current.dataset.state = state;
+  current.removeAttribute('aria-current');
+}
+function appendTrace(list, text) {
+  if (typeof text !== 'string' || !text.trim()) return;
+  if (list.lastElementChild?.dataset.state === 'active' && list.lastElementChild.textContent === text) return;
+  const following = list.scrollHeight - list.scrollTop - list.clientHeight < 20;
+  finishTrace(list);
+  const step = node('li');
+  step.dataset.state = 'active';
+  step.setAttribute('aria-current', 'step');
+  const mark = node('span', null, 'trace-mark');
+  mark.setAttribute('aria-hidden', 'true');
+  step.append(mark, document.createTextNode(text));
+  list.append(step);
+  if (following) list.scrollTop = list.scrollHeight;
+}
+function showPlanning(show) {
+  planningPanel.hidden = !show;
+  $('.trip-board').classList.toggle('planning-map', show);
+  $('.trip-bar').inert = show;
+  if (!show) {
+    finishTrace($('#planning-steps'), activePlanning?.signal.aborted ? 'stopped' : 'done');
+    $('#planning-phase').removeAttribute('data-waiting');
+    $('#planning-retry').onclick = null;
+    $('#planning-auto').onclick = null;
+    $('#map-title').textContent = 'แผนที่ทริป';
+  }
+}
+function planningPhase(phase, title, discoveryFailed = false) {
+  const failed = phase === 'error';
+  $('#cancel-plan').hidden = failed;
+  $('#planning-edit').hidden = $('#planning-retry').hidden = !failed;
+  $('#planning-auto').hidden = !discoveryFailed;
+  finishTrace($('#planning-steps'), phase === 'error' ? 'stopped' : 'done');
+  planningPanel.dataset.phase = phase;
+  $('#planning-phase').toggleAttribute('data-waiting', ['preparing', 'candidates', 'planning'].includes(phase));
+  $('#planning-phase').textContent = title;
+}
+function editPlanningDraft() {
+  if (activePlanning) {
+    activePlanning.abort();
+    return;
+  }
+  showPlanning(false);
+  render();
+  if (!setupDialog.open) setupDialog.showModal();
+  $('#setup-title').focus();
+}
+$('#cancel-plan').onclick = editPlanningDraft;
+$('#planning-edit').onclick = editPlanningDraft;
+
+async function generateTrip(input) {
+  const ctrl = new AbortController();
+  activePlanning = ctrl;
+  const signal = ctrl.signal;
+  const totalDays = Math.round((Date.parse(input.endDate) - Date.parse(input.startDate)) / dayMs) + 1;
+  const ready = new Map();
+  const drafts = new Map();
+  const routes = {};
+  const known = lookupCache.get(input.city) || localSuggestions(input.city, { kind: 'city' }).find((hit) => hit.name === input.city);
+  input.cityLL ||= known?.ll || presets[input.city]?.slice(2);
+  const draftMap = (days, openCandidate, caption = input.city) => {
+    $('#map-title').textContent = caption;
+    drawMap(days, routes, openCandidate, undefined, undefined, { cityLL: input.cityLL });
+  };
+  const onStep = (text) => {
+    if (activePlanning !== ctrl || signal.aborted || typeof text !== 'string' || !text.trim()) return;
+    $('#planning-phase').removeAttribute('data-waiting');
+    appendTrace($('#planning-steps'), text);
+  };
+  const showDays = () => {
+    $('#planning-day-count').textContent = 'จัดแล้ว ' + ready.size + ' จาก ' + totalDays + ' วัน';
+    $('#planning-day-meter').value = ready.size;
+    const list = $('#planning-days');
+    list.replaceChildren();
+    for (const [index, day] of [...ready].sort(([a], [b]) => a - b)) {
+      const row = node('li', 'วันที่ ' + (index + 1) + (day.title ? ' · ' + day.title : ''));
+      row.value = index + 1;
+      const places = day.stops.slice(0, 3).map((stop) => stop.name || stop.n).filter(Boolean);
+      if (places.length) row.append(node('small', places.join(' · ')));
+      list.append(row);
+    }
+  };
+  if (setupDialog.open) setupDialog.close();
+  status.textContent = '';
+  $('#planning-context').textContent = input.title || input.city;
+  $('#planning-steps').replaceChildren();
+  $('#planning-day-meter').max = totalDays;
+  $('#planning-day-progress').hidden = true;
+  $('#planning-error').hidden = true;
+  planningPhase('preparing', 'กำลังเตรียมทริป');
+  showDays();
+  showPlanning(true);
+  closePlaceSheet($('#place-panel'), { restoreFocus: false });
+  $('#map-title').textContent = input.city;
+  drawMap([], {}, undefined, undefined, undefined, { cityLL: input.cityLL, restart: true });
+  window.scrollTo(0, 0);
+  $('#planning-phase').focus({ preventScroll: true });
+  try {
+    const lookup = input.cityLL ? Promise.resolve(known) : locate(input.city, signal).catch(() => null);
+    const [health] = await Promise.all([checkHealth(signal), lookup.then((found) => {
+      signal.throwIfAborted();
+      if (found) {
+        input.cityLL = found.ll;
+        input.country ||= found.cc;
+        input.currency ||= found.currency;
+        input.cityAirport ||= found.airport;
+        draftMap([]);
+      }
+    })]);
+    signal.throwIfAborted();
+    if (!health?.ai) throw Error($('#readiness').textContent);
+    if (input.autonomy === 'ask' && !input.picks) {
+      planningPhase('candidates', 'กำลังค้นหาร้านอาหารและที่เที่ยวให้เลือก');
+      const found = await api('/api/plan/candidates', { setup: input }, undefined, { signal, onStep });
+      signal.throwIfAborted();
+      input.picks = await chooseCandidates({
+        dialog: $('#planning-survey'), result: found, partySize: input.members.length, signal,
+        reopen: $('#planning-reopen'),
+        onQuestion(question, openCandidate) {
+          planningPhase('choosing', 'เลือกสถานที่สำหรับทริป');
+          const stops = question.options.filter((place) => coordinates(place.ll));
+          draftMap([{ stops }], openCandidate, input.city + ' · ตัวเลือกสถานที่');
+        },
+      });
+      signal.throwIfAborted();
+      const selected = input.picks.must.filter((place) => coordinates(place.ll));
+      draftMap([{ stops: selected }], undefined, selected.length ? input.city + ' · สถานที่ที่เลือก' : input.city);
+    }
+    planningPhase('planning', 'กำลังจัดแผนรายวัน');
+    $('#planning-day-progress').hidden = false;
+    const updateMap = (event) => {
+      if (signal.aborted || activePlanning !== ctrl || !Number.isInteger(event.index) ||
+          event.index < 0 || event.index >= totalDays || !Array.isArray(event.day?.stops)) return;
+      if (event.type === 'day') {
+        ready.set(event.index, event.day);
+        showDays();
+      } else if (ready.has(event.index)) return;
+      drafts.set(event.index, event.day);
+      Object.assign(routes, event.routes);
+      const days = Array.from({ length: totalDays }, (_, i) => drafts.get(i));
+      draftMap(days);
+    };
+    const result = await api('/api/plan', { setup: input }, updateMap, { signal, onStep, onMap: updateMap });
+    signal.throwIfAborted();
+    if (!Array.isArray(result.plan?.days) || result.plan.days.length !== totalDays ||
+        !result.plan.days.every((day) => Array.isArray(day?.stops)))
+      throw Error('Bop ส่งแผนไม่ครบ กรุณาลองใหม่');
+    state = {
+      plan: result.plan, routes: result.routes, setup: result.plan.setup,
+      selected: 0, demo: false, bookings: {}, cancellations: [], usage: result.usage,
+      integrationKey: newTripIntegrationKey(),
+      localTripId: result.localTripId,
+    };
+    showPlanning(false);
+    updateTripLink();
+    newTrip();
+    presentSummary(result.summary);
+    render();
+    $('#plan-tab').focus({ preventScroll: true });
+    forecast.refresh();
+  } catch (error) {
+    if (signal.aborted) {
+      showPlanning(false);
+      render();
+      if (!setupDialog.open) setupDialog.showModal();
+      $('#setup-title').focus();
+    } else {
+      const discoveryFailed = planningPanel.dataset.phase === 'candidates';
+      planningPhase('error', discoveryFailed ? 'หาตัวเลือกไม่สำเร็จ' : 'สร้างแผนทริปไม่สำเร็จ', discoveryFailed);
+      $('#planning-error').textContent = error.message || 'กรุณาลองอีกครั้ง';
+      $('#planning-error').hidden = false;
+      $('#planning-retry').onclick = () => task(() => generateTrip(input));
+      if (discoveryFailed) $('#planning-auto').onclick = () => task(() => generateTrip({ ...input, autonomy: 'auto' }));
+      $('#planning-retry').focus({ preventScroll: true });
+    }
+  } finally {
+    if (activePlanning === ctrl) activePlanning = null;
+  }
+}
 setupForm.addEventListener('submit', (event) => {
   event.preventDefault();
   $('#form-error').textContent = '';
   task(async () => {
     let input;
     try {
-      input = setupInput(await locate(setupForm.city.value.trim()).catch(() => null));
+      input = setupInput(savedLocation(setupForm.city));
     } catch (error) {
       $('#form-error').textContent = error.message;
       $('#form-error').scrollIntoView({ block: 'center' });
       return;
     }
-    setupDialog.close();
-    const previous = state;
-    try {
-      const health = await checkHealth();
-      if (!health?.ai) {
-        setupDialog.showModal();
-        return;
-      }
-      activePlanning = new AbortController();
-      status.textContent = 'กำลังอ่านข้อมูลทริปและความต้องการของสมาชิก…';
-      $('#cancel-plan').hidden = false;
-      const start = Date.now();
-      timer = setInterval(() => {
-        $('#cancel-plan').textContent =
-          'กลับไปแก้ข้อมูลทริป · ' + Math.floor((Date.now() - start) / 1000) + ' วินาที';
-      }, 1000);
-      if (input.autonomy === 'ask') {
-        const found = await api('/api/plan/candidates', { setup: input });
-        input.picks = await chooseCandidates({
-          dialog: detail,
-          content: detailContent,
-          result: found,
-          partySize: input.members.length,
-          signal: activePlanning.signal,
-        });
-        activePlanning.signal.throwIfAborted();
-      }
-      const progress = {
-        plan: { city: input.city, days: Array(tripLength()).fill(null) },
-        routes: {},
-        setup: input,
-        selected: 0,
-        demo: false,
-        bookings: {},
-        cancellations: [],
-      };
-      const result = await api('/api/plan', { setup: input }, (event) => {
-        state = progress;
-        progress.plan.days[event.index] = event.day;
-        Object.assign(progress.routes, event.routes);
-        render();
-      });
-      if (!result.plan?.days?.length || !result.plan.days.every((day) => Array.isArray(day?.stops)))
-        throw new Error('Bop ส่งแผนไม่ครบ กรุณาลองใหม่');
-      state = {
-        ...progress,
-        plan: result.plan,
-        routes: result.routes,
-        setup: result.plan.setup,
-        demo: false,
-        usage: result.usage,
-      };
-      state.localTripId = result.localTripId;
-      updateTripLink();
-      newTrip();
-      $('#options').replaceChildren();
-      $('#alerts').replaceChildren();
-      presentSummary(result.summary);
-      render();
-      forecast.refresh();
-    } catch (error) {
-      state = previous;
-      render();
-      if (!setupDialog.open) setupDialog.showModal();
-      if (activePlanning?.signal.aborted) {
-        status.textContent = 'กลับมาแก้ข้อมูลทริปแล้ว';
-        return;
-      }
-      $('#form-error').textContent = error.message;
-      $('#form-error').scrollIntoView({ block: 'center' });
-      throw error;
-    } finally {
-      clearInterval(timer);
-      activePlanning = null;
-      $('#cancel-plan').hidden = true;
-    }
+    await generateTrip(input);
   });
 });
-$('#cancel-plan').onclick = () => {
-  activePlanning?.abort();
-  if (detail.open) detail.close();
+function setChatExpanded(expanded) {
+  const toggle = $('#chat-toggle');
+  const phase = $('#chat-response').dataset.state;
+  const label = expanded ? 'ย่อแผงคุยกับ Bop' : phase === 'decision' ? 'ดูตัวเลือกจาก Bop'
+    : phase === 'running' ? 'ดูความคืบหน้าจาก Bop' : 'ดูผลจาก Bop';
+  $('#chat-content').hidden = !expanded;
+  toggle.setAttribute('aria-expanded', String(expanded));
+  toggle.setAttribute('aria-label', label);
+  toggle.title = label;
+  toggle.querySelector('span').textContent = expanded ? 'ย่อแผง' : label;
+}
+$('#chat-toggle').onclick = () => setChatExpanded($('#chat-content').hidden);
+function clearChat() {
+  activeReplan?.abort();
+  activeReplan = null;
+  $('#chat-response').hidden = true;
+  setChatExpanded(true);
+  $('#chat-steps').replaceChildren();
+  $('#chat-retry').onclick = null;
+  $('#chat-result').hidden = true;
+  $('#chat-result').open = false;
+  $('#chat-line').replaceChildren();
+  $('#chat-review').replaceChildren();
+  $('#options').replaceChildren();
+}
+function chatState(phase, title, detail = '') {
+  const response = $('#chat-response');
+  response.dataset.state = phase;
+  setChatExpanded(!$('#chat-content').hidden);
+  response.hidden = false;
+  $('#chat-state').textContent = title;
+  $('#chat-description').textContent = detail;
+  $('#chat-description').hidden = !detail;
+  $('#chat-cancel').hidden = phase !== 'running';
+  $('#chat-dismiss').hidden = phase === 'running' || phase === 'decision';
+  $('#chat-retry').hidden = phase !== 'error';
+  $('#chat-state').toggleAttribute('data-waiting', phase === 'running' && !$('#chat-steps').childElementCount);
+  if (phase !== 'running') finishTrace($('#chat-steps'), ['error', 'cancelled'].includes(phase) ? 'stopped' : 'done');
+  response.scrollTop = 0;
+}
+function chatStep(text) {
+  if (typeof text !== 'string' || !text.trim()) return;
+  $('#chat-state').removeAttribute('data-waiting');
+  appendTrace($('#chat-steps'), text);
+}
+$('#chat-cancel').onclick = () => activeReplan?.abort();
+$('#chat-dismiss').onclick = () => {
+  clearChat();
+  $('#command').focus();
 };
-function applyOption(option, routes) {
+function applyOption(option, routes, { summary = '', fromLineVote = false, selected = state.selected } = {}) {
   closePlaceSheet($('#place-panel'), { restoreFocus: false });
   preview = null;
   history.push(structuredClone(state));
@@ -879,6 +1131,7 @@ function applyOption(option, routes) {
   }
   state = {
     ...state,
+    selected,
     plan: option.plan,
     setup: option.plan.setup,
     ...(option.usage?.provider && option.usage.provider !== 'fake' ? { demo: false, sample: false, usage: option.usage } : {}),
@@ -890,89 +1143,137 @@ function applyOption(option, routes) {
   $('#options').replaceChildren();
   $('#alerts').replaceChildren();
   state.localTripId = option.localTripId || state.localTripId;
+  bindTripIntegrations(state);
   updateTripLink();
   presentSummary(option.line);
-  status.textContent = option.title;
+  const details = [...new Set([option.title, summary || option.head])].filter(Boolean);
+  chatState('applied', 'ปรับแผนแล้ว', details.join(' · '));
+  renderPlanReview($('#chat-review'), history.at(-1).plan, option);
+  renderRepairOutcome($('#chat-review'), option.plan.repairOutcome);
+  $('#chat-result').hidden = false;
+  renderAppliedLine($('#chat-line'), history.at(-1), state, option.line, fromLineVote, () => switchView('book'));
+  if (document.activeElement !== $('#command')) $('#chat-state').focus({ preventScroll: true });
   render();
   forecast.refresh();
 }
 async function adjust(command, day = state.selected) {
   if (!state.plan) return;
+  clearChat();
+  preview = pendingVotes = null;
+  focusedStop = null;
+  allDays = false;
+  closePlaceSheet($('#place-panel'), { restoreFocus: false });
+  switchView('plan');
+  status.textContent = '';
+  $('#chat-command').textContent = command;
+  chatState('running', 'Bop กำลังปรับแผน…');
+  $('#chat-response').scrollIntoView({ block: 'nearest' });
   const pinnedPlan = structuredClone(state.plan);
   for (const stop of pinnedPlan.days.flatMap((d) => d.stops))
     if (state.bookings[stop.id]?.state === 'done') stop.res = { ...stop.res, done: true };
-  const offlineSample = state.sample && !hasLiveService();
-  const input = { plan: pinnedPlan, setup: state.setup, command, day, demo: Boolean(offlineSample) };
-  status.textContent = 'กำลังปรับแผนตามคำขอของคุณ…';
-  if (
-    offlineSample &&
-    !/ฝน|น้ำตก|ร้าน.*(?:เต็ม|ปิด)|(?:เต็ม|ปิด).*ร้าน|ดีเลย์|เที่ยวบิน.*(?:ช้า|เลื่อน)/.test(command)
-  ) {
-    status.textContent = 'ลองพิมพ์ ฝนตก ร้านปิด ร้านเต็ม เที่ยวบินดีเลย์ หรือตัดน้ำตกออก';
+  const input = { plan: pinnedPlan, setup: state.setup, command, day };
+  const ctrl = new AbortController();
+  activeReplan = ctrl;
+  const onStep = (text) => {
+    if (activeReplan === ctrl && !ctrl.signal.aborted) chatStep(text);
+  };
+  let result;
+  try {
+    result = await api('/api/replan', input, undefined, { signal: ctrl.signal, onStep });
+    ctrl.signal.throwIfAborted();
+    if (!Array.isArray(result.options) || !result.options.length ||
+        !result.options.every((option) => option?.plan?.days?.length && option.plan.days.every((d) => Array.isArray(d?.stops)))) {
+      throw Error('ยังไม่ได้รับแผนที่สมบูรณ์');
+    }
+  } catch (error) {
+    if (activeReplan !== ctrl) return;
+    if (ctrl.signal.aborted) chatState('cancelled', 'ยกเลิกคำขอแล้ว');
+    else {
+      chatState('error', 'ปรับแผนไม่สำเร็จ', clean(error.message) || 'กรุณาลองอีกครั้ง');
+      $('#chat-retry').onclick = () => task(() => adjust(command, day));
+    }
     return;
+  } finally {
+    if (activeReplan === ctrl) activeReplan = null;
   }
-  const result = offlineSample
-    ? await (
-        await import('/assets/sample-replan.js')
-      ).replan(input, {
-        signal: new AbortController().signal,
-        step: (text) => {
-          status.textContent = text;
-        },
-        usage: {},
-        emit() {},
-      })
-    : await api('/api/replan', input);
-  for (const option of result.options || []) option.usage = result.usage;
-  status.textContent = result.summary;
+  for (const option of result.options) option.usage = result.usage;
+  const selected = Number.isInteger(result.day) ? result.day : state.selected;
   if (!result.needs_vote) {
-    applyOption(result.options[0], result.routes);
+    applyOption(result.options[0], result.routes, { summary: result.summary, selected });
     return;
   }
+  state.selected = selected;
   pendingVotes = result;
   preview = { plan: result.options[0].plan, routes: result.routes };
-  state.selected = result.day ?? state.selected;
   render();
+  chatState('decision', 'อยากใช้แผนไหน?', result.vote_reason || result.summary);
   const area = $('#options');
-  area.replaceChildren(node('h3', 'โหวตแผนกับเพื่อน'));
+  const choices = node('div', null, 'chat-choices');
+  area.replaceChildren(choices);
+  if (document.activeElement !== $('#command')) $('#chat-state').focus({ preventScroll: true });
+  function showPreview(option) {
+    preview = option ? { plan: option.plan, routes: result.routes } : null;
+    state.selected = result.day ?? state.selected;
+    for (const control of choices.querySelectorAll('[data-preview]')) {
+      control.setAttribute('aria-pressed', String(control.dataset.preview === option?.key));
+    }
+    render();
+  }
   const ballot = {};
   const localActions = [];
+  let syncChoice, choosingLocal = false;
+  async function chooseLocal(option) {
+    if (pendingVotes !== result || choosingLocal) return;
+    choosingLocal = true;
+    const confirmed = await syncChoice?.(option);
+    if (pendingVotes !== result) return;
+    applyOption(confirmed || option, result.routes, { fromLineVote: Boolean(confirmed) });
+    setBusy(false);
+  }
   for (const option of result.options) {
     const row = node('article', null, 'option');
-    row.append(node('strong', option.key + ' · ' + option.title));
+    const heading = node('h3', option.key + ' · ' + option.title);
+    row.append(heading);
+    if (option.head && option.head !== option.title) row.append(node('p', option.head));
+    const actions = node('div', null, 'inline');
+    const compare = button('ดูตัวอย่าง', () => showPreview(option));
+    compare.dataset.preview = option.key;
+    compare.setAttribute('aria-pressed', String(option === result.options[0]));
+    actions.append(compare);
+    row.append(actions);
     renderPlanReview(row, state.plan, option);
-    row.append(
-      button('ดูตัวอย่าง', () => {
-        preview = { plan: option.plan, routes: result.routes };
-        state.selected = result.day ?? state.selected;
-        render();
-      }),
-      button('ดูแผนปัจจุบัน', () => {
-        preview = null;
-        render();
-      }),
-    );
-    area.append(row);
-    localActions.push(() => row.append(button('ใช้แผน ' + option.key, () => {
-      applyOption(option, result.routes);
-      setBusy(false);
-    }, 'primary')));
+    if (option.line) row.append(lineMessageBubble(option.line, 'ข้อความ LINE หากเลือกแผนนี้'));
+    renderRepairOutcome(row, option.plan.repairOutcome);
+    choices.append(row);
+    localActions.push(() => actions.append(button('ใช้แผน ' + option.key, () => chooseLocal(option), 'primary')));
   }
-  if (renderLineVote(area, state, result, (option) => applyOption(option, result.routes))) return;
-  for (const show of localActions) show();
-  area.append(button('คงแผนเดิม', () => {
+  area.append(button('ดูแผนปัจจุบัน', () => showPreview(null)));
+  const local = node('div');
+  local.hidden = true;
+  const showLocalVote = (sync) => {
+    if (!local.hidden || pendingVotes !== result) return;
+    syncChoice = sync;
+    for (const show of localActions) show();
+    local.hidden = false;
+  };
+  if (!renderLineVote(area, state, result, (option) => applyOption(option, result.routes, { fromLineVote: true }), showLocalVote))
+    showLocalVote();
+  area.append(local);
+  local.append(button('คงแผนเดิม', () => {
     pendingVotes = preview = null;
     area.replaceChildren();
     render();
-    status.textContent = 'ใช้กำหนดการเดิม';
+    chatState('kept', 'ใช้กำหนดการเดิม');
+    $('#chat-state').focus({ preventScroll: true });
   }));
+  local.append(node('h3', 'โหวตแผนกับเพื่อน'));
   const selectedLabels = Object.fromEntries(result.options.map((option) => [option.key, option.title]));
   for (const member of state.setup.members) {
     const voter = selectField(member.name, member.id, { '': 'ยังไม่ได้โหวต', ...selectedLabels }, '');
     voter.addEventListener('change', (event) => {
       ballot[member.id] = event.target.value;
     });
-    area.append(voter);
+    local.append(voter);
   }
   const tie = selectField(
     'ตัวเลือกกรณีคะแนนเสมอ (ผู้จัดทริป)',
@@ -980,7 +1281,7 @@ async function adjust(command, day = state.selected) {
     { '': 'เลือกเมื่อคะแนนเสมอ', ...selectedLabels },
     '',
   );
-  area.append(
+  local.append(
     tie,
     button(
       'ใช้ผลโหวต',
@@ -989,24 +1290,28 @@ async function adjust(command, day = state.selected) {
           .map((option) => [option.key, Object.values(ballot).filter((vote) => vote === option.key).length])
           .sort((a, b) => b[1] - a[1]);
         if (Object.values(ballot).filter(Boolean).length < state.setup.members.length) {
-          status.textContent = 'รอสมาชิกโหวตให้ครบ';
+          voteStatus.textContent = 'รอสมาชิกโหวตให้ครบ';
           return;
         }
         const key = counts[0][1] === counts[1][1] ? tie.querySelector('select').value : counts[0][0];
         const selected = pendingVotes?.options.find((option) => option.key === key);
-        if (selected) {
-          applyOption(selected, result.routes);
-          setBusy(false);
-        } else status.textContent = 'คะแนนเสมอ ให้ผู้จัดทริปเลือก';
+        if (selected) chooseLocal(selected);
+        else voteStatus.textContent = 'คะแนนเสมอ ให้ผู้จัดทริปเลือก';
       },
       'primary',
     ),
   );
+  const voteStatus = node('p', '', 'feedback');
+  voteStatus.setAttribute('role', 'status');
+  local.append(voteStatus);
 }
 $('#replan').addEventListener('submit', (event) => {
   event.preventDefault();
   const command = $('#command').value.trim();
-  if (command) task(() => adjust(command));
+  if (command && !busy) {
+    $('#command').value = '';
+    task(() => adjust(command));
+  }
 });
 $('#undo').addEventListener('click', () => {
   if (!history.length) return;
@@ -1016,7 +1321,7 @@ $('#undo').addEventListener('click', () => {
   preview = null;
   pendingVotes = null;
   forecast.refresh();
-  $('#options').replaceChildren();
+  clearChat();
   $('#alerts').replaceChildren();
   status.textContent = 'ย้อนกลับเป็นแผนก่อนหน้าแล้ว';
   setBusy(false);
@@ -1032,7 +1337,7 @@ if (localTrip)
     const response = await fetch('/api/local-trips/' + localTrip[1]);
     if (!response.ok) {
       setupDialog.showModal();
-      throw Error('ลิงก์เดโม่หมดอายุแล้ว เริ่มสร้างทริปใหม่ได้');
+      throw Error('ไม่พบลิงก์ทริปนี้แล้ว เริ่มสร้างทริปใหม่ได้');
     }
     const saved = await response.json();
     state = {
@@ -1051,5 +1356,4 @@ if (localTrip)
     render();
     forecast.refresh();
   });
-else if (new URLSearchParams(location.search).has('demo')) task(demo);
 else setupDialog.showModal();

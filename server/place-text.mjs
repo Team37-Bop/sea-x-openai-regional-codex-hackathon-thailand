@@ -18,6 +18,16 @@ export function httpsUrl(value) {
   return '';
 }
 
+export function sourceIdentity(value) {
+  const href = httpsUrl(value);
+  if (!href) return '';
+  const url = new URL(href);
+  for (const key of [...url.searchParams.keys()]) {
+    if (/^utm_/i.test(key)) url.searchParams.delete(key);
+  }
+  return url.href;
+}
+
 export function placeText(value, max = 120) {
   return typeof value === 'string'
     ? value

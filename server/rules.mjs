@@ -190,7 +190,7 @@ export function checks(
   add('open-days', 'เปิดวันที่ไป', dayIssues);
   add('meals', 'มื้อกลางวัน–เย็นครบ', mealIssues);
   const end = plan.days.at(-1)?.stops.at(-1);
-  const by = setup.depart?.by === 'undecided' ? plan.flags?.arrivalSuggested?.by : setup.depart?.by;
+  const by = setup.depart?.by === 'undecided' ? plan.flags?.departureSuggested?.by : setup.depart?.by;
   if (end && validTime(setup.depart?.time) && ['flight', 'train', 'bus'].includes(by)) {
     const buffer = by === 'flight' ? 75 : 30;
     const spare = minutes(setup.depart.time) - minutes(first(end));

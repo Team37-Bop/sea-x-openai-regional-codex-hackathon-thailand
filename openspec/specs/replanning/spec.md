@@ -18,6 +18,33 @@ The model SHALL answer with edits (`remove`, `insert`, `replace`, `flag`) agains
 - **WHEN** an edit names a stop id that does not exist
 - **THEN** the error "ไม่พบ <id>" is recorded and sent to the repair round
 
+### Requirement: Change the length of a trip in chat
+The organizer SHALL be able to add or remove a number of days or set the total through the existing chat. The revised itinerary SHALL keep the original start, end on its last calendar day, and have between one and seven dated days. An out-of-range request SHALL explain the supported range and leave the trip intact.
+
+#### Scenario: Extend across a month boundary
+- **WHEN** a three-day trip starting December 30 receives “เพิ่มอีก 2 วัน”
+- **THEN** the proposed trip has five days ending January 3. Existing visits remain in order, the return journey moves to the final day, and the added days have scheduled stops, routes and constraint checks. A live planner designs only the added days. The bundled sample can extend its itinerary offline.
+
+#### Scenario: Add the first overnight stay
+- **WHEN** a day trip with a recommended hotel gains its first night
+- **THEN** the itinerary ends the first day and starts the next at that hotel. The first hotel stop carries the per-person lodging charge for the revised number of nights, and the cost checks use the updated charge.
+
+#### Scenario: Depart on a former hotel transfer day
+- **WHEN** shortening a trip removes the hotel the group was due to transfer to on its new final day
+- **THEN** that morning's hotel stop shows final checkout and the original option retains its transfer instruction.
+
+#### Scenario: Shorten a trip with a commitment
+- **WHEN** “ลดเหลือ 2 วัน” would remove a confirmed reservation or a member's wished-for visit
+- **THEN** Bop explains the impact and offers the shorter itinerary and the original itinerary as distinct choices. Each choice carries its own setup and dates. Changes to a booked stay, fixed return journey, a newly failed check or a cost increase above ฿300 per person also require a decision. A return offer from the old date cannot be booked on the revised itinerary.
+
+#### Scenario: Applying or undoing a duration change
+- **WHEN** the group applies a duration change
+- **THEN** the date range, day tabs, selected day, setup and reservations reflect the chosen itinerary. Undo restores the original dates and days.
+
+#### Scenario: An edit mentions a particular day
+- **WHEN** the organizer requests a change to a stop on day two without asking to change the trip length
+- **THEN** Bop handles it as an ordinary stop edit and keeps the trip duration.
+
 ### Requirement: Vote rules
 The model prompt SHALL request a vote for a broken member constraint, a cost increase greater than ฿300 per person, or a lost starred wish. The server SHALL use the returned vote decision and require at least two options to hold a vote. It caps options at three and assigns A–C by position. With a false decision or one option it retains only A. The arithmetic threshold guides the model and is not a separate server-side decision.
 
@@ -31,7 +58,35 @@ The model prompt SHALL request a vote for a broken member constraint, a cost inc
 
 #### Scenario: Group vote
 - **WHEN** `needs_vote` is true
-- **THEN** the UI shows the options, a LINE-style message per option (starting "Bop: ") and the members' votes, and the organizer breaks a tie
+- **THEN** the UI asks the group to choose, shows the reason, alternatives and a LINE-style message per option (starting "Bop: "), and keeps the existing trip until a choice is applied. The organizer breaks a tie.
+
+### Requirement: Observable progress in “คุยกับ Bop”
+
+The conversation SHALL retain the organizer's request and the public Thai progress steps for that request in chronological order. The server and bundled sample SHALL report the operations they perform, including reviewing the itinerary, checking the proposed options' times, costs and constraints, and the check result per option. Progress SHALL use the existing `step` event or local callback. Private model reasoning SHALL stay out of the conversation.
+
+#### Scenario: A routine edit completes
+- **WHEN** the organizer asks for a specific change with one applicable option
+- **THEN** the organizer can see what Bop is checking while the request runs. On completion the conversation identifies the applied change and the organizer can undo it.
+
+#### Scenario: A trade-off needs a decision
+- **WHEN** the completed request returns two or three options with `needs_vote: true`
+- **THEN** the conversation shows what the group must decide. If the model omits an explanation, the question names the actual choices. Previewing an option keeps the committed itinerary and reservation tasks until the organizer selects an option or the group vote resolves.
+
+#### Scenario: A request fails
+- **WHEN** the service fails before returning valid options
+- **THEN** the conversation reports the failure and the committed itinerary remains available.
+
+### Requirement: Inspect the result of an automatic repair
+
+When Bop attempts a repair during initial planning or on an individual proposed option, the returned plan SHALL carry a public repair outcome. The organizer SHALL be able to see whether Bop used the correction or kept the plan from before the attempt, which checks passed before and after, which conditions still fail, and the actual affected visits when available. Final-only delivery and reopening a saved trip SHALL expose the same outcome. A later request SHALL show only the repair performed for that request and option.
+
+#### Scenario: A repair improves the plan
+- **WHEN** a meal is changed to satisfy a member's food restriction
+- **THEN** the organizer can see the affected visit, the condition that now passes, and any remaining failed conditions when viewing the result.
+
+#### Scenario: The correction is rejected or has no effect
+- **WHEN** a correction worsens the plan, changes nothing or fails to complete
+- **THEN** the organizer sees that the plan before the repair was kept, along with its actual remaining checks. Other options without a repair carry no such outcome.
 
 ### Requirement: Option output
 Each option SHALL carry `key`, `title`, `head`, `line` (2-4 short Thai lines for the group chat, with the cost change per person and who has a new task) and a full scheduled `plan`; the `done` event SHALL also carry `summary`, `day` (0-based, most affected), `routes` for every leg of every option, `ms` and `repaired`.
@@ -76,12 +131,12 @@ The UI SHALL push the previous plan, reservation states, cancellations and setup
 - **WHEN** the organizer taps "ย้อนกลับ" after a replan
 - **THEN** the previous plan and reservation states are restored and the step "ย้อนกลับเป็นแผนก่อนหน้าแล้ว" is shown
 
-### Requirement: Offline scenarios
-Without a usable model on the sample plan, the UI SHALL run pre-built scenarios (`SCEN`: rain, closed restaurant, full restaurant, flight delay) instead of calling the server.
+### Requirement: Offline sample scenarios
+The bundled sample replanner SHALL support rain, closed restaurant, full restaurant and flight-delay scenarios when invoked directly with its offline fixture.
 
 #### Scenario: Offline rain
-- **WHEN** the model is unavailable and the organizer types "ถ้าฝนตกล่ะ"
-- **THEN** the rain scenario runs locally with simulated votes
+- **WHEN** the offline sample replanner receives "ถ้าฝนตกล่ะ"
+- **THEN** it returns the rain alternatives for a group decision.
 
 ### Requirement: Bad input
 The endpoint SHALL end with `bad_request` when the plan is invalid (no days, a stop without string id, array `ll` or `HH:MM` times) or the command is empty.
@@ -142,13 +197,9 @@ The UI SHALL distinguish a preview from an applied option. Applying an option sn
 - **WHEN** the planner receives a vote with at least two choices and has a linked trip and organizer token
 - **THEN** it previews option A, starts a LINE vote with the choices and a 120-minute deadline, and polls about every three seconds while the vote card is active. A closed vote with a matching winning key applies that option.
 
-#### Scenario: Offline command outside the sample vocabulary
-- **WHEN** a sample user without a usable provider enters an unrecognized command
-- **THEN** the UI explains the sample commands and leaves the plan in place. Recognized waterfall removal, rain, restaurant closure and flight-delay commands use their local scenarios.
-
 ### Requirement: Review before applying a group option
 
-The organizer SHALL be able to inspect a proposed plan alongside the committed itinerary, including affected visits, changed times, changes to budget per traveler and newly failing checks. Copying the option summary SHALL require a user action.
+The organizer SHALL be able to inspect a proposed plan alongside the committed itinerary, including affected visits, changed times, changes to budget per traveler and newly failing checks. Previewing an option SHALL show its proposed LINE message. Applying an option SHALL show its message and the actual delivery status in the result card.
 
 #### Scenario: Resolving a local choice
 

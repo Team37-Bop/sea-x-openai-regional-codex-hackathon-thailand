@@ -1,4 +1,4 @@
-import { readEvents } from './stream.js';
+import { fetchStream, readEvents } from './stream.js';
 
 const money = new Intl.NumberFormat('th-TH', { maximumFractionDigits: 0 });
 const travel = { flight: 'เครื่องบิน', bus: 'รถบัส', train: 'รถไฟ', drive: 'รถยนต์' };
@@ -47,22 +47,24 @@ function link(url, title) {
   item.rel = 'noopener noreferrer';
   return item;
 }
+export function loadPlaceImage(image, photo, onFailure) {
+  const original = mediaUrl(photo?.url);
+  const preferred = mediaUrl(photo?.thumb) || original;
+  image.addEventListener('error', () => {
+    if (original && image.src !== original) image.src = original;
+    else onFailure();
+  });
+  image.referrerPolicy = 'no-referrer';
+  image.src = preferred;
+}
 function photoFigure(photo, name) {
   const url = mediaUrl(photo?.url);
   if (!url) return null;
   const figure = element('figure', null, 'place-photo');
   const image = element('img');
-  image.src = mediaUrl(photo.thumb) || url;
   image.alt = plain(name);
-  image.loading = 'lazy';
-  image.referrerPolicy = 'no-referrer';
-  image.addEventListener(
-    'error',
-    () => {
-      figure.hidden = true;
-    },
-    { once: true },
-  );
+  image.loading = 'eager';
+  loadPlaceImage(image, photo, () => { figure.hidden = true; });
   const credit = element('figcaption');
   if (photo.match === 'likely')
     credit.append(element('span', 'รูปจากเว็บ', 'photo-badge'), document.createTextNode(' · '));
@@ -72,7 +74,7 @@ function photoFigure(photo, name) {
   return figure;
 }
 async function post(path, payload, signal, onStep = () => {}) {
-  const response = await fetch(path, {
+  const response = await fetchStream(path, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(payload),
@@ -94,14 +96,6 @@ function textField(name, title, maxLength) {
   return addField(title, input);
 }
 export function installSetupExtras(form, readSetup) {
-  const stayMode = form.elements.stayMode;
-  const areaLabel = textField('hotelArea', 'ย่านที่สนใจพัก (ถ้ามี)', 120);
-  stayMode.closest('label').after(areaLabel);
-  const toggleArea = () => {
-    areaLabel.hidden = stayMode.value === 'booked';
-  };
-  stayMode.addEventListener('change', toggleArea);
-  toggleArea();
   const noteField = textField('extra', 'รายละเอียดเพิ่มเติมของทริป', 1000);
   form.querySelector('#form-error').before(noteField);
   const airportByCity = {
@@ -117,14 +111,17 @@ export function installSetupExtras(form, readSetup) {
     ['arrive', 'go'],
     ['depart', 'back'],
   ]) {
-    const by = form.elements[name + 'By'],
+    const byName = name + 'By';
+    const by = form.elements[byName],
       time = form.elements[name + 'Time'];
-    const fieldset = by.closest('fieldset');
+    const fieldset = time.closest('fieldset');
     const auto = element('input');
     auto.type = 'checkbox';
     auto.name = name + 'Auto';
     const autoLabel = element('label', null, 'checkbox');
-    autoLabel.append(auto, document.createTextNode('ให้ Bop เลือกเวลาให้'));
+    const autoText = document.createTextNode('');
+    autoLabel.append(auto, autoText);
+    const hint = element('p', null, 'muted');
     const list = element('div', null, 'transport-options');
     const feedback = element('p', null, 'muted');
     feedback.setAttribute('role', 'status');
@@ -144,21 +141,44 @@ export function installSetupExtras(form, readSetup) {
         auto.checked,
         by.value === 'drive' ? 0 : form.querySelectorAll('#members .member').length,
       ]);
-    function updateLabel() {
-      search.textContent = (by.value === 'drive' ? 'คำนวณเวลาขับรถ' : 'ค้นหาตัวเลือก') + directionLabel;
+    const outbound = dir === 'go';
+    const labelsByMode = {
+      undecided: [outbound ? 'เมืองต้นทาง' : 'เมืองที่เดินทางกลับ', 'เช่น กรุงเทพฯ'],
+      flight: [outbound ? 'สนามบินต้นทาง' : 'สนามบินปลายทางขากลับ', 'เช่น DMK'],
+      bus: [outbound ? 'ต้นทางรถบัส' : 'ปลายทางรถบัสขากลับ', 'เช่น หมอชิต'],
+      train: [outbound ? 'สถานีรถไฟต้นทาง' : 'สถานีรถไฟปลายทางขากลับ', 'เช่น สถานีกลางกรุงเทพอภิวัฒน์'],
+      drive: [outbound ? 'จุดเริ่มขับรถ' : 'จุดหมายขากลับ', 'เช่น กรุงเทพฯ'],
+    };
+    function updateControls() {
+      const mode = by.value;
+      const service = { flight: 'เที่ยวบิน', bus: 'เที่ยวรถบัส', train: 'เที่ยวรถไฟ' }[mode];
+      const automatic = mode === 'undecided' || (service && auto.checked);
+      const [placeLabel, example] = labelsByMode[mode];
+      place.closest('label').firstChild.textContent = placeLabel;
+      place.setAttribute('aria-label', placeLabel);
+      place.placeholder = example;
+      autoLabel.hidden = auto.disabled = !service;
+      autoText.textContent = service ? 'ให้ Bop ช่วยหา' + service : '';
+      time.closest('label').hidden = time.disabled = Boolean(automatic);
+      search.hidden = mode !== 'drive' && !(service && auto.checked);
+      search.textContent = (mode === 'drive' ? 'คำนวณเวลาขับรถ' : 'ดูตัวเลือก' + (service || '')) + directionLabel;
+      hint.textContent = mode === 'undecided'
+        ? 'ระบุ' + placeLabel + 'เพื่อให้ Bop แนะนำวิธีเดินทาง' + directionLabel
+        : service && auto.checked ? 'เลือก' + service + 'ตอนนี้ หรือให้ Bop เลือกให้ตอนจัดแผน' : '';
+      hint.hidden = !hint.textContent;
     }
     function clear(restore = false, edited = '') {
       leg.ctrl?.abort();
       leg.ctrl = null;
       if (restore && leg.original) {
         if (edited !== time.name && time.value === leg.original.appliedTime) time.value = leg.original.time;
-        if (edited !== by.name && by.value === leg.original.appliedBy) by.value = leg.original.by;
+        if (edited !== byName && by.value === leg.original.appliedBy) by.value = leg.original.by;
       }
       leg.choice = leg.original = null;
       list.replaceChildren();
       feedback.textContent = '';
       search.disabled = false;
-      updateLabel();
+      updateControls();
     }
     function dayOffset(value) {
       if (!value) return '';
@@ -247,9 +267,8 @@ export function installSetupExtras(form, readSetup) {
           leg.choice = option;
           by.value = option.by;
           time.value = appliedTime;
-          auto.checked = false;
           feedback.textContent = 'เลือก ' + nameText + ' · ' + option.dep + '–' + option.arr;
-          updateLabel();
+          updateControls();
         });
         group.append(row);
         const page = option.src?.checked === 'web' && link(option.src.url, option.src.title || 'แหล่งข้อมูล');
@@ -262,6 +281,11 @@ export function installSetupExtras(form, readSetup) {
     }
     const search = button('', async () => {
       clear(true);
+      if (!place.value.trim()) {
+        feedback.textContent = 'ระบุ' + labelsByMode[by.value][0] + 'ก่อนค้นหา';
+        place.focus();
+        return;
+      }
       const ctrl = new AbortController();
       leg.ctrl = ctrl;
       const started = signature();
@@ -305,13 +329,17 @@ export function installSetupExtras(form, readSetup) {
         if (leg.ctrl === ctrl) search.disabled = false;
       }
     });
-    fieldset.append(autoLabel, search, feedback, list);
-    updateLabel();
-    const inputFields = new Set(['city', 'startDate', 'endDate', place.name, by.name, time.name, auto.name]);
+    fieldset.append(autoLabel, hint, search, feedback, list);
+    updateControls();
+    const inputFields = new Set(['city', 'startDate', 'endDate', place.name, byName, time.name, auto.name]);
     form.addEventListener('input', (event) => {
       const field = event.target.name;
       if (!inputFields.has(field)) return;
       if (field === place.name) leg.placeLL = null;
+      if (field === byName) {
+        time.value = '';
+        auto.checked = by.value !== 'drive' && by.value !== 'undecided';
+      }
       clear(true, field);
     });
     let hydrating = false;
@@ -331,16 +359,18 @@ export function installSetupExtras(form, readSetup) {
         hydrating = false;
       });
       clear();
-      const picked =
-        saved.choice ||
-        plannedRoute?.options?.find((item) => item.id === plannedRoute.chosen) ||
-        plannedRoute?.chosenOption ||
-        (typeof plannedRoute?.chosen === 'object' && plannedRoute.chosen);
+      const legacyChoice = plannedRoute && !plannedRoute.requestedBy && !saved.auto && (
+        plannedRoute.options?.find((item) => item.id === plannedRoute.chosen) ||
+        plannedRoute.chosenOption ||
+        (typeof plannedRoute.chosen === 'object' && plannedRoute.chosen)
+      );
+      const picked = saved.choice || legacyChoice;
       const choice = picked?.carrier && picked.dep && picked.arr ? picked : null;
-      by.value = saved.by || choice?.by || 'undecided';
+      const preferred = saved.choice?.by || plannedRoute?.requestedBy || saved.by || choice?.by;
+      by.value = Object.hasOwn(labelsByMode, preferred) ? preferred : saved.time ? 'flight' : 'undecided';
       time.value = saved.time || (dir === 'go' ? choice?.arr : choice?.dep) || '';
       place.value = saved[destination] || '';
-      auto.checked = saved.auto === true;
+      auto.checked = Boolean(choice || saved.auto || plannedRoute?.requestedBy || !time.value);
       leg.placeLL = Array.isArray(saved.placeLL) ? [...saved.placeLL] : null;
       if (choice && by.value !== 'drive') {
         leg.choice = structuredClone(choice);
@@ -351,7 +381,7 @@ export function installSetupExtras(form, readSetup) {
             .join(' ');
         list.append(button('ล้างตัวเลือก', () => clear()));
       }
-      updateLabel();
+      updateControls();
     };
   }
   const augment = (setup) => {
@@ -366,7 +396,8 @@ export function installSetupExtras(form, readSetup) {
       if (!setup[name]) continue;
       decorated[name] = {
         ...setup[name],
-        auto: leg.auto.checked,
+        time: form.elements[name + 'Time'].disabled && !leg.choice ? '' : setup[name].time,
+        auto: setup[name].by === 'undecided' || (!leg.auto.disabled && leg.auto.checked),
         ...(leg.placeLL ? { placeLL: leg.placeLL } : {}),
         ...(leg.choice ? { choice: leg.choice } : {}),
       };
@@ -389,7 +420,6 @@ export function installSetupExtras(form, readSetup) {
   augment.restore = (setup = {}, flags = {}) => {
     form.elements.hotelArea.value = setup.hotelArea || '';
     form.elements.extra.value = setup.extra || '';
-    toggleArea();
     legs.arrive.restore(setup.arrive, flags.transport?.go);
     legs.depart.restore(setup.depart, flags.transport?.back);
   };
@@ -412,7 +442,7 @@ export function candidateQuestions(result) {
   }
   return [...grouped.values()];
 }
-export function chooseCandidates({ dialog, content, result, signal, partySize }) {
+export function chooseCandidates({ dialog, reopen, result, signal, partySize, onQuestion }) {
   const questions = candidateQuestions(result),
     picks = { must: [], avoid: [] };
   if (!questions.length) return Promise.resolve(picks);
@@ -427,19 +457,35 @@ export function chooseCandidates({ dialog, content, result, signal, partySize })
       answers = new Map();
     };
     const finish = (includeCurrent, aborted = false) => {
-      dialog.classList.remove('candidate-survey');
-      dialog.removeAttribute('aria-labelledby');
-      dialog.removeEventListener('close', close);
       signal?.removeEventListener('abort', abort);
+      dialog.removeEventListener('cancel', cancel);
+      dialog.removeEventListener('close', close);
+      reopen.removeEventListener('click', open);
+      reopen.hidden = true;
       if (includeCurrent) collect();
       if (dialog.open) dialog.close();
+      dialog.replaceChildren();
       if (aborted) reject(signal.reason);
       else resolve(picks);
     };
-    const close = () => finish(true),
-      abort = () => finish(false, true);
+    const abort = () => finish(false, true);
+    const cancel = (event) => {
+      event.preventDefault();
+      finish(true);
+    };
+    const close = () => {
+      if (dialog.open) return;
+      reopen.hidden = false;
+      reopen.focus({ preventScroll: true });
+    };
+    const open = () => {
+      if (!dialog.open) dialog.showModal();
+      reopen.hidden = true;
+      dialog.querySelector('h2').focus({ preventScroll: true });
+    };
     const draw = () => {
       const q = questions[index];
+      const cards = new Map();
       const head = element('header', null, 'survey-head');
       const progress = element('progress');
       progress.max = questions.length;
@@ -448,7 +494,8 @@ export function chooseCandidates({ dialog, content, result, signal, partySize })
       const title = element('h2', plain(q.title) || 'เลือกสถานที่ที่สนใจ');
       title.id = 'survey-question';
       title.tabIndex = -1;
-      head.append(
+      const tools = element('div', null, 'survey-tools');
+      tools.append(
         element(
           'p',
           ['คำถาม ' + (index + 1) + ' จาก ' + questions.length, partySize > 0 && 'กลุ่ม ' + partySize + ' คน']
@@ -456,14 +503,16 @@ export function chooseCandidates({ dialog, content, result, signal, partySize })
             .join(' · '),
           'muted',
         ),
-        progress,
-        title,
+        button('ดูแผนที่', () => dialog.close()),
       );
+      head.append(tools, progress, title);
       if (q.sub || q.why) head.append(element('p', plain(q.sub || q.why), 'muted'));
       const grid = element('div', null, 'candidate-grid');
-      content.replaceChildren(head, grid);
+      dialog.replaceChildren(head, grid);
       for (const option of q.options.filter((o) => o?.name)) {
         const row = element('article', null, 'question-option');
+        row.tabIndex = -1;
+        cards.set(option, row);
         const fig = photoFigure(option.photo, option.name);
         if (fig) row.append(fig);
         const body = element('div', null, 'candidate-body');
@@ -483,7 +532,7 @@ export function chooseCandidates({ dialog, content, result, signal, partySize })
             : plain(raw);
         if (price) body.append(element('p', (page ? 'ราคาที่พบ ' : 'ราคาประมาณ ') + price, 'muted'));
         if (page) body.append(page);
-        const toggles = element('div', null, 'inline');
+        const toggles = element('div', null, 'candidate-answers');
         toggles.setAttribute('role', 'group');
         toggles.setAttribute('aria-label', plain(option.name));
         for (const [value, label] of [
@@ -498,12 +547,14 @@ export function chooseCandidates({ dialog, content, result, signal, partySize })
             for (const item of toggles.children)
               item.setAttribute('aria-pressed', String(item.dataset.answer === answers.get(option)));
           });
+          const mark = element('span', '✓', 'answer-mark');
+          mark.setAttribute('aria-hidden', 'true');
+          toggle.prepend(mark);
           toggle.dataset.answer = value;
           toggle.setAttribute('aria-pressed', 'false');
           toggles.append(toggle);
         }
-        body.append(toggles);
-        row.append(body);
+        row.append(body, toggles);
         grid.append(row);
       }
       const next = (accept) => {
@@ -511,7 +562,7 @@ export function chooseCandidates({ dialog, content, result, signal, partySize })
         else answers = new Map();
         if (++index < questions.length) {
           draw();
-          content.querySelector('h2')?.focus();
+          dialog.querySelector('h2').focus({ preventScroll: true });
         } else finish(false);
       };
       const footer = element('footer', null, 'survey-footer');
@@ -520,19 +571,25 @@ export function chooseCandidates({ dialog, content, result, signal, partySize })
         button('ข้ามคำถามนี้', () => next(false)),
         button(index === questions.length - 1 ? 'เริ่มวางแผน' : 'ถัดไป', () => next(true), 'primary'),
       );
-      content.append(footer);
+      dialog.append(footer);
       dialog.scrollTop = 0;
+      onQuestion(q, (option) => {
+        const card = cards.get(option);
+        if (!card?.isConnected) return;
+        if (!dialog.open) open();
+        card.focus({ preventScroll: true });
+        card.scrollIntoView({ block: 'nearest' });
+      });
     };
     if (signal?.aborted) {
       abort();
       return;
     }
-    dialog.classList.add('candidate-survey');
-    dialog.setAttribute('aria-labelledby', 'survey-question');
     draw();
-    dialog.addEventListener('close', close, { once: true });
+    dialog.addEventListener('cancel', cancel);
+    dialog.addEventListener('close', close);
+    reopen.addEventListener('click', open);
     signal?.addEventListener('abort', abort, { once: true });
-    if (!dialog.open) dialog.showModal();
-    content.querySelector('h2').focus({ preventScroll: true });
+    open();
   });
 }

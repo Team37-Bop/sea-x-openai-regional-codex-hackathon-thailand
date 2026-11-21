@@ -6,33 +6,43 @@ Describe the Thai organizer's journey across setup, plan generation, itinerary a
 
 ## Requirements
 
-### Requirement: Entry, readiness and sample selection
+### Requirement: Trip entry and readiness
 
-The normal entry point SHALL show trip setup, check model readiness and fetch public LINE configuration independently. The agent indicator SHALL distinguish checking, ready and sample mode. An explicit demo query SHALL load the built-in Chiang Mai trip.
+The web app SHALL open the organizer's trip setup and check model readiness and public LINE configuration independently. The header and setup SHALL offer no sample trip launcher.
 
-#### Scenario: Offline organizer
+#### Scenario: Opening a trip link
 
-- **WHEN** the health request times out after ten seconds, fails, or returns HTML
-- **THEN** the client treats the agent as unreachable and offers the sample from setup. A reachable server reporting no usable model shows the configuration-specific explanation.
+- **WHEN** the organizer opens the planner with a saved local trip identifier
+- **THEN** the app opens that trip. A bare URL or a legacy demo query with no saved trip opens setup.
 
-#### Scenario: Direct demo entry
+#### Scenario: Service unavailable
 
-- **WHEN** the organizer opens the planner with the `demo` query parameter
-- **THEN** the sample opens with the first day selected and offline free-text replanning available. A regular successful generated plan opens with the whole-trip map selected.
+- **WHEN** the health request fails or the configured server has no usable model
+- **THEN** the readiness indicator describes the connection or configuration problem, and the draft remains available for retry.
 
 ### Requirement: Planning progress and recovery
 
-The frontend SHALL show elapsed time and Thai progress, render completed days by their supplied indices, and commit a trip only after a terminal result supplies a nonempty days array. A superseded request SHALL have no effect on the current view.
+On valid setup submission the interactive map SHALL appear immediately, centered on the destination's known coordinates or updated when its lookup completes. The desktop layout SHALL put compact progress in the left itinerary rail with the map on the right. A narrow screen SHALL keep the map above the scrollable progress. The planning rail and the replan response SHALL show chronological, connected progress steps as they arrive with no disclosure action. The active operation has a spinner and completed operations have checkmarks. Waiting for a decision, completing, failing or canceling stops the animation. An interrupted operation SHALL be distinguished from a completed one. Reduced-motion settings SHALL use a static active indicator. A complete terminal itinerary commits the trip. A superseded request SHALL have no effect on the current view.
+
+#### Scenario: Group chooses places before planning
+
+- **WHEN** the organizer asks to review candidate places
+- **THEN** the interactive map and its planning status remain in the workspace during discovery. When answers are needed, a native dialog opens centered over the map on desktop and as a bottom sheet on narrow screens. The map remains underneath with known candidate coordinates. Answering or skipping returns to planning over that map, and retrying the final planning phase reuses the group's completed answers.
+
+#### Scenario: Days arrive out of order
+
+- **WHEN** day two arrives before day one and day two is later updated
+- **THEN** the progress view shows day one before day two with two distinct days ready. Intermediate map snapshots update pins without counting a completed day. Preview routes require resolved geometry, and synthetic fallback locations are excluded. Every generation starts with a clear destination map. Canceling restores the committed map and draft form.
 
 #### Scenario: Organizer edits during generation
 
-- **WHEN** the organizer cancels or returns to edit setup
-- **THEN** the client aborts the active request, retains its setup for editing and ignores late events from that request.
+- **WHEN** the organizer chooses ยกเลิก beneath the progress steps during generation or while waiting for choices
+- **THEN** the client aborts the active request, retains its setup for editing and ignores late events. While a survey is paused the rail also offers เปิดคำถามอีกครั้ง.
 
 #### Scenario: Stream ends unexpectedly
 
 - **WHEN** a response ends after steps or partial days and has no terminal event
-- **THEN** the client returns a connection-cut error. The planning screen offers recovery instead of accepting the partial itinerary as complete.
+- **THEN** the client returns a connection-cut error. The planning rail offers ลองใหม่ and แก้ข้อมูลทริป. A candidate-discovery error also offers ให้ Bop จัดให้เลย to continue directly to itinerary planning.
 
 #### Scenario: JSON events span network chunks
 
@@ -48,6 +58,11 @@ The planner SHALL present itinerary and bookings tabs. The itinerary view SHALL 
 - **WHEN** the organizer selects a different day
 - **THEN** the timeline changes, the previous stop selection clears and the map focuses on that day. Opening a stop displays its place details.
 
+#### Scenario: Show the dates of the displayed itinerary
+
+- **WHEN** the organizer views a trip, previews a revised duration, applies it or undoes it
+- **THEN** the day selector displays one button per itinerary day, with its Thai weekday, calendar date, walking distance and per-person cost. The dates follow the itinerary across month and year boundaries. If the selected day is removed, selection moves to the last available day. Arrow-key navigation uses the displayed buttons.
+
 #### Scenario: Reservation follow-up
 
 - **WHEN** the current plan has calls to make or cancellations to handle
@@ -58,6 +73,15 @@ The planner SHALL present itinerary and bookings tabs. The itinerary view SHALL 
 - **WHEN** a tab has focus and the organizer presses a horizontal arrow
 - **THEN** focus and selection move between tabs, wrapping at either end. Enter or Space on a focused timeline stop opens it. Escape closes an open place sheet.
 
+### Requirement: Reversible workspace panels
+
+The organizer SHALL be able to collapse and reopen each side of the map independently without losing the current task.
+
+#### Scenario: Collapsing workspace panels
+
+- **WHEN** the organizer collapses the left itinerary or the active Bop response
+- **THEN** that panel's keyboard-operable toggle remains available and exposes its expanded state. The desktop map grows when the itinerary is collapsed. Mobile keeps the controls in their respective sections below the map. Reopening restores the selected day or booking tab, pending decisions and votes, and all progress received while collapsed. A new chat request opens its response.
+
 ### Requirement: Preview, reset and separate trip state
 
 An option preview SHALL use the candidate itinerary for display while retaining the committed plan. Loading a new trip SHALL establish an original-plan snapshot, clear local history, preview, reservation markers, cancellations and current stop selection, and begin at day one.
@@ -65,7 +89,7 @@ An option preview SHALL use the candidate itinerary for display while retaining 
 #### Scenario: Return to the initial plan
 
 - **WHEN** the organizer resets a trip while a plan change is not running
-- **THEN** the planner restores the initial live itinerary or regenerates the original sample, clears the edit history and reservation UI state, and selects day one. Single-step undo is specified in the replanning capability.
+- **THEN** the planner restores the initial itinerary, clears the edit history and reservation UI state, and selects day one. Single-step undo is specified in the replanning capability.
 
 ### Requirement: Production web boundary
 
@@ -107,9 +131,20 @@ Switching between the itinerary and bookings SHALL change the contents of the tr
 
 ### Requirement: Docked place cards and persistent map
 
-The desktop workspace SHALL keep the timeline or booking list at the left and the map in the main area. Selecting a stop SHALL open a third adjacent column for place details and leave the map and itinerary interactive. On a narrow screen the map, expanded place card and selected tab content SHALL stack without a modal overlay.
+The desktop workspace SHALL keep the timeline or booking list at the left and the map in the main area. Selecting a stop SHALL open a non-modal place panel anchored inside the left edge of the map. The timeline and map SHALL retain their width. On narrow screens the place panel SHALL attach to the bottom of the viewport, keep the map or itinerary partly visible, and offer a close action.
 
 #### Scenario: Exploring a place while keeping trip context
 
 - **WHEN** the organizer selects an itinerary row or map marker
-- **THEN** the same stop is selected on the map and timeline. The place card opens beside the map or below it at narrow widths. Escape or the close control restores focus to the stop.
+- **THEN** the same stop is selected on the map and timeline. The place card opens along the left edge of the map or at the bottom of a narrow viewport. Escape or the close control restores focus to the stop.
+
+#### Scenario: Open a timeline stop
+
+- **WHEN** a traveler taps the place name, time or body of a stop, or activates its name with Enter or Space
+- **THEN** the place panel opens. The card has one primary action named for the stop. Reservation actions remain independent. Meals on the committed itinerary also offer an inline menu toggle, which can expand or collapse without opening the place panel.
+- **AND** the plan tab displays the trip summary and stop notes directly when available.
+
+#### Scenario: Asking Bop to change another day from bookings
+
+- **WHEN** the organizer sends a replan request while viewing bookings or the whole-trip map
+- **THEN** the itinerary and its daily map open, any previous place sheet closes, and the day returned by Bop is selected for an automatic change as well as a group decision.

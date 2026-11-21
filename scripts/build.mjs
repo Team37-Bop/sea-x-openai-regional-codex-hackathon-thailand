@@ -23,6 +23,7 @@ const publicFiles = [
   'plan-review.js',
   'sample-place-details.js',
   'setup-extras.js',
+  'stop-note.js',
   'stream.js',
   'style.css',
   'trip-integrations.js',
