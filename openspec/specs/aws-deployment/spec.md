@@ -82,10 +82,10 @@ CloudFront and API Gateway SHALL each have AWS WAF managed-rule and per-IP rate 
 - **THEN** an operator may dispatch the deployment workflow with `waf_mode=block`
 
 ### Requirement: Workload tagging
-Supported AWS resources SHALL carry `Project=poc-tourism`, `Workload=poc-tourism`, environment, management and repository tags through provider defaults or explicit resource tags.
+Supported AWS resources SHALL carry `Project=sea-openai`, `Workload=sea-openai`, environment, management and repository tags through provider defaults or explicit resource tags.
 
 #### Scenario: Cost inventory is queried
-- **WHEN** resources are filtered by the `poc-tourism` workload tag
+- **WHEN** resources are filtered by the `sea-openai` workload tag
 - **THEN** the deployed CloudFront, API, compute, data, security, logging and budget resources are attributable to the workload
 
 ### Requirement: Edge routing and cache behavior

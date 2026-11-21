@@ -35,9 +35,9 @@ openspec validate --all --strict --no-interactive
 npm run package:lambda
 ```
 
-คำสั่งแพ็กตรวจชุดทดสอบและช่องโหว่ของ dependencies ที่ใช้จริง สร้างเว็บลง `dist/` ตรวจ MapLibre worker และทดสอบ health ของ Lambda ที่บันเดิลแล้วใน `build/lambda/` โค้ด Terraform และเวิร์กโฟลว์อธิบายขั้นตอน deploy ใน [สเปก AWS](openspec/specs/aws-deployment/spec.md)
+คำสั่งแพ็กติดตั้ง dependencies จาก lockfile ทดสอบแอป ตรวจช่องโหว่ระดับ high ของ dependencies ที่ใช้จริง และสร้างเว็บใน `dist/` จากรายการไฟล์สาธารณะที่กำหนดไว้ใน `scripts/build.mjs` เมื่อเพิ่มไฟล์หน้าเว็บให้เพิ่มชื่อในรายการนั้นด้วย ตัวแพ็กตรวจ MapLibre worker และทดสอบ health กับการสตรีมแผนสามวันจาก Lambda ที่บันเดิลใน `.build/lambda/`
 
-การตั้งค่า AWS ครั้งแรกทำโดยผู้ดูแลผ่าน `terraform/bootstrap` โดยใช้ numeric owner ID และ repository ID จาก GitHub จากนั้นใช้ saved plan ของ `terraform/app` เพื่อสร้างระบบและส่ง distribution ID กับ REST API ID กลับเข้าค่า bootstrap ตั้ง repository variables `AWS_ACCOUNT_ID`, `AWS_REGION`, `AWS_DEPLOY_ROLE_ARN`, `TF_STATE_BUCKET` เมื่อพร้อมให้ main ปล่อย release ตัวแปร `BOP_ENVIRONMENT` ใช้ค่าเริ่มต้น `poc`
+GitHub Actions ตรวจ pull request และใช้ OIDC เพื่อ deploy จาก main ไปยัง CloudFront, private S3, API Gateway และ Lambda ทำตาม [คู่มือ Terraform](terraform/README.md) สำหรับ bootstrap, repository variables, การเลือก runtime secret, การตรวจผล และ rollback
 
 [OpenSpec ทั้ง 15 ส่วน](openspec/README.md) ระบุพฤติกรรมและเกณฑ์ทดสอบของการเขียนแอปใหม่ ทักษะ OpenSpec สำหรับ Codex อยู่ใน `.codex/skills/`
 

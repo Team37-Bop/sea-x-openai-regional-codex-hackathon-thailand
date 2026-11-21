@@ -1,0 +1,7 @@
+# Use the repository identity exports in ../README.md. To persist these values,
+# set expected_account_id, github_owner, github_repository, github_owner_id,
+# and github_repository_id in your gitignored terraform.tfvars.
+aws_region = "us-east-1"
+
+# Set true only if this AWS account lacks the GitHub OIDC provider.
+create_github_oidc_provider = false

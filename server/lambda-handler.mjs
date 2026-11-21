@@ -1,75 +1,124 @@
-import { Readable, Writable } from 'node:stream';
+// API Gateway REST API response-streaming adapter for the existing Node HTTP API.
+import { EventEmitter } from 'node:events';
+import { Readable } from 'node:stream';
 import { finished } from 'node:stream/promises';
-import { loadSecrets } from './runtime-secrets.mjs';
+import { loadRuntimeSecrets } from './runtime-secrets.mjs';
 
-function requestFrom(event) {
-  const req = Readable.from(
-    event.body == null ? [] : [Buffer.from(event.body, event.isBase64Encoded ? 'base64' : 'utf8')],
-  );
-  req.method = event.httpMethod || event.requestContext?.http?.method || 'GET';
-  const authorizer = event.requestContext?.authorizer;
-  req.verifiedUser = authorizer?.claims?.sub || authorizer?.jwt?.claims?.sub || authorizer?.principalId;
-  req.headers = {};
-  for (const [name, value] of Object.entries(event.headers || {}))
-    req.headers[name.toLowerCase()] = String(value);
-  const query = new URLSearchParams();
-  for (const [key, values] of Object.entries(
-    event.multiValueQueryStringParameters || event.queryStringParameters || {},
-  )) {
-    for (const value of Array.isArray(values) ? values : [values]) query.append(key, value);
+let apiPromise;
+async function getApi() {
+  if (!apiPromise) {
+    apiPromise = (async () => {
+      const loaded = await loadRuntimeSecrets();
+      if (loaded.length) console.info(`[bop] loaded ${loaded.length} runtime secret fields`);
+      // The model module selects its provider and API key when it is imported.
+      const { handleRequest } = await import('./http.mjs');
+      return handleRequest;
+    })().catch(error => {
+      // Let a later invocation retry after transient Secrets Manager failures.
+      apiPromise = undefined;
+      throw error;
+    });
   }
-  const raw = event.rawQueryString ?? query.toString();
-  req.url = (event.rawPath || event.path || '/') + (raw ? '?' + raw : '');
-  return req;
+  return apiPromise;
 }
-class ResponseStream extends Writable {
-  constructor(stream, wrap) {
+
+function requestUrl(event) {
+  const path = event.path || event.rawPath || '/';
+  if (event.rawQueryString) return `${path}?${event.rawQueryString}`;
+  const params = new URLSearchParams();
+  for (const [key, values] of Object.entries(event.multiValueQueryStringParameters || {})) {
+    for (const value of values || []) params.append(key, value);
+  }
+  for (const [key, value] of Object.entries(event.queryStringParameters || {})) {
+    if (!params.has(key) && value != null) params.append(key, value);
+  }
+  const query = params.toString();
+  return query ? `${path}?${query}` : path;
+}
+
+function requestHeaders(event) {
+  const headers = {};
+  for (const [key, value] of Object.entries(event.headers || {})) headers[key.toLowerCase()] = value;
+  for (const [key, values] of Object.entries(event.multiValueHeaders || {})) {
+    if (values?.length) headers[key.toLowerCase()] = values.join(', ');
+  }
+  return headers;
+}
+
+class LambdaResponse extends EventEmitter {
+  constructor(rawStream, responseFactory) {
     super();
-    this.stream = stream;
-    this.wrap = wrap;
+    this.rawStream = rawStream;
+    this.responseFactory = responseFactory;
+    this.headers = new Map();
     this.statusCode = 200;
-    this.headers = {};
-    this.headersSent = false;
-    stream.on('error', (err) => this.destroy(err));
+    this.stream = null;
+    this.writableEnded = false;
+    rawStream.on?.('close', () => this.emit('close'));
   }
-  setHeader(name, value) {
-    this.headers[name.toLowerCase()] = value;
-  }
-  writeHead(code, headers = {}) {
-    this.statusCode = code;
+
+  setHeader(name, value) { this.headers.set(String(name).toLowerCase(), String(value)); }
+  get headersSent() { return this.stream !== null; }
+  get writableFinished() { return this.rawStream.writableFinished; }
+
+  writeHead(statusCode, headers = {}) {
+    this.statusCode = statusCode;
     for (const [name, value] of Object.entries(headers)) this.setHeader(name, value);
     this.flushHeaders();
     return this;
   }
+
   flushHeaders() {
-    if (this.headersSent) return;
-    this.headersSent = true;
-    this.stream = this.wrap(this.stream, { statusCode: this.statusCode, headers: this.headers });
+    if (this.stream) return;
+    const headers = Object.fromEntries(this.headers);
+    this.stream = this.responseFactory(this.rawStream, { statusCode: this.statusCode, headers });
   }
-  _write(chunk, enc, next) {
+
+  write(chunk) {
+    if (this.writableEnded) return false;
     this.flushHeaders();
-    this.stream.write(chunk, enc, next);
+    return this.stream.write(chunk);
   }
-  _final(next) {
-    this.flushHeaders();
-    this.stream.end(next);
+
+  end(chunk) {
+    if (this.writableEnded) return;
+    if (chunk !== undefined) this.write(chunk);
+    else this.flushHeaders();
+    this.writableEnded = true;
+    this.stream.end();
   }
 }
-let app;
-export async function invoke(event, output, wrap) {
-  app ??= Promise.resolve()
-    .then(loadSecrets)
-    .then(() => import('./http.mjs'))
-    .catch((error) => {
-      app = undefined;
-      throw error;
-    });
-  const { handleRequest } = await app;
-  const response = new ResponseStream(output, wrap);
-  const done = finished(response);
-  await handleRequest(requestFrom(event), response);
-  await done;
+
+export async function handleApiGatewayEvent(event, responseStream, runtime = globalThis.awslambda) {
+  if (!runtime?.HttpResponseStream?.from) throw new Error('Lambda response-streaming runtime is unavailable');
+
+  const body = event.body
+    ? Buffer.from(event.body, event.isBase64Encoded ? 'base64' : 'utf8')
+    : Buffer.alloc(0);
+  const request = Readable.from(body.length ? [body] : []);
+  request.url = requestUrl(event);
+  request.method = event.httpMethod || event.requestContext?.http?.method || 'GET';
+  request.headers = requestHeaders(event);
+  const identity = event.requestContext?.authorizer;
+  request.verifiedUser = identity?.claims?.sub || identity?.jwt?.claims?.sub || identity?.principalId;
+
+  const handleRequest = await getApi();
+  const response = new LambdaResponse(responseStream, runtime.HttpResponseStream.from);
+  await Promise.all([
+    finished(responseStream, { readable: false, cleanup: true }),
+    handleRequest(request, response),
+  ]);
 }
-export const handler = globalThis.awslambda.streamifyResponse((event, output) =>
-  invoke(event, output, (stream, metadata) => globalThis.awslambda.HttpResponseStream.from(stream, metadata)),
-);
+
+export function invoke(event, responseStream, responseFactory) {
+  return handleApiGatewayEvent(event, responseStream, { HttpResponseStream: { from: responseFactory } });
+}
+
+async function streamingHandler(event, responseStream, context = {}) {
+  context.callbackWaitsForEmptyEventLoop = false;
+  await handleApiGatewayEvent(event, responseStream);
+}
+
+export const handler = typeof globalThis.awslambda?.streamifyResponse === 'function'
+  ? globalThis.awslambda.streamifyResponse(streamingHandler)
+  : streamingHandler;
