@@ -21,8 +21,13 @@ output "state_table_name" {
 }
 
 output "runtime_secret_arn" {
-  description = "Populate this secret out of band with scripts/sync-runtime-secret.sh."
+  description = "App-owned secret. The sync script writes to this secret by default."
   value       = aws_secretsmanager_secret.runtime.arn
+}
+
+output "active_runtime_secret_arn" {
+  description = "Secret Lambda reads at startup; may be owned by another stack."
+  value       = local.active_runtime_secret.arn
 }
 
 output "frontend_bucket_name" {

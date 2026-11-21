@@ -6,13 +6,22 @@ data "aws_cloudfront_log_delivery_canonical_user_id" "cloudfront" {}
 
 locals {
   name_prefix = "bop-${var.project_tag}-${var.environment}"
-  repository  = "Team37-Bop/sea-x-openai-regional-codex-hackathon-thailand"
+  app_runtime_secret = {
+    arn         = aws_secretsmanager_secret.runtime.arn
+    kms_key_arn = aws_kms_key.secrets.arn
+  }
+  active_runtime_secret = var.shared_runtime_secret != null ? var.shared_runtime_secret : local.app_runtime_secret
+  # Previously published Lambda versions share the execution role and may still use the app-owned secret.
+  runtime_secrets = merge(
+    { app = local.app_runtime_secret },
+    var.shared_runtime_secret != null ? { shared = var.shared_runtime_secret } : {},
+  )
   common_tags = {
     Project     = var.project_tag
     Workload    = var.project_tag
     Environment = var.environment
     ManagedBy   = "Terraform"
-    Repository  = local.repository
+    Repository  = var.repository
   }
 
   artifact_source_dir = "${path.module}/../../.build/lambda"

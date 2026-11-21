@@ -4,34 +4,15 @@ import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-sec
 
 const ALLOWED_KEYS = new Set([
   'ANTHROPIC_API_KEY',
-  'BOOKING_DEMAND_API_TOKEN',
-  'DUFFEL_ACCESS_TOKEN',
-  'DUFFEL_WEBHOOK_SECRET',
-  'FLIGHTAWARE_API_KEY',
-  'FLIGHTAWARE_WEBHOOK_SECRET',
-  'GOOGLE_MAPS_API_KEY',
-  'HOTELBEDS_API_KEY',
-  'HOTELBEDS_SECRET',
-  'LINE_CHANNEL_ACCESS_TOKEN',
-  'LINE_CHANNEL_ID',
-  'LINE_CHANNEL_SECRET',
-  'LINE_LOGIN_CHANNEL_ID',
-  'LIFF_ID',
-  'LITEAPI_KEY',
-  'NAVITIME_API_KEY',
-  'ODPT_CONSUMER_KEY',
-  'OMISE_SECRET_KEY',
-  'OMISE_WEBHOOK_SECRET',
   'OPENAI_APIKEY',
   'OPENAI_API_KEY',
-  'OPENAI_ORG_ID',
-  'OPENAI_PROJECT_ID',
   'OPEN_METEO_API_KEY',
-  'SERPAPI_KEY',
-  'STRIPE_SECRET_KEY',
-  'STRIPE_WEBHOOK_SECRET',
-  'VIATOR_API_KEY',
 ]);
+
+export function isMissingCurrentVersion(error) {
+  return error?.name === 'ResourceNotFoundException' &&
+    /specified secret value for staging label: AWSCURRENT/i.test(error.message || '');
+}
 
 async function fetchFromSecretsManager(secretId) {
   const client = new SecretsManagerClient({});
@@ -42,7 +23,7 @@ async function fetchFromSecretsManager(secretId) {
     // Terraform creates the secret container without a value so credentials never
     // enter state. Before the first operator sync, use sample mode instead of
     // failing Lambda initialization. Keep authorization and other service errors fatal.
-    if (error?.name === 'ResourceNotFoundException' && /specified secret value for staging label: AWSCURRENT/i.test(error.message || '')) {
+    if (isMissingCurrentVersion(error)) {
       return '{}';
     }
     throw error;

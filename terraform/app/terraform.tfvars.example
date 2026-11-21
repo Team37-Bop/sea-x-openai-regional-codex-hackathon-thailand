@@ -1,5 +1,5 @@
-# Supply the real account ID through TF_VAR_expected_account_id or a gitignored tfvars file.
-expected_account_id = "000000000000"
+# Supply expected_account_id and repository (owner/name) through the environment
+# as shown in ../README.md, or set them in your gitignored terraform.tfvars.
 aws_region           = "us-east-1"
 project_tag          = "sea-openai"
 environment          = "prod"

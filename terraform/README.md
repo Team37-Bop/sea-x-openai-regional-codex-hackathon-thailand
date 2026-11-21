@@ -36,22 +36,33 @@ The application stack also manages an on-demand DynamoDB table with deletion pro
 - Node.js 24 for runtime-equivalent validation
 - GitHub CLI (`gh`) for repository-variable setup
 
-## One-time OIDC and state bootstrap
+## Local Terraform inputs
 
-First authenticate to the intended AWS account, set the real 12-digit account ID, and create a local bootstrap plan. Because the state bucket does not exist yet, the very first bootstrap run uses local state: temporarily remove `backend "s3" {}` from `terraform/bootstrap/versions.tf`, then restore it after applying the bootstrap plan. The checked-in tfvars example contains a placeholder account ID; replace it before planning. The GitHub owner and repository IDs are already set to this repository's immutable IDs.
+From the repository root, authenticate to the intended AWS account and GitHub repository. Read the canonical names and numeric IDs from GitHub so the OIDC subject and resource tags match the checkout. Run these Bash commands before local Terraform plans, or persist the corresponding variables in each module's gitignored `terraform.tfvars`.
 
 ```bash
 export AWS_REGION=us-east-1
 export TF_VAR_expected_account_id="$(aws sts get-caller-identity --query Account --output text)"
+repo_metadata=$(gh api 'repos/{owner}/{repo}' --jq '[.full_name, .owner.login, .name, .owner.id, .id] | @tsv')
+IFS=$'\t' read -r TF_VAR_repository TF_VAR_github_owner TF_VAR_github_repository TF_VAR_github_owner_id TF_VAR_github_repository_id <<< "$repo_metadata"
+export TF_VAR_repository TF_VAR_github_owner TF_VAR_github_repository TF_VAR_github_owner_id TF_VAR_github_repository_id
+```
+
+The app uses `repository` for its `Repository` tag. Bootstrap uses `github_owner`, `github_repository`, `github_owner_id`, and `github_repository_id` for the OIDC trust policy. Both modules use `expected_account_id`. Check the account and repository before applying.
+
+## One-time OIDC and state bootstrap
+
+After setting the local inputs, create the first bootstrap plan using local state. Temporarily remove `backend "s3" {}` from `terraform/bootstrap/versions.tf` while creating the state bucket.
+
+```bash
 cp terraform/bootstrap/terraform.tfvars.example terraform/bootstrap/terraform.tfvars
-# Edit terraform/bootstrap/terraform.tfvars and replace expected_account_id.
 # Set create_github_oidc_provider=true only if the provider is absent in this account.
 terraform -chdir=terraform/bootstrap init -input=false
 terraform -chdir=terraform/bootstrap plan -input=false -var=require_generated_policies=false -out=bootstrap.tfplan
 terraform -chdir=terraform/bootstrap apply -input=false bootstrap.tfplan
 ```
 
-Bootstrap creates the OIDC role and encrypted, versioned state bucket. The role trusts `Team37-Bop/sea-x-openai-regional-codex-hackathon-thailand` on `refs/heads/main` with audience `sts.amazonaws.com`. It initially has only scoped Terraform state access. Read both outputs from local state and write the backend configuration files before restoring the S3 backend block.
+Bootstrap creates the OIDC role and encrypted, versioned state bucket. The role trusts the selected repository's immutable OIDC subject on `refs/heads/main` with audience `sts.amazonaws.com`. It initially has only scoped Terraform state access. Read both outputs from local state and write the backend configuration files before restoring the S3 backend block.
 
 ```bash
 export TF_STATE_BUCKET="$(terraform -chdir=terraform/bootstrap output -raw terraform_state_bucket)"
@@ -81,13 +92,19 @@ For a later checkout of the same stack, run `./scripts/write-backend-config.sh` 
 
 This creates billable CloudFront, WAF, API Gateway, Lambda, DynamoDB, KMS, Secrets Manager, S3, CloudWatch, SNS, and Budget resources. Review the saved plan before applying it.
 
-Populate the secret from ignored `.env.local` without printing values or putting them in Terraform state:
+## Runtime secret
+
+Lambda reads the app-owned Secrets Manager secret by default. To reuse an existing secret in the same AWS account and Region, set `shared_runtime_secret` in a gitignored app tfvars file or set `TF_VAR_shared_runtime_secret` to a JSON object with two fields. Supply the full secret ARN as `arn` and the ARN of the KMS key that encrypts its current version as `kms_key_arn`. Set the GitHub Actions repository variable `RUNTIME_SECRET_CONFIG` to the same JSON object so deployments select the same secret. This variable contains only the two resource identifiers. The shared secret's owner manages its credential values and rotation. Its KMS key policy must allow the Lambda role to decrypt through Secrets Manager.
+
+`terraform -chdir=terraform/app output -raw active_runtime_secret_arn` identifies the secret Lambda reads. The `runtime_secret_arn` output always identifies the app-owned secret. The role keeps read access to the app-owned secret so published versions using it can serve requests during rollout or rollback. Each KMS decrypt permission is tied to its corresponding secret and Secrets Manager. Omitting `shared_runtime_secret` selects the app-owned secret on the next deployment.
+
+To populate the app-owned secret from an ignored `.env.local` file:
 
 ```bash
 ./scripts/sync-runtime-secret.sh
 ```
 
-AWS sets `BOP_PROVIDER=openai`. Set `OPENAI_API_KEY` in `.env.local` to enable live planning. The script writes a new secret version containing the supported values from that file. With no provider key, the Chiang Mai demo remains available and `GET /api/health` reports `"provider": null`.
+AWS sets `BOP_PROVIDER=openai`. Set `OPENAI_API_KEY` in `.env.local` to enable live planning. Sync merges nonempty supported fields into the current JSON secret and preserves omitted fields. The operator needs Secrets Manager read, put, and version-stage update permissions on the runtime secret and access to its KMS key. Lambda loads credentials at startup. With no provider key, the Chiang Mai demo remains available and `GET /api/health` reports `"provider": null`.
 
 ## Derive the routine GitHub deployment policy
 
