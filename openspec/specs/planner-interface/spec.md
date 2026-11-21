@@ -90,3 +90,17 @@ The organizer SHALL be able to describe a change in their own words. The itinera
 
 - **WHEN** the organizer views a finished trip
 - **THEN** the command area accepts a free-text request and omits hypothetical disruption shortcuts and a manual rain-check button.
+
+### Requirement: Organizer booking workspace
+
+Switching between the itinerary and bookings SHALL change the contents of the trip sidebar and retain the journey map. The booking view SHALL separate selected outbound and return transport, booked accommodation and nights, and time-sensitive calls from unconfirmed options.
+
+#### Scenario: Following up a restaurant reservation
+
+- **WHEN** a meal in the current plan needs a reservation
+- **THEN** the booking card shows the date and time, the party size, any available phone number and a script using the group's requirements. A completed call can return to pending. A confirmed booking that moves to a new date or time requires rescheduling; removal creates a cancellation reminder.
+
+#### Scenario: Returning to setup
+
+- **WHEN** a saved trip is opened for editing
+- **THEN** the form restores its members, dates, both travel legs, selected options and booked stays. Closing and reopening the form keeps the current draft for that trip.

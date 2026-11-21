@@ -1,3 +1,5 @@
+import { renderBookingTasks, reservationStatus, setReservationDone } from './booking-tasks.js';
+import { renderPlanReview } from './plan-review.js';
 import { openPlaceSheet } from './place-details.js';
 import { attachLocationSuggestions } from './location-suggest.js';
 import { bindWorkspace, renderPeople } from './workspace-controls.js';
@@ -319,13 +321,12 @@ function render() {
         content.append(node('p', 'ปิดวันที่เลือก' + (closure.why ? ' · ' + closure.why : ''), 'feedback'));
       content.append(button('รายละเอียด', () => place(stop)));
       if (stop.res?.todo || stop.res?.done || state.bookings[stop.id]) {
-        const booked = state.bookings[stop.id]?.state;
+        const booked = reservationStatus(state, stop);
         content.append(
           button(
             booked === 'move' ? 'ต้องโทรเลื่อน' : booked === 'done' ? 'จองแล้ว ✓' : 'ทำเครื่องหมายว่าจองแล้ว',
             () => {
-              if (booked === 'done') delete state.bookings[stop.id];
-              else state.bookings[stop.id] = { state: 'done', name: stop.name, time: stop.start };
+              setReservationDone(state, stop, booked !== 'done');
               render();
             },
           ),
@@ -345,87 +346,23 @@ function render() {
       node('b', item.pass ? '✓' : '!', item.pass ? '' : 'fail'),
       document.createTextNode(item.label),
     );
+    if (item.member) row.append(node('small', item.member, 'rule-member'));
     for (const problem of item.problems || []) row.append(node('p', problem));
     $('#checks-list').append(row);
   }
   $('#leg-label').textContent = day?.stops.some((stop) => stop.leg && !stop.leg.real)
     ? 'เส้นประเป็นเส้นทางประมาณ'
     : '';
-  $('#reservations').replaceChildren();
-  for (const [dir, route] of Object.entries(plan.flags?.transport ?? {})) {
-    const chosen =
-      route.chosenOption ||
-      route.options?.find((option) => option.id === route.chosen) ||
-      (typeof route.chosen === 'object' ? route.chosen : null);
-    if (!chosen) continue;
-    const area = node('article', null, 'alert');
-    area.append(
-      node('h3', dir === 'go' ? 'การเดินทางขาไป' : 'การเดินทางขากลับ'),
-      node('p', [chosen.carrier, chosen.code, chosen.dep + '–' + chosen.arr].filter(Boolean).join(' · ')),
-    );
-    for (const option of route.options ?? []) {
-      if (option.id === chosen.id) continue;
-      area.append(
-        button('เลือก ' + [option.carrier, option.code, option.dep].filter(Boolean).join(' '), () =>
-          task(() =>
-            adjust(
-              'เปลี่ยน' +
-                (modes[option.by] ?? 'การเดินทาง') +
-                (dir === 'go' ? 'ขาไป' : 'ขากลับ') +
-                'เป็น ' +
-                [option.carrier, option.code, 'ออก', option.dep, 'ถึง', option.arr].filter(Boolean).join(' '),
-            ),
-          ),
-        ),
-      );
-    }
-    $('#reservations').append(area);
-  }
-  for (const cancel of state.cancellations)
-    $('#reservations').append(
-      node(
-        'p',
-        'ติดต่อยกเลิก · ' + [cancel.name, cancel.day, cancel.time, cancel.phone].filter(Boolean).join(' · '),
-        'alert',
-      ),
-    );
-  for (const booking of Object.values(state.bookings))
-    if (booking.state === 'move') {
-      $('#reservations').append(
-        node(
-          'p',
-          'ต้องโทรเลื่อน: ' + booking.name + ' จาก ' + booking.time + ' เป็น ' + booking.next,
-          'alert',
-        ),
-      );
-    }
-  const reservations = state.plan.days
-    .flatMap((day) => day?.stops || [])
-    .filter((stop) => stop.res?.todo || stop.res?.done || state.bookings[stop.id]);
-  const todo =
-    reservations.filter((stop) => state.bookings[stop.id]?.state !== 'done').length +
-    state.cancellations.length;
+  const todo = renderBookingTasks($('#reservations'), state, {
+    run: task,
+    rerender: render,
+    adjust: (command, day) => {
+      switchView('plan');
+      return adjust(command, day);
+    },
+  });
   $('#booking-count').textContent = todo ? '(' + todo + ')' : '';
-  if (todo)
-    $('#itinerary').append(button('ดูรายการที่ต้องติดต่อ ' + todo + ' รายการ', () => switchView('book')));
-  for (const stop of reservations) {
-    const booked = state.bookings[stop.id]?.state === 'done';
-    const row = node('article', null, 'alert');
-    row.append(
-      node('strong', stop.name),
-      node('p', stop.start),
-      button(booked ? 'จองแล้ว ✓ · ตั้งเป็นรอติดต่อ' : 'ทำเครื่องหมายว่าจองแล้ว', () => {
-        if (booked) delete state.bookings[stop.id];
-        else state.bookings[stop.id] = { state: 'done', name: stop.name, time: stop.start };
-        render();
-      }),
-      button('สถานที่เต็ม · หาแห่งใหม่', () => {
-        switchView('plan');
-        task(() => adjust('ร้าน ' + stop.name + ' เต็ม ช่วยหาที่อื่นแทน'));
-      }),
-    );
-    $('#reservations').append(row);
-  }
+  if (todo) $('#itinerary').append(button('ดูรายการที่ต้องติดต่อ ' + todo + ' รายการ', () => switchView('book')));
   forecast.renderStrip($('#alerts'), plan, state.selected);
   renderTripIntegrations($('#reservations'), state);
   drawMap(
@@ -535,7 +472,10 @@ async function demo() {
 $('#setup-demo').onclick = () => task(demo);
 $('#demo').addEventListener('click', () => task(demo));
 for (const selector of ['#open-setup', '#hero-setup'])
-  $(selector).addEventListener('click', () => setupDialog.showModal());
+  $(selector).addEventListener('click', () => {
+    if (state.plan && editingSetup !== state.setup) restoreForm(state.setup, state.plan.flags);
+    setupDialog.showModal();
+  });
 $('#close-setup').addEventListener('click', () => setupDialog.close());
 for (const [dir, title, placeName] of [
   ['arrive', 'ขาไป', 'ออกจาก'],
@@ -555,10 +495,11 @@ const augmentSetup = installSetupExtras(setupForm, async () =>
   setupInput(await locate(setupForm.city.value.trim()).catch(() => null), true),
 );
 let nextMember = 0;
+let editingSetup;
 function addMember(name = '') {
   if ($('#members').children.length >= 12) return;
   const row = node('div', null, 'member');
-  row.dataset.id = 'member-' + ++nextMember;
+  do { row.dataset.id = 'member-' + ++nextMember; } while ([...$('#members').children].some(member => member.dataset.id === row.dataset.id));
   const info = node('div', null, 'fields');
   info.append(
     field('ชื่อ', 'person', { value: name, maxLength: 60 }),
@@ -687,6 +628,39 @@ setupForm.city.addEventListener('change', async () => {
       ? [found.cc, found.currency].filter(Boolean).join(' · ')
       : 'ยังไม่พบเมืองนี้บนแผนที่';
 });
+function restoreForm(setup, flags) {
+  editingSetup = setup;
+  for (const name of ['city', 'startDate', 'endDate', 'pace', 'autonomy']) {
+    if (setup[name]) setupForm.elements[name].value = setup[name];
+  }
+  setupForm.endDate.min = setup.startDate;
+  setupForm.hasCar.checked = Boolean(setup.hasCar);
+  setupForm.stayMode.value = setup.stay?.mode === 'booked' ? 'booked' : 'auto';
+  if (setup.cityLL) lookupCache.set(setup.city, {
+    name: setup.city, ll: setup.cityLL, cc: setup.country, currency: setup.currency, airport: setup.cityAirport,
+  });
+  $('#city-result').textContent = [setup.country, setup.currency].filter(Boolean).join(' · ');
+  $('#members').replaceChildren();
+  for (const member of setup.members || []) {
+    const row = addMember(member.name);
+    if (member.id) row.dataset.id = member.id;
+    if (member.role) row.dataset.role = member.role;
+    for (const [key, value] of Object.entries({
+      budget: member.budget, walk: member.maxWalkKm, avoid: member.avoid, note: member.note, wants: member.wants?.join(', '),
+    })) row.querySelector('[name=' + key + ']').value = value ?? '';
+  }
+  if (!$('#members').children.length) addMember();
+  $('#stay-rows').replaceChildren();
+  for (const stay of setup.stay?.stays || []) {
+    const input = addStay(stay.nights).querySelector('[name=stayName]');
+    input.value = stay.name;
+    if (stay.ll) selectedLocations.set(input, { name: stay.name, ll: stay.ll });
+  }
+  updateStay();
+  augmentSetup.restore(setup, flags);
+  $('#form-error').textContent = '';
+  setupForm.dispatchEvent(new Event('input', { bubbles: true }));
+}
 function setupInput(found, transportOnly = false) {
   const nightsBetween = (Date.parse(setupForm.endDate.value) - Date.parse(setupForm.startDate.value)) / dayMs;
   if (!setupForm.city.value.trim()) throw Error('ระบุเมืองปลายทาง');
@@ -727,6 +701,7 @@ function setupInput(found, transportOnly = false) {
     const read = (key) => row.querySelector('[name=' + key + ']').value.trim();
     return {
       id: row.dataset.id,
+      role: row.dataset.role,
       name: read('person'),
       avoid: read('avoid'),
       maxWalkKm: read('walk'),
@@ -855,14 +830,26 @@ function applyOption(option, routes) {
   const nextStops = option.plan.days.flatMap((day) => day.stops);
   const bookings = { ...state.bookings };
   const cancellations = [...state.cancellations];
+  for (const day of state.plan.days) {
+    for (const stop of day.stops) {
+      if (stop.res?.done && !bookings[stop.id]) bookings[stop.id] = {
+        state: 'done', name: stop.name, time: stop.start, day: day.date, phone: stop.res?.phone || stop.phone,
+      };
+    }
+  }
   for (const [id, booking] of Object.entries(bookings)) {
     const stop = nextStops.find((item) => item.id === id && item.name === booking.name);
     if (!stop) {
       const former = state.plan.days.find((d) => d.stops.some((s) => s.id === id));
       const old = former?.stops.find((s) => s.id === id);
-      cancellations.push({ ...booking, day: former?.date, phone: old?.res?.phone || old?.phone });
+      cancellations.push({ ...booking, day: booking.day || former?.date, phone: booking.phone || old?.res?.phone || old?.phone });
       delete bookings[id];
-    } else if (stop.start !== booking.time) bookings[id] = { ...booking, state: 'move', next: stop.start };
+    } else {
+      const newDay = option.plan.days.find(day => day.stops.includes(stop))?.date;
+      if (stop.start !== booking.time || (booking.day && newDay !== booking.day)) {
+        bookings[id] = { ...booking, state: 'move', next: stop.start };
+      } else if (booking.state === 'move') bookings[id] = { ...booking, state: 'done' };
+    }
   }
   state = {
     ...state,
@@ -923,9 +910,11 @@ async function adjust(command, day = state.selected) {
   const area = $('#options');
   area.replaceChildren(node('h3', 'โหวตแผนกับเพื่อน'));
   const ballot = {};
+  const localActions = [];
   for (const option of result.options) {
     const row = node('article', null, 'option');
-    row.append(node('strong', option.key + ' · ' + option.title), node('p', option.line));
+    row.append(node('strong', option.key + ' · ' + option.title));
+    renderPlanReview(row, state.plan, option);
     row.append(
       button('ดูตัวอย่าง', () => {
         preview = { plan: option.plan, routes: result.routes };
@@ -938,8 +927,19 @@ async function adjust(command, day = state.selected) {
       }),
     );
     area.append(row);
+    localActions.push(() => row.append(button('ใช้แผน ' + option.key, () => {
+      applyOption(option, result.routes);
+      setBusy(false);
+    }, 'primary')));
   }
   if (renderLineVote(area, state, result, (option) => applyOption(option, result.routes))) return;
+  for (const show of localActions) show();
+  area.append(button('คงแผนเดิม', () => {
+    pendingVotes = preview = null;
+    area.replaceChildren();
+    render();
+    status.textContent = 'ใช้กำหนดการเดิม';
+  }));
   const selectedLabels = Object.fromEntries(result.options.map((option) => [option.key, option.title]));
   for (const member of state.setup.members) {
     const voter = selectField(member.name, member.id, { '': 'ยังไม่ได้โหวต', ...selectedLabels }, '');
@@ -1018,8 +1018,8 @@ if (localTrip)
       bookings: {},
       cancellations: [],
     };
-    newTrip();
     state.localTripId = localTrip[1];
+    newTrip();
     presentSummary(saved.summary);
     render();
     forecast.refresh();

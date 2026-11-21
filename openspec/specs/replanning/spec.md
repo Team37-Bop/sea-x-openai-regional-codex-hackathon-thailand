@@ -145,3 +145,12 @@ The UI SHALL distinguish a preview from an applied option. Applying an option sn
 #### Scenario: Offline command outside the sample vocabulary
 - **WHEN** a sample user without a usable provider enters an unrecognized command
 - **THEN** the UI explains the sample commands and leaves the plan in place. Recognized waterfall removal, rain, restaurant closure and flight-delay commands use their local scenarios.
+
+### Requirement: Review before applying a group option
+
+The organizer SHALL be able to inspect a proposed plan alongside the committed itinerary, including affected visits, changed times, changes to budget per traveler and newly failing checks. Copying the option summary SHALL require a user action.
+
+#### Scenario: Resolving a local choice
+
+- **WHEN** a change needs a decision and the group has no linked remote vote
+- **THEN** the organizer may select a proposed plan, collect local ballots or discard the preview. A linked LINE vote follows its own result and tie-break rules.

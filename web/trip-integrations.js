@@ -184,7 +184,7 @@ export function renderTripIntegrations(container, state) {
     s.host = el('article', null, 'alert');
     drawLine(s);
   }
-  container.append(s.host);
+  (container.querySelector('[data-booking-line]') || container).append(s.host);
   s.host.hidden = !s.enabled;
   config ??= tripRequest('/api/config').catch(() => {
     config = null;

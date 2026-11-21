@@ -1,0 +1,49 @@
+.booking-card h4 {
+  margin: 0 0 4px;
+  font-size: 0.95rem;
+}
+.booking-card .booking-row {
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+  margin-top: 10px;
+}
+.booking-card .booking-row p {
+  font-size: 0.86rem;
+}
+.booking-card .booking-row .muted {
+  font-size: 0.79rem;
+}
+.booking-card a {
+  font-size: 0.82rem;
+  overflow-wrap: anywhere;
+}
+.booking-card button {
+  font-size: 0.8rem;
+}
+.booking-tag {
+  display: inline-block;
+  margin-top: 6px;
+  padding: 2px 7px;
+  border-radius: 5px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #235b51;
+  background: #e5f2ee;
+}
+.booking-card .booking-reason {
+  color: var(--accent-dark);
+  font-size: 0.8rem;
+}
+.booking-links {
+  display: flex;
+  gap: 5px 12px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+.booking-options summary {
+  color: var(--accent);
+  font-size: 0.84rem;
+  font-weight: 600;
+  margin-top: 13px;
+}
