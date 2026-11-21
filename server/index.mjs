@@ -76,7 +76,7 @@ async function stream(response, signal, work) {
     if (!signal.aborted) response.end();
   }
 }
-export const server = http.createServer(async (request, response) => {
+export async function handleRequest(request, response) {
   const abort = new AbortController();
   response.on('close', () => { if (!response.writableFinished) abort.abort(); });
   response.setHeader('X-Content-Type-Options', 'nosniff');
@@ -106,7 +106,8 @@ export const server = http.createServer(async (request, response) => {
   } catch (error) {
     if (!abort.signal.aborted) json(response, { error: error.code === 'bad_request' ? 'bad_request' : 'not_found' }, error.code === 'bad_request' ? 400 : 404);
   }
-});
+}
+export const server = http.createServer(handleRequest);
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const port = Number(process.env.PORT) || 8787;
   server.listen(port, process.env.HOST || '127.0.0.1', () => console.log('Bop on http://localhost:' + port));
