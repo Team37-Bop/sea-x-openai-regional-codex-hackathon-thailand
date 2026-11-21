@@ -1,4 +1,7 @@
+import { appendTrace } from './operation-trace.js';
 import { renderStopNote } from './stop-note.js';
+import { visitCoordinates } from './map.js';
+import { legLabels, legMode, isScheduledService } from './leg-modes.js';
 import { loadPlaceImage, mediaUrl } from './setup-extras.js';
 import { fetchStream, readEvents } from './stream.js';
 import { samplePlaceInfo } from './sample-place-details.js';
@@ -19,15 +22,6 @@ const category = {
   transit: 'จุดเดินทาง',
   terminal: 'จุดเดินทาง',
   activity: 'กิจกรรม',
-};
-const travel = {
-  walk: 'เดิน',
-  drive: 'รถยนต์',
-  car: 'รถยนต์',
-  red: 'รถแดง',
-  van: 'รถตู้',
-  own: 'รถส่วนตัว',
-  transit: 'ขนส่งสาธารณะ',
 };
 const week = {
   sun: 'อาทิตย์',
@@ -101,19 +95,27 @@ function facts(entries) {
   return dl.childElementCount ? dl : null;
 }
 function mapLink(stop, city) {
-  const ll = stop.ll;
-  const valid =
-    !stop.place?.fallback &&
-    Array.isArray(ll) &&
-    ll.length === 2 &&
-    ll.every(Number.isFinite) &&
-    Math.abs(ll[0]) <= 90 &&
-    Math.abs(ll[1]) <= 180 &&
-    ll.some(Boolean);
-  const query = valid
-    ? ll.join(',')
+  const ll = visitCoordinates(stop);
+  const query = ll
+    ? [ll[1], ll[0]].join(',')
     : [plain(stop.query || stop.n || stop.name), plain(city)].filter(Boolean).join(' ');
   return query ? 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(query) : null;
+}
+function paintPlaceLocation(container, stop, city) {
+  const located = Boolean(visitCoordinates(stop));
+  container.replaceChildren();
+  if (!located) container.append(el('p', 'ยังไม่มีพิกัดที่ยืนยันสำหรับจุดแวะนี้', 'pd-warning'));
+  const map = link(located ? 'เปิดตำแหน่งใน Google Maps ↗' : 'ค้นหาชื่อใน Google Maps ↗', mapLink(stop, city));
+  if (map) container.append(map);
+}
+export function refreshPlaceLocation(panel, stop, city, day) {
+  const wrap = panel.querySelector('.pd-map-location');
+  if (panel.hidden || current.get(panel)?.id !== stop.id || !wrap) return;
+  const hadMapFocus = wrap.contains(document.activeElement);
+  paintPlaceLocation(wrap, stop, city);
+  if (hadMapFocus) wrap.querySelector('a')?.focus({preventScroll:true});
+  const arrival = panel.querySelector('[data-place-leg]');
+  if (arrival) arrival.textContent = plannedVisit({stop, day}).legText;
 }
 function formatRange(value) {
   if (Array.isArray(value)) return value.map(plain).filter(Boolean).join('–');
@@ -157,15 +159,17 @@ export function plannedVisit({ stop, day, setup, stay, bookingStatus }) {
     .map((m) => m.name)
     .join(', ');
   const leg = stop.leg;
-  const legMode = leg?.mode ?? leg?.m;
+  const mode = legMode(leg?.mode ?? leg?.m);
   const previous = day?.stops?.[day.stops.findIndex((s) => s.id === stop.id) - 1];
+  const unknownLeg = leg?.unlocated || !visitCoordinates(stop) || !visitCoordinates(previous);
   const legText =
     leg && previous
       ? [
-          travel[legMode] || 'เดินทาง',
+          legLabels[mode] || ((leg?.mode ?? leg?.m) === 'drive' ? 'รถยนต์' : 'เดินทาง'),
           'จาก' + plain(previous.n || previous.name),
-          Number.isFinite(leg.min) ? number.format(leg.min) + ' นาที' : '',
-          Number.isFinite(leg.km) ? number.format(leg.km) + ' กม.' : '',
+          Number.isFinite(leg.min) && (!unknownLeg || leg.min > 0) ? number.format(leg.min) + ' นาที' : '',
+          unknownLeg ? 'ยังไม่ทราบระยะทาง' : Number.isFinite(leg.km) ? number.format(leg.km) + ' กม.' : '',
+          !unknownLeg && isScheduledService(mode) ? 'เส้นทางโดยประมาณ' : '',
         ]
           .filter(Boolean)
           .join(' · ')
@@ -198,42 +202,51 @@ export function plannedVisit({ stop, day, setup, stay, bookingStatus }) {
     why: lodging ? plain(stay?.why) : '',
   };
 }
-function gallery(photos, name) {
-  const figures = document.createDocumentFragment();
-  let count = 0;
-  for (const photo of arr(photos).slice(0, 4)) {
-    if (!mediaUrl(photo?.thumb) && !mediaUrl(photo?.url)) continue;
-    const figure = el('figure'),
-      img = el('img');
-    figure.hidden = true;
-    img.loading = 'eager';
-    img.alt = plain(photo.alt) || name;
-    const caption = el('figcaption');
-    if (photo.match === 'likely') caption.append('รูปจากเว็บ · ');
-    const credit = plain(photo.credit) || 'ที่มาของภาพ';
-    caption.append(link(credit, photo.page) ?? credit);
-    const licence = link('สัญญาอนุญาต', photo.license);
-    if (licence) caption.append(' · ', licence);
-    figure.append(img, caption);
-    loadPlaceImage(img, photo, () => {
-      figure.hidden = true;
-      const strip = figure.parentElement;
-      if (strip && !strip.querySelector('figure:not([hidden])')) strip.hidden = true;
-    });
-    img.addEventListener('load', () => {
-      figure.hidden = false;
-      figure.parentElement.hidden = false;
-    }, { once: true });
-    figures.append(figure);
-    count++;
+function renderPhotos(host, photos, name, complete = false) {
+  const candidates = arr(photos).filter(photo => mediaUrl(photo?.url) || mediaUrl(photo?.thumb)).slice(0, 4);
+  let strip = host.querySelector('.pd-gallery');
+  if (!strip && candidates.length) {
+    strip = el('div', '', 'pd-gallery');
+    strip.setAttribute('aria-label', 'ภาพของ' + name);
+    host.append(strip);
   }
-  if (!count) return null;
-  const strip = el('div', '', 'pd-gallery');
-  strip.hidden = true;
-  strip.setAttribute('aria-label', 'ภาพของ' + name);
-  if (count > 1) strip.tabIndex = 0;
-  strip.append(figures);
-  return strip;
+  function updateStatus() {
+    let empty = host.querySelector('.pd-photo-empty');
+    const figures = [...host.querySelectorAll('figure')];
+    const unavailable = host.dataset.complete === 'true' && figures.every(f => f.dataset.state === 'failed');
+    if (unavailable && !empty) host.append(el('small', 'ยังไม่พบภาพของสถานที่นี้ที่แสดงได้', 'pd-photo-empty'));
+    if (!unavailable && empty) empty.remove();
+  }
+  host.dataset.complete = String(complete);
+  for (const photo of candidates) {
+    const key = mediaUrl(photo.url) || mediaUrl(photo.thumb);
+    let figure = [...strip.children].find(f => f.dataset.photo === key);
+    if (!figure) {
+      figure = el('figure');
+      figure.dataset.photo = key;
+      figure.dataset.state = 'loading';
+      figure.hidden = true;
+      const img = el('img');
+      img.loading = 'eager';
+      img.alt = plain(photo.alt) || name;
+      const caption = el('figcaption');
+      if (photo.match === 'likely') caption.append('รูปจากเว็บ · ');
+      const credit = plain(photo.credit) || 'ที่มาของภาพ';
+      caption.append(link(credit, photo.page) ?? credit);
+      const licence = link('สัญญาอนุญาต', photo.license);
+      if (licence) caption.append(' · ', licence);
+      figure.append(img, caption);
+      img.addEventListener('load', () => {
+        figure.dataset.state = 'loaded';
+        figure.hidden = false;
+        updateStatus();
+      }, { once: true });
+      loadPlaceImage(img, photo, () => { figure.dataset.state = 'failed'; updateStatus(); });
+    }
+    strip.append(figure);
+  }
+  if (strip && candidates.length > 1) strip.tabIndex = 0;
+  updateStatus();
 }
 function contact(phone) {
   if (!phone) return '';
@@ -283,10 +296,8 @@ function sourceSection(info, stop) {
   }
   return sources.childElementCount ? section('แหล่งข้อมูล', sources) : null;
 }
-function paintInfo({ results, photos }, visit, stop, info, sample) {
+function paintInfo({ results }, visit, stop, info, sample) {
   const parts = [];
-  const images = gallery(info.photos, visit.name);
-  photos.replaceChildren(...(images ? [images] : []));
   const description = plain(info.details?.what || info.what || info.summary);
   if (description && description !== visit.note && description !== 'ยังไม่มีข้อมูล')
     parts.push(el('p', description, 'pd-lead'));
@@ -340,12 +351,14 @@ function header(container, context, visit) {
     ['การเดินทาง', visit.legText],
     ['คนที่อยากไป', visit.wish],
   ]);
+  if (visit.legText) fields.querySelector('dd').dataset.placeLeg = '';
   if (fields) plan.append(fields);
   const note = renderStopNote(context.stop.note, 'pd-note', context.stop.src);
   if (note) plan.append(note);
   if (visit.closure) plan.append(el('p', visit.closure, 'pd-warning'));
-  const map = link('เปิดตำแหน่งใน Google Maps ↗', mapLink(context.stop, context.city));
-  if (map) plan.append(map);
+  const location = el('div', '', 'pd-map-location');
+  paintPlaceLocation(location, context.stop, context.city);
+  plan.append(location);
   const photos = el('div', '', 'pd-photos');
   const results = el('div', '', 'pd-results'),
     live = el('div', '', 'pd-live');
@@ -365,7 +378,7 @@ function initialResearch({ city, stop, day, sample, liveResearch }) {
     offline,
   };
 }
-async function fetchPlaceInfo({ city, stop, day }, signal, onStep) {
+async function fetchPlaceInfo({ city, stop, day }, signal, onEvent) {
   const response = await fetchStream('/api/place-info', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -380,33 +393,41 @@ async function fetchPlaceInfo({ city, stop, day }, signal, onStep) {
     }),
   });
   const result = await readEvents(response, (event) => {
-    if (event.type === 'step' && !signal.aborted) onStep(plain(event.text));
+    if (!signal.aborted && (event.type === 'step' || event.type === 'photos')) onEvent(event);
   });
   signal.throwIfAborted();
   if (!result?.info) throw new Error('ยังไม่มีข้อมูลสถานที่เพิ่มเติม');
   return result.info;
 }
-async function researchPlace(context, key, signal, onStep) {
+async function researchPlace(context, key, signal, onEvent) {
   signal.throwIfAborted();
   let request = pendingResearch.get(key);
   if (!request) {
     const controller = new AbortController();
     const listeners = new Set();
-    const promise = fetchPlaceInfo(context, controller.signal, (text) => {
-      for (const notify of listeners) notify(text);
+    const steps = [];
+    let photos;
+    const promise = fetchPlaceInfo(context, controller.signal, (event) => {
+      if (event.type === 'photos') photos = event;
+      else if (event.text !== steps.at(-1)?.text) {
+        steps.push(event);
+        if (steps.length > 20) steps.shift();
+      }
+      for (const notify of listeners) notify(event);
     }).then((info) => {
       if (cache.size >= 100) cache.delete(cache.keys().next().value);
-      cache.set(key, { info, expires: Date.now() + 30 * 60_000 });
+      cache.set(key, { info, expires: Date.now() + (info.photos?.length ? 30 : 1) * 60_000 });
       return info;
     }).finally(() => {
       if (pendingResearch.get(key) === request) pendingResearch.delete(key);
     });
-    request = { controller, listeners, promise };
+    request = { controller, listeners, promise, replay(notify) { steps.forEach(notify); if (photos) notify(photos); } };
     pendingResearch.set(key, request);
   }
-  request.listeners.add(onStep);
+  request.listeners.add(onEvent);
+  request.replay(onEvent);
   const release = () => {
-    request.listeners.delete(onStep);
+    request.listeners.delete(onEvent);
     if (!request.listeners.size && pendingResearch.get(key) === request) {
       pendingResearch.delete(key);
       request.controller.abort();
@@ -459,14 +480,15 @@ export function createStopMenu(context) {
     controller?.abort();
     controller = new AbortController();
     const active = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
-    const status = el('p', 'กำลังค้นเมนูแนะนำ…');
+    const status = el('p', 'กำลังค้นเมนูแนะนำ…', 'bop-working');
     status.setAttribute('role', 'status');
     body.replaceChildren(status);
     try {
-      const info = await researchPlace(context, key, active, (text) => { status.textContent = text; });
+      const info = await researchPlace(context, key, active, (event) => { if (event.type === 'step') status.textContent = plain(event.text); });
       if (!active.aborted) show(info, false);
     } catch (error) {
       if (active.aborted) return;
+      status.classList.remove('bop-working');
       status.textContent = plain(error.message) || 'ค้นเมนูไม่สำเร็จ';
       const retry = click('ลองค้นอีกครั้ง', () => {
         toggle.focus();
@@ -505,6 +527,7 @@ export async function openPlaceSheet(context) {
   const { live, close } = reader;
   const { key, initial, local, offline } = initialResearch(context);
   paintInfo(reader, visit, stop, initial || local, sample && !initial);
+  renderPhotos(reader.photos, (initial || local).photos, visit.name, !!initial);
   panel.hidden = false;
   panel.scrollTop = 0;
   close.focus({ preventScroll: true });
@@ -521,10 +544,31 @@ export async function openPlaceSheet(context) {
   if (offline || initial) return;
   async function research() {
     content.querySelector('.pd-heading').after(live);
-    live.textContent = 'กำลังค้นรายละเอียดและรูปสถานที่…';
+    const trace = el('ol', '', 'operation-trace');
+    trace.setAttribute('aria-label', 'ขั้นตอนค้นข้อมูลสถานที่');
+    const preview = el('div', '', 'pd-placeholder');
+    preview.setAttribute('aria-hidden', 'true');
+    preview.append(el('i'), el('i'), el('i'));
+    live.removeAttribute('role');
+    live.dataset.loading = 'true';
+    reader.results.setAttribute('aria-busy', 'true');
+    const headline = el('strong', 'Bop กำลังหาข้อมูลและรูป');
+    trace.setAttribute('aria-live', 'polite');
+    trace.setAttribute('aria-relevant', 'additions');
+    live.replaceChildren(headline, trace, preview);
+    appendTrace(trace, 'กำลังค้นรายละเอียดสถานที่');
     try {
-      const info = await researchPlace(context, key, signal, (text) => { live.textContent = text; });
+      const info = await researchPlace(context, key, signal, (event) => {
+        if (signal.aborted) return;
+        if (event.type === 'photos') {
+          renderPhotos(reader.photos, event.photos, visit.name);
+        } else {
+          const text = plain(event.text).replace(/^Bop กำลังค้นรายละเอียดสถานที่$/, 'กำลังค้นรายละเอียดสถานที่');
+          appendTrace(trace, text);
+        }
+      });
       if (signal.aborted) return;
+      renderPhotos(reader.photos, info.photos, visit.name, true);
       paintInfo(reader, visit, stop, info, false);
       content.append(live);
       live.textContent =
@@ -537,6 +581,12 @@ export async function openPlaceSheet(context) {
         el('p', plain(error.message) || 'ค้นรายละเอียดเพิ่มเติมไม่สำเร็จ'),
         click('ลองค้นอีกครั้ง', research, 'quiet'),
       );
+    } finally {
+      if (!signal.aborted) {
+        delete live.dataset.loading;
+        reader.results.removeAttribute('aria-busy');
+        live.setAttribute('role', 'status');
+      }
     }
   }
   await research();

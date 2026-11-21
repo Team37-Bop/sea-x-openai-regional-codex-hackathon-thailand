@@ -240,6 +240,10 @@ The short-trip planner SHALL use a zero design search cap if `BOP_SEARCH_PLAN` i
 - **WHEN** a car leg is auto-priced for five members
 - **THEN** it uses two cars at ฿60 plus ฿14 per km per car, splits the total by five and rounds to the nearest ฿5. Auto-priced local transit uses ฿35 plus ฿3 per km rounded to the nearest ฿5. Walking costs zero.
 
+#### Scenario: Named local public transport
+- **WHEN** a day uses an identifiable rail, metro, ferry or bus service
+- **THEN** the design and replan contracts support its own mode. Scheduling preserves the reported duration and per-person fare, using a labelled local-transit estimate when a fare is missing. A generic transit leg stays generic when the service type is unknown.
+
 #### Scenario: Hotel arrival missing from the model's nonempty day
 - **WHEN** a geocoded booked stay is due at the end of a day and the model omitted it
 - **THEN** the server adds a zero-dwell, zero-cost hotel endpoint, initially 30 minutes after the previous stop's end and capped at 23:30 before route scheduling. A missing morning anchor is initially 20 minutes before the first activity with a 06:00 lower bound.

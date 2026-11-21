@@ -1,3 +1,4 @@
+import { splitStopNote } from './stop-note.js';
 import { el, action, message, tripRequest, label } from './integration-ui.js';
 import { renderFlightPanels } from './flight-panel.js';
 import { pendingReservationMessage } from './booking-tasks.js';
@@ -377,7 +378,7 @@ export function canNotifyWeather(state) {
 }
 
 function groupMessage(text) {
-  const content = String(text || '').trim().replace(/^(?:Bop:\s*)+/i, '');
+  const content = splitStopNote(text).text.replace(/^(?:Bop:\s*)+/i, '');
   return content ? ('Bop: ' + content).slice(0, 5000) : '';
 }
 

@@ -1,13 +1,16 @@
+import { appendTrace, finishTrace } from './operation-trace.js';
 import { renderBookingTasks, reservationStatus, setReservationDone } from './booking-tasks.js';
 import { describePlanChange, renderPlanReview, renderRepairOutcome } from './plan-review.js';
-import { openPlaceSheet, closePlaceSheet, createStopMenu } from './place-details.js';
-import { renderStopNote } from './stop-note.js';
+import { openPlaceSheet, closePlaceSheet, createStopMenu, refreshPlaceLocation } from './place-details.js';
+import { renderStopNote, splitStopNote } from './stop-note.js';
 import { attachLocationSuggestions, localSuggestions } from './location-suggest.js';
 import { bindWorkspace, renderPeople } from './workspace-controls.js';
 import { installSetupExtras, chooseCandidates } from './setup-extras.js';
 import { createForecast } from './forecast.js';
 import { visitDate, visitAvailability, stopFacts, legFacts } from './itinerary-facts.js';
-import { coordinates, drawMap } from './map.js';
+import { coordinates, drawMap, visitCoordinates } from './map.js';
+import { legLabels, legMode, isScheduledService } from './leg-modes.js';
+import { applySavedMap } from './saved-map.js';
 import { fetchStream, readEvents } from './stream.js';
 import {
   bindTripIntegrations,
@@ -39,7 +42,6 @@ const presets = {
   โซล: ['KR', 'KRW', 37.5665, 126.978],
 };
 const modes = { undecided: 'ให้ Bop เลือกให้', flight: 'เครื่องบิน', drive: 'ขับรถ', bus: 'รถบัส', train: 'รถไฟ' };
-const travel = { transit: 'ขนส่งสาธารณะ', red: 'รถแดง', walk: 'เดิน', car: 'รถรับจ้าง', own: 'รถส่วนตัว', van: 'รถตู้' };
 const kind = {
   food: 'อาหาร',
   hotel: 'ที่พัก',
@@ -90,6 +92,7 @@ const history = [];
 let state = { plan: null, routes: {}, setup: {}, selected: 0, demo: true, bookings: {}, cancellations: [] };
 let busy = false;
 let focusedStop;
+let archivedMap;
 let menuScope;
 let original, preview, activePlanning, activeReplan;
 let allDays = false,
@@ -97,14 +100,17 @@ let allDays = false,
   readiness;
 function presentSummary(text) {
   const summary = $('#plan-summary');
-  summary.hidden = !text;
-  summary.querySelector('p').textContent = text || '';
+  const prose = splitStopNote(text).text;
+  summary.hidden = !prose;
+  summary.querySelector('p').textContent = prose;
   status.textContent = '';
 }
 function updateTripLink() {
   if (state.localTripId) window.history.replaceState(null, '', '#trip=' + state.localTripId);
 }
 function newTrip() {
+  archivedMap?.controller?.abort();
+  archivedMap = null;
   bindTripIntegrations(state);
   closePlaceSheet($('#place-panel'), { restoreFocus: false });
   focusedStop = null;
@@ -245,6 +251,36 @@ function dayTotals(day) {
     ((stop.leg?.mode ?? stop.leg?.m) === 'walk' ? Number(stop.leg.km || 0) : 0), 0);
   return 'เดิน ' + walk.toFixed(1) + ' กม. · ฿' + cash.format(cost);
 }
+async function recoverDayMap(plan, index) {
+  const archive = archivedMap;
+  if (archive?.plan !== plan || archive.checked.has(index)) return;
+  const day = plan.days[index];
+  if (!day?.stops.some(stop => !visitCoordinates(stop) && typeof stop.query === 'string' && stop.query.trim())) return;
+  if (archive.pending === index) return;
+  archive.controller?.abort();
+  const controller = new AbortController();
+  archive.controller = controller;
+  archive.pending = index;
+  try {
+    const response = await fetch('/api/local-trips/' + archive.id + '/map/' + index, { signal: controller.signal });
+    if (!response.ok) return;
+    const patch = await response.json();
+    if (controller.signal.aborted || archivedMap !== archive || state.plan !== plan || preview || activePlanning || activeReplan) return;
+    archive.checked.add(index);
+    if (!patch.locations?.length) return;
+    applySavedMap(plan, state.routes, patch);
+    if (original?.localTripId === archive.id) applySavedMap(original.plan, original.routes, patch);
+    if (state.selected !== index) return;
+    const current = day.stops.find(stop => stop.id === focusedStop);
+    if (current && [...patch.locations, ...patch.legs].some(update => update.id === current.id))
+      refreshPlaceLocation($('#place-panel'), current, plan.city, day);
+    render();
+  } catch {
+    // The saved itinerary remains usable when a location service is unavailable.
+  } finally {
+    if (archive.controller === controller) archive.pending = undefined;
+  }
+}
 function render() {
   const plan = preview?.plan || state.plan;
   if (plan?.days.length) state.selected = Math.max(0, Math.min(state.selected, plan.days.length - 1));
@@ -349,16 +385,20 @@ function render() {
     for (const [order, stop] of day.stops.entries()) {
       if (order && stop.leg) {
         const leg = stop.leg;
+        const mode = legMode(leg.mode ?? leg.m);
+        const estimatedService = isScheduledService(mode);
         const unlocated = leg.unlocated || stop.place?.fallback || day.stops[order - 1].place?.fallback;
         const parts = unlocated ? [
+          legLabels[mode],
           'ยังไม่ทราบเส้นทางระหว่างจุดแวะ',
           Number.isFinite(leg.min) && leg.min > 0 && 'เวลาเดินทางประมาณ ' + leg.min + ' นาที',
         ] : [
-          travel[leg.mode ?? leg.m] || 'เดินทาง',
+          legLabels[mode] || 'เดินทาง',
           Number.isFinite(leg.min) && leg.min + ' นาที',
           Number.isFinite(leg.km) && leg.km.toFixed(1) + ' กม.',
-          Number.isFinite(leg.cost) && '฿' + cash.format(leg.cost) + ' / คน',
-          leg.minSrc === 'web' ? 'เวลาตามแหล่งข้อมูล' : leg.real ? 'ตามถนนจริง' : 'เส้นทางโดยประมาณ',
+          Number.isFinite(leg.cost) && (estimatedService && leg.autoPrice ? 'ค่าโดยสารประมาณ ฿' : '฿') + cash.format(leg.cost) + ' / คน',
+          leg.minSrc === 'web' && 'เวลาตามแหล่งข้อมูล',
+          estimatedService || !leg.real ? 'เส้นทางโดยประมาณ' : 'ตามถนนจริง',
         ];
         const line = node('p', parts.filter(Boolean).join(' · '), 'leg');
         if (!unlocated)
@@ -382,6 +422,7 @@ function render() {
       const kindId = stop.kind || stop.k;
       const label = kind[kindId] || kindId || 'กิจกรรม';
       chip(label);
+      if (!visitCoordinates(stop)) chip('ยังไม่ทราบพิกัด', 'warn');
       if (Number.isFinite(stop.cost)) chip('฿' + cash.format(stop.cost) + ' / คน');
       const visit = availability.get(stop);
       if (visit.reason) chip('ปิดในวันที่วางแผน · ' + visit.reason, 'closed');
@@ -465,12 +506,22 @@ function render() {
   if (todo) $('#itinerary').append(button('ดูรายการที่ต้องติดต่อ ' + todo + ' รายการ', () => switchView('book')));
   forecast.renderStrip($('#alerts'), plan, state.selected);
   renderTripIntegrations($('#reservations'), state);
+  const selected = day?.stops.find(stop => stop.id === focusedStop);
+  const visible = (allDays ? plan.days : [day]).flatMap(d => d?.stops || []);
+  const located = visible.filter(visitCoordinates).length;
+  const mapStatus = $('#map-location-status');
+  mapStatus.textContent = selected && !visitCoordinates(selected) ? 'ยังไม่มีพิกัดที่ยืนยันสำหรับ ' + (selected.name || selected.n)
+    : located < visible.length ? 'มีพิกัด ' + located + ' จาก ' + visible.length + ' จุดแวะ' : '';
+  mapStatus.hidden = !mapStatus.textContent;
+  if ($('#planning-progress').hidden && !preview && !activeReplan && (!allDays || focusedStop)) recoverDayMap(plan, state.selected);
   if ($('#planning-progress').hidden) drawMap(
       allDays ? plan.days : [day],
       { ...state.routes, ...preview?.routes },
       place,
       preview && !allDays ? state.plan.days[state.selected] : null,
       focusedStop,
+      undefined,
+      plan.days,
     );
 }
 window.addEventListener(
@@ -904,26 +955,6 @@ function setupInput(found, transportOnly = false) {
   });
 }
 const planningPanel = $('#planning-progress');
-function finishTrace(list, state = 'done') {
-  const current = list.lastElementChild;
-  if (current?.dataset.state !== 'active') return;
-  current.dataset.state = state;
-  current.removeAttribute('aria-current');
-}
-function appendTrace(list, text) {
-  if (typeof text !== 'string' || !text.trim()) return;
-  if (list.lastElementChild?.dataset.state === 'active' && list.lastElementChild.textContent === text) return;
-  const following = list.scrollHeight - list.scrollTop - list.clientHeight < 20;
-  finishTrace(list);
-  const step = node('li');
-  step.dataset.state = 'active';
-  step.setAttribute('aria-current', 'step');
-  const mark = node('span', null, 'trace-mark');
-  mark.setAttribute('aria-hidden', 'true');
-  step.append(mark, document.createTextNode(text));
-  list.append(step);
-  if (following) list.scrollTop = list.scrollHeight;
-}
 function showPlanning(show) {
   planningPanel.hidden = !show;
   $('.trip-board').classList.toggle('planning-map', show);
@@ -960,6 +991,7 @@ $('#cancel-plan').onclick = editPlanningDraft;
 $('#planning-edit').onclick = editPlanningDraft;
 
 async function generateTrip(input) {
+  archivedMap?.controller?.abort();
   const ctrl = new AbortController();
   activePlanning = ctrl;
   const signal = ctrl.signal;
@@ -1398,7 +1430,7 @@ if (localTrip)
     state = {
       plan: saved.plan,
       setup: saved.plan.setup,
-      routes: saved.routes,
+      routes: saved.routes || {},
       selected: 0,
       demo: false,
       usage: saved.usage,
@@ -1407,6 +1439,7 @@ if (localTrip)
     };
     state.localTripId = localTrip[1];
     newTrip();
+    archivedMap = { id: localTrip[1], plan: state.plan, checked: new Set() };
     presentSummary(saved.summary);
     render();
     forecast.refresh();

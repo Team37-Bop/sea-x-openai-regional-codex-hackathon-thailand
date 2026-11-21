@@ -143,26 +143,6 @@
       </section>
       <div class="trip-board">
         <button id="itinerary-toggle" class="panel-toggle" type="button" aria-controls="trip-sidebar" aria-expanded="true" aria-label="ย่อแผนเที่ยว" title="ย่อแผนเที่ยว"><span>ย่อแผนเที่ยว</span></button>
-        <section id="chat-response" aria-label="คำตอบจาก Bop" hidden>
-          <button id="chat-toggle" class="panel-toggle" type="button" aria-controls="chat-content" aria-expanded="true" aria-label="ย่อแผงคุยกับ Bop" title="ย่อแผงคุยกับ Bop"><span aria-live="polite">ย่อแผง</span></button>
-          <div id="chat-content">
-            <div class="chat-request-line">
-              <p>คำขอของคุณ <strong id="chat-command"></strong></p>
-              <button type="button" id="chat-cancel" class="quiet">ยกเลิกคำขอ</button>
-              <button type="button" id="chat-dismiss" class="quiet" hidden>ปิดผลการปรับแผน</button>
-            </div>
-            <h2 id="chat-state" tabindex="-1" aria-live="polite"></h2>
-            <p id="chat-description" hidden></p>
-            <ol id="chat-steps" class="operation-trace" role="list" aria-label="ขั้นตอนการปรับแผน" aria-live="polite" aria-relevant="additions"></ol>
-            <button type="button" id="chat-retry" class="quiet" hidden>ลองอีกครั้ง</button>
-            <div id="options" aria-label="ทางเลือกในการปรับแผน"></div>
-            <details id="chat-result" hidden>
-              <summary>ดูสิ่งที่เปลี่ยนในแผน</summary>
-              <div id="chat-review"></div>
-            </details>
-            <div id="chat-line"></div>
-          </div>
-        </section>
         <aside id="planning-progress" aria-labelledby="planning-phase" hidden>
           <header class="draft-heading">
             <p id="planning-context"></p>
@@ -255,15 +235,38 @@
               </span>
               <h2 id="map-title">แผนที่ทริป</h2>
               <button id="whole-map" type="button" class="quiet">ดูแผนที่ทั้งทริป</button>
+              <span id="map-location-status" role="status" hidden></span>
             </div>
-            <div id="map" aria-label="แผนที่สถานที่และเส้นทาง">
-              <p class="empty" id="map-fallback">แผนที่กำลังโหลด</p>
+            <div class="map-viewport">
+              <div id="map" aria-label="แผนที่สถานที่และเส้นทาง">
+                <p class="empty" id="map-fallback">แผนที่กำลังโหลด</p>
+              </div>
+              <ul id="leg-label" aria-label="วิธีเดินทางในทริปและสัญลักษณ์เส้นทาง" hidden></ul>
+              <aside id="place-panel" class="place-reader" hidden aria-labelledby="place-title">
+                <div id="place-panel-content"></div>
+              </aside>
             </div>
-            <ul id="leg-label" aria-label="สัญลักษณ์เส้นทาง" hidden></ul>
+            <section id="chat-response" aria-label="คำตอบจาก Bop" hidden>
+              <button id="chat-toggle" class="panel-toggle" type="button" aria-controls="chat-content" aria-expanded="true" aria-label="ย่อแผงคุยกับ Bop" title="ย่อแผงคุยกับ Bop"><span aria-live="polite">ย่อแผง</span></button>
+              <div id="chat-content">
+                <div class="chat-request-line">
+                  <p>คำขอของคุณ <strong id="chat-command"></strong></p>
+                  <button type="button" id="chat-cancel" class="quiet">ยกเลิกคำขอ</button>
+                  <button type="button" id="chat-dismiss" class="quiet" hidden>ปิดผลการปรับแผน</button>
+                </div>
+                <h2 id="chat-state" tabindex="-1" aria-live="polite"></h2>
+                <p id="chat-description" hidden></p>
+                <ol id="chat-steps" class="operation-trace" role="list" aria-label="ขั้นตอนการปรับแผน" aria-live="polite" aria-relevant="additions"></ol>
+                <button type="button" id="chat-retry" class="quiet" hidden>ลองอีกครั้ง</button>
+                <div id="options" aria-label="ทางเลือกในการปรับแผน"></div>
+                <details id="chat-result" hidden>
+                  <summary>ดูสิ่งที่เปลี่ยนในแผน</summary>
+                  <div id="chat-review"></div>
+                </details>
+                <div id="chat-line"></div>
+              </div>
+            </section>
           </section>
-          <aside id="place-panel" class="place-reader" hidden aria-labelledby="place-title">
-            <div id="place-panel-content"></div>
-          </aside>
         </div>
       </div>
     </main>

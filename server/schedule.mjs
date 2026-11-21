@@ -1,14 +1,15 @@
 import { clock, coordinates, dateAt, distance, minutes, normTime, source, str } from './domain.mjs';
 import { stopKind } from './stop-kinds.mjs';
 import { fields, uniqueId } from './edits.mjs';
-import { findPlace, legKey, route } from './geo.mjs';
+import { findPlace, findSavedVenue, legKey, route } from './geo.mjs';
 import { catalogPlace } from './sample.mjs';
 import { matchesPick } from './candidates.mjs';
+import { misplacedPick } from './pick-match.mjs';
 import { localTransport } from '../web/transport-endpoints.js';
+import { legMode, isScheduledService } from '../web/leg-modes.js';
 
 export const isHotel = (s) => ['hotel', 'stay'].includes(stopKind(s?.k ?? s?.kind));
 export const isTransit = (s) => ['terminal', 'transit'].includes(stopKind(s?.k ?? s?.kind));
-const modes = ['walk', 'red', 'car', 'van', 'own', 'transit'];
 export function dayHotels(stays, index, days) {
   const at = (night) => stays.find((s) => s.first <= night && night < s.first + s.nights);
   return { start: index > 0 ? at(index - 1) : null, end: index < days - 1 ? at(index) : null };
@@ -99,7 +100,7 @@ export function fare(mode, km, count, leg = {}) {
   if (mode === 'own')
     return Math.round((4 * km) / Math.min(count, 5) + (Number(leg.parking) || 0) + (Number(leg.tolls) || 0));
   if (mode === 'red') return Math.max(20, round5(km * 5));
-  if (mode === 'transit') return round5(35 + 3 * km);
+  if (mode === 'transit' || isScheduledService(mode)) return round5(35 + 3 * km);
   if (mode === 'van') return round5(((100 + 16 * km) * Math.ceil(count / 9)) / count);
   return round5(((60 + 14 * km) * Math.ceil(count / 4)) / count);
 }
@@ -148,8 +149,9 @@ export async function schedule(raw, index, setup, ctx, stays, verified, opts = {
   const placed = await concurrent(rows, 4, async (row, i) => {
     const cat = catalogPlace(setup.city, row);
     const name = str(row.name || cat?.name);
-    const hint = !row.place?.fallback && coordinates(row.ll) ? row.ll : undefined;
-    const pick = setup.picks?.must?.find((p) => coordinates(p.ll) && matchesPick({ ...row, name }, p, true));
+    const unconfirmed = row.place?.fallback || misplacedPick(row, setup.picks?.must);
+    const hint = !unconfirmed && coordinates(row.ll) ? row.ll : undefined;
+    const pick = setup.picks?.must?.find((p) => coordinates(p.ll) && matchesPick({ ...row, name }, p, false));
     let ll, location;
     if (cat && !row.pinned && !pick) {
       ll = cat.ll;
@@ -163,6 +165,9 @@ export async function schedule(raw, index, setup, ctx, stays, verified, opts = {
     } else if (keep && hint && row.place) {
       ll = hint;
       location = row.place.source;
+    } else if (!offline && !opts.preResolved && unconfirmed) {
+      ll = await findSavedVenue(row, setup.cityLL, ctx.signal, batch);
+      if (ll) location = 'geocoded';
     } else if (!offline && !opts.preResolved) {
       const shortName = name.split(/\s+[—–]\s+/u)[0];
       const terms = [...new Set([str(row.query), shortName, ...(Array.isArray(row.aliases) ? row.aliases : [])]
@@ -215,7 +220,7 @@ export async function schedule(raw, index, setup, ctx, stays, verified, opts = {
     if (!i) return null;
     const row = rows[i],
       prev = placed[i - 1];
-    const mode = [row.mode, row.leg?.m, row.leg?.mode].find((v) => modes.includes(v)) ?? 'car';
+    const mode = legMode(row.mode) || legMode(row.leg?.mode) || legMode(row.leg?.m) || 'car';
     const moved = keep && row.leg?.key && row.leg.key !== legKey(prev.ll, s.ll, mode);
     const incoming = moved
       ? {}

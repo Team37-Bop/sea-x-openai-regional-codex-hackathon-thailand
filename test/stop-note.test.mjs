@@ -14,6 +14,17 @@ test('itinerary citations retain the clickable source separately from the Thai a
   assert.deepEqual(splitStopNote('จุดนัดพบ (' + wiki + ')'), { text: 'จุดนัดพบ', sources: [wiki] });
 });
 
+test('saved replan summaries keep both lines and strip a source even when Markdown was escaped', () => {
+  const url = 'https://careers.tate.org.uk/members/modules/jobV2/download.php?record=file.pdf&utm_source=openai';
+  const intro = 'Bop: งบเพิ่ม 0 บาทต่อคน เดินไปชมคอลเลกชันถาวร';
+  const owner = 'ผู้จัดทริป: ตรวจเวลาเดินกลับเมื่อทราบที่อยู่โรงแรม';
+  const clean = intro + '\n' + owner;
+  for (const raw of [
+    intro + ' ([careers.tate.org.uk](' + url + '))\n' + owner,
+    intro + ' ([careers.tate.org.uk]\\(' + url.replace('https:', 'https\\:') + '\\))\\\n' + owner,
+  ]) assert.deepEqual(splitStopNote(raw), { text: clean, sources: [url] });
+});
+
 test('unsafe sources cannot become links in a saved itinerary', () => {
   assert.deepEqual(splitStopNote('[เมนู](javascript:alert(1))'), { text: 'เมนู', sources: [] });
   assert.equal(splitStopNote('https://user:pass@example.org/path').sources.length, 0);

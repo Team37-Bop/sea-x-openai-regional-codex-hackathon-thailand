@@ -1,4 +1,6 @@
+import { splitStopNote } from '../web/stop-note.js';
 import { saveLocalTrip, readLocalTrip } from './local-showcase.mjs';
+import { recoverSavedDay, validateSavedPositions } from './saved-map.mjs';
 import http from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { extname, resolve, sep } from 'node:path';
@@ -138,10 +140,15 @@ export async function handleRequest(request, response) {
   );
   try {
     const url = new URL(request.url, 'http://localhost');
-    const saved = /^\/api\/local-trips\/([0-9a-f-]{36})$/.exec(url.pathname);
+    const saved = /^\/api\/local-trips\/([0-9a-f-]{36})(?:\/map\/(\d+))?$/.exec(url.pathname);
     if (request.method === 'GET' && saved) {
-      const trip = await readLocalTrip(request, saved[1]);
-      return trip ? json(response, trip) : json(response, { error: 'not_found' }, 404);
+      const stored = await readLocalTrip(request, saved[1]);
+      if (!stored) return json(response, { error: 'not_found' }, 404);
+      const trip = validateSavedPositions(stored);
+      if (saved[2] === undefined) return json(response, { ...trip, summary: splitStopNote(trip.summary).text });
+      const day = Number(saved[2]);
+      if (!trip.plan.days[day]) return json(response, { error: 'not_found' }, 404);
+      return json(response, await recoverSavedDay(trip, day, abort.signal));
     }
     if (await serveIntegrations(request, response, url, abort.signal)) return;
     if (request.method === 'GET' && url.pathname === '/api/health')

@@ -1,11 +1,4 @@
-const labels = {
-  walk: 'เดิน',
-  car: 'รถรับจ้าง',
-  own: 'รถส่วนตัว',
-  van: 'รถตู้',
-  red: 'รถแดง',
-  transit: 'ขนส่งสาธารณะ',
-};
+import { legLabels as labels, legMode, isScheduledService } from './leg-modes.js';
 const colors = {
   walk: '#41793a',
   car: '#3c699a',
@@ -13,24 +6,52 @@ const colors = {
   van: '#926025',
   red: '#a7453b',
   transit: '#695396',
+  rail: '#743e8c',
+  metro: '#2b6c8d',
+  ferry: '#14726c',
+  bus: '#966025',
 };
 const strokes = {
   road: { width: 4, cap: 'round' },
   walk: { width: 3, cap: 'round', dash: [0.1, 2.6] },
   transit: { width: 4, cap: 'butt', dash: [3, 1.5] },
   estimate: { width: 3, cap: 'butt', dash: [3, 1.4, 0.7, 1.4], opacity: 0.76 },
+  sequence: { width: 3, cap: 'round', dash: [0.2, 1.5, 1.8, 1.5], opacity: 0.85 },
+  access: { width: 2.5, cap: 'round', dash: [0.25, 1.5], opacity: 0.85 },
   removed: { width: 3, cap: 'butt', dash: [1.2, 1.3], opacity: 0.83 },
 };
-function routeLabel({ mode, stroke }) {
+function routeLabel({ mode, stroke, gap }) {
   if (stroke === 'removed') return 'เส้นทางที่นำออก';
+  if (stroke === 'sequence') return (gap ? 'ช่วงขาดพิกัด' : 'ยังไม่มีเส้นทาง') + ' · ลำดับจุดแวะโดยประมาณ';
+  if (stroke === 'access') return 'ช่วงเชื่อมหมุดกับเส้นทาง · โดยประมาณ';
   return (labels[mode] || mode || 'การเดินทาง') + (stroke === 'estimate' ? ' · เส้นทางโดยประมาณ' : '');
 }
-function renderLegend(features) {
+const modeStroke = mode => mode === 'walk' ? 'walk' : mode === 'transit' || isScheduledService(mode) ? 'transit' : 'road';
+export function routeLegendEntries(tripDays, features = []) {
+  const modes = new Set();
+  for (const day of tripDays) {
+    for (const stop of day?.stops || []) {
+      const recorded = stop.leg?.mode || stop.leg?.m;
+      const mode = legMode(recorded) || recorded;
+      if (mode) modes.add(mode);
+    }
+  }
+  const entries = [];
+  for (const mode of new Set([...Object.keys(labels), ...modes])) {
+    if (modes.has(mode)) entries.push({ mode, stroke: modeStroke(mode), color: colors[mode] || '#426353' });
+  }
+  const extra = new Map();
+  for (const { properties } of features) {
+    if (properties.approx || ['estimate', 'removed', 'sequence', 'access'].includes(properties.stroke))
+      extra.set(routeLabel(properties), properties);
+  }
+  return [...entries, ...extra.values()];
+}
+function renderLegend(tripDays, features) {
   const legend = document.querySelector('#leg-label');
-  const entries = new Map();
-  for (const { properties } of features) entries.set(routeLabel(properties), properties);
   const items = [];
-  for (const [label, { color, stroke }] of entries) {
+  for (const entry of routeLegendEntries(tripDays, features)) {
+    const { color, stroke } = entry;
     const style = strokes[stroke];
     const item = document.createElement('li');
     const swatch = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -44,7 +65,7 @@ function renderLegend(features) {
     if (style.opacity) line.setAttribute('opacity', style.opacity);
     if (style.dash) line.setAttribute('stroke-dasharray', style.dash.map(n => n * style.width).join(' '));
     swatch.append(line);
-    item.append(swatch, document.createTextNode(label));
+    item.append(swatch, document.createTextNode(routeLabel(entry)));
     items.push(item);
   }
   legend.replaceChildren(...items);
@@ -74,9 +95,11 @@ function segment(a, b, record, mode, ghost = false, estimated = false) {
   ) {
     if (distance(a, points[0]) > distance(a, [points[0][1], points[0][0]]))
       points = points.map(([x, y]) => [y, x]);
+    if (distance(a, points.at(-1)) + distance(b, points[0]) < distance(a, points[0]) + distance(b, points.at(-1)))
+      points = [...points].reverse();
   } else points = null;
   const approximate = !points || Boolean(record?.approx) || estimated;
-  const stroke = ghost ? 'removed' : approximate ? 'estimate' : mode === 'walk' || mode === 'transit' ? mode : 'road';
+  const stroke = ghost ? 'removed' : approximate ? 'estimate' : modeStroke(mode);
   return {
     type: 'Feature',
     geometry: { type: 'LineString', coordinates: points || [a, b] },
@@ -88,6 +111,51 @@ function segment(a, b, record, mode, ghost = false, estimated = false) {
       revision: overlayRevision,
     },
   };
+}
+function connector(from, to, stroke, gap = false) {
+  return {
+    type: 'Feature',
+    geometry: { type: 'LineString', coordinates: [from, to] },
+    properties: { stroke, gap, color: '#675767', approx: true, revision: overlayRevision },
+  };
+}
+
+// Sequence and access connectors are display-only. They never enter routing, time or fare totals.
+export function dayRouteFeatures(day, routes, drafting = false) {
+  const features = [], longPoints = [];
+  let previous;
+  for (const [i, stop] of (day?.stops || []).entries()) {
+    const point = visitCoordinates(stop);
+    if (!point) continue;
+    const prior = previous;
+    previous = { point, index: i, ordinal: stop.ordinal };
+    if (!prior || distance(prior.point, point) === 0) continue;
+    const leg = stop.leg;
+    const gap = prior.index !== i - 1 || (Number.isInteger(prior.ordinal) &&
+      Number.isInteger(stop.ordinal) && stop.ordinal !== prior.ordinal + 1);
+    if (gap || !leg || leg.unlocated) {
+      if (!drafting) features.push(connector(prior.point, point, 'sequence', gap));
+      continue;
+    }
+    const recorded = leg.mode || leg.m;
+    const mode = legMode(recorded) || recorded;
+    const service = isScheduledService(mode);
+    const stored = !drafting && !service && leg.real === true && Array.isArray(leg.geometry) ? leg.geometry : null;
+    const record = service && !leg.key?.startsWith(mode + '|') ? null : routes?.[leg.key] || stored;
+    const line = segment(prior.point, point, record, mode, false, service || leg.real === false);
+    if (drafting && line.properties.approx) continue;
+    features.push(line);
+    const geometry = line.geometry.coordinates;
+    if (leg.km >= 100) longPoints.push(...geometry);
+    if (!drafting && !line.properties.approx) {
+      // Routers snap their endpoints to the street. Keep the measured polyline intact.
+      if (distance(prior.point, geometry[0]) > 1e-12)
+        features.push(connector(prior.point, geometry[0], 'access'));
+      if (distance(geometry.at(-1), point) > 1e-12)
+        features.push(connector(geometry.at(-1), point, 'access'));
+    }
+  }
+  return { features, longPoints };
 }
 let map,
   loading,
@@ -315,20 +383,12 @@ function paint() {
   for (const day of days.filter(Boolean)) {
     const stops = day.stops || [];
     stops.forEach((stop, i) => {
-      const p = visitCoordinates(stop),
-        a = visitCoordinates(stops[i - 1]);
+      const p = visitCoordinates(stop);
       if (p) pin(stop, p, i, false, day);
-      if (!p || !stop.leg || stops[i - 1]?.place?.fallback) return;
-      const mode = stop.leg.mode || stop.leg.m;
-      const record = routes?.[stop.leg.key];
-      if (drafting && (record?.approx || !Array.isArray(record?.geom) || record.geom.length < 2)) return;
-      if (!drafting && !a) return;
-      if (a && distance(a, p) === 0) return;
-      const line = segment(a || p, p, record, mode, false, stop.leg.real === false);
-      if (drafting && line.properties.approx) return;
-      features.push(line);
-      if (stop.leg.km >= 100) points.push(...line.geometry.coordinates);
     });
+    const lines = dayRouteFeatures(day, routes, drafting);
+    features.push(...lines.features);
+    points.push(...lines.longPoints);
     if (before) {
       const kept = new Set(stops.map((s) => s.id));
       before.stops.forEach((stop, i, old) => {
@@ -366,19 +426,19 @@ function paint() {
         routePopup = new library.Popup()
           .setLngLat(event.lngLat)
           .setText(routeLabel(event.features[0].properties) +
-            (stroke === 'estimate' || stroke === 'removed' ? '' : ' · ตามถนนจริง'))
+            (event.features[0].properties.approx ? '' : ' · ตามถนนจริง'))
           .addTo(map);
       });
     }
   }
-  renderLegend(features);
+  renderLegend(pending.tripDays, features);
   arrangePins();
   const bounds = points.length && points.reduce((box, p) => box.extend(p), new library.LngLatBounds()).toArray();
   const visibleDays = days.map(day => day && [day.date, day.stops?.map(stop => stop.id)]);
   cameraTarget = { bounds, focus: focusPoint, focusedStop, drafting, center, visibleDays };
   scheduleCamera();
 }
-export function drawMap(days, routes, open, before, focusedStop, draft) {
+export function drawMap(days, routes, open, before, focusedStop, draft, tripDays = days) {
   const drafting = Boolean(draft), center = coordinates(draft?.cityLL);
   if (draft?.restart || pending?.drafting !== drafting || (!drafting && pending?.days[0] !== days[0])) {
     // MapLibre's worker can still be painting the preceding GeoJSON tiles.
@@ -396,14 +456,15 @@ export function drawMap(days, routes, open, before, focusedStop, draft) {
     previousCamera = undefined;
     cameraTarget = drafting ? { drafting, center } : null;
     if (map) scheduleCamera();
-    renderLegend([]);
   }
-  pending = { days, routes, open, before, focusedStop, drafting, center };
-  if (map) {
+  pending = { days, routes, open, before, focusedStop, drafting, center, tripDays };
+  if (map && (map.isStyleLoaded() || map.getSource('trip'))) {
     paint();
     return;
   }
-  if (loading || (!draft && !days.some((day) => day?.stops?.length))) return;
+  // A saved trip already has travel modes while the map worker is still loading.
+  renderLegend(tripDays);
+  if (map || loading || (!draft && !days.some((day) => day?.stops?.length))) return;
   loading = import('/assets/maplibre-gl.mjs?v=6.19.0')
     .then((lib) => {
       library = lib;

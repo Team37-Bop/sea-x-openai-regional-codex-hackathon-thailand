@@ -12,6 +12,8 @@ export function splitStopNote(value) {
     if (href) sources.add(href);
   }
   const text = String(value ?? '')
+    .replace(/\\([()[\]:<>])/g, '$1')
+    .replace(/\\(?=\r?\n)/g, '')
     .replace(markdownLink, (_, image, label, url) => {
       keep(url);
       const sourceLabel = /^(?:https?:\/\/|www\.)|^(?:[\w-]+\.)+[a-z]{2,}(?:[/?#].*)?$/i.test(label.trim());
@@ -23,6 +25,7 @@ export function splitStopNote(value) {
       return url.slice(clean.length);
     })
     .replace(/\(\s*\)/g, '')
+    .replace(/[ \t]+(?=\r?\n)/g, '')
     .replace(/[ \t]{2,}/g, ' ')
     .trim();
   return { text, sources: [...sources] };

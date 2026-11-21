@@ -182,6 +182,7 @@ export function installSetupExtras(form, readSetup) {
       }
       leg.choice = leg.original = null;
       list.replaceChildren();
+      feedback.classList.remove('bop-working');
       feedback.textContent = '';
       search.disabled = false;
       updateControls();
@@ -300,6 +301,7 @@ export function installSetupExtras(form, readSetup) {
         if (leg.ctrl === ctrl) feedback.textContent = text;
       };
       feedback.textContent = driving ? 'กำลังคำนวณเส้นทางขับรถ…' : 'กำลังค้นหาตัวเลือกการเดินทาง…';
+      feedback.classList.add('bop-working');
       search.disabled = true;
       try {
         const setup = await readSetup();
@@ -332,7 +334,10 @@ export function installSetupExtras(form, readSetup) {
       } catch (error) {
         if (!ctrl.signal.aborted) feedback.textContent = plain(error.message) || 'ค้นหาการเดินทางไม่สำเร็จ';
       } finally {
-        if (leg.ctrl === ctrl) search.disabled = false;
+        if (leg.ctrl === ctrl) {
+          search.disabled = false;
+          feedback.classList.remove('bop-working');
+        }
       }
     });
     fieldset.append(autoLabel, hint, search, feedback, list);

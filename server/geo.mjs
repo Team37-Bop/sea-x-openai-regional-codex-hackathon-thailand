@@ -1,4 +1,5 @@
 import { legKey, routeResult } from './route-result.mjs';
+import { isScheduledService } from '../web/leg-modes.js';
 export { legKey };
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -127,6 +128,8 @@ async function photon(name, signal, center) {
   return (
     result?.features?.map((f) => ({
       name: f.properties?.name,
+      street: f.properties?.street,
+      number: f.properties?.housenumber,
       cc: f.properties?.countrycode,
       kind: f.properties?.osm_key,
       type: f.properties?.osm_value,
@@ -134,7 +137,7 @@ async function photon(name, signal, center) {
     })) ?? null
   );
 }
-async function nominatim(name, signal, limit = 5, center, radius) {
+async function nominatim(name, signal, limit = 5, center, radius, extended = false) {
   let viewbox;
   if (center) {
     const [lat, lon] = center;
@@ -151,6 +154,7 @@ async function nominatim(name, signal, limit = 5, center, radius) {
         format: 'jsonv2',
         ...(viewbox ? { viewbox, bounded: 1 } : {}),
         addressdetails: 1,
+        ...(extended && { extratags: 1 }),
         'accept-language': 'en',
       }),
       signal,
@@ -159,6 +163,9 @@ async function nominatim(name, signal, limit = 5, center, radius) {
   return Array.isArray(result)
     ? result.map((h) => ({
         name: h.name || h.display_name?.split(',')[0],
+        street: h.address?.road || h.address?.pedestrian,
+        number: h.address?.house_number,
+        site: h.extratags?.website || h.extratags?.['contact:website'],
         cc: h.address?.country_code?.toUpperCase(),
         ll: [Number(h.lat), Number(h.lon)],
         kind: h.category ?? h.class,
@@ -184,7 +191,8 @@ export async function findCity(name, signal = new AbortController().signal) {
 }
 const realPoi = (h) =>
   coordinates(h.ll) &&
-  !['highway', 'place', 'boundary', 'landuse', 'railway', 'power'].includes(h.kind) &&
+  !['highway', 'boundary', 'landuse', 'railway', 'power'].includes(h.kind) &&
+  (h.kind !== 'place' || h.type === 'square') &&
   !(h.kind === 'natural' && h.type === 'peak');
 export async function findPlace(name, center, radius = 3, signal = new AbortController().signal, batch) {
   if (!name?.trim() || !coordinates(center)) return null;
@@ -204,6 +212,57 @@ export async function findPlace(name, center, radius = 3, signal = new AbortCont
     }
     if (hit) save('geocode', key, hit.ll);
     return hit?.ll ?? null;
+  });
+}
+
+const plainAddress = value => String(value || '').normalize('NFKD').toLowerCase()
+  .replace(/[\u0300-\u036f]/g, '').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+// A business may be listed without the generic suffix used in the itinerary.
+const venueSuffix = /\s+(?:café|cafe|kitchen|restaurant|hotel|hostel|bar)$/i;
+export async function findSavedVenue(stop, center, signal, budget) {
+  if (!coordinates(center) || typeof stop.query !== 'string' || !stop.query.trim()) return null;
+  const parts = stop.query.split(',').map(part => part.trim()).filter(Boolean);
+  const full = (parts[0] || '').split(/\s+[—–]\s+/)[0];
+  const streetAddress = parts.slice(1).map(part => part.match(/^(\d+[\p{L}]?(?:\s*[-–]\s*\d+[\p{L}]?)?)\s+(.+)$/u)).find(Boolean);
+  const short = full.replace(venueSuffix, '');
+  if (!full || (!streetAddress && plainAddress(full).split(' ').length < 2)) return null;
+  const key = 'verified|' + plainAddress(stop.query) + '|' + center.map(n => n.toFixed(3));
+  await ready;
+  const cached = data.geocode.get(key);
+  if (coordinates(cached)) return cached;
+  const terms = [...new Set(streetAddress ? [short + ', ' + streetAddress[2], full] : [full])];
+  const expected = plainAddress(full);
+  const display = plainAddress((stop.name || stop.n || '').split(/\s+[—–]\s+/)[0]);
+  const branch = display.startsWith(expected + ' ') ? display.slice(expected.length + 1) : '';
+  function branchWebsite(url) {
+    if (!url || branch.split(' ').length < 2) return false;
+    try {
+      const path = plainAddress(decodeURIComponent(new URL(url).pathname));
+      return (' ' + path + ' ').includes(' ' + branch + ' ');
+    } catch { return false; }
+  }
+  function select(hits) {
+    const identities = (hits || []).filter(hit => {
+      if (!realPoi(hit) || distance(center, hit.ll) > 40) return false;
+      const exact = plainAddress(hit.name) === expected;
+      if (!streetAddress) return exact;
+      return (exact || plainAddress(hit.name) === plainAddress(short)) &&
+        (hit.number ? plainAddress(hit.number) === plainAddress(streetAddress[1]) : exact && branchWebsite(hit.site)) &&
+        plainAddress(hit.street) === plainAddress(streetAddress[2]);
+    });
+    const first = identities[0];
+    return first && identities.every(hit => distance(first.ll, hit.ll) < 0.12) ? first.ll : null;
+  }
+  return once(key, signal, async () => {
+    for (const term of terms) {
+      let ll = select(await photon(term, signal, center));
+      if (!ll && budget.remaining > 0) {
+        budget.remaining--;
+        ll = select(await nominatim(term, signal, 5, center, 40, true));
+      }
+      if (ll) { save('geocode', key, ll); return ll; }
+    }
+    return null;
   });
 }
 
@@ -253,6 +312,9 @@ function measure(geom, sec, meters, via) {
   };
 }
 export async function route(from, to, mode, signal, offline = false, leg = {}) {
+  signal.throwIfAborted();
+  // Car and foot routers do not know the alignment or stops of a scheduled service.
+  if (isScheduledService(mode)) return routeResult(from, to, mode, leg);
   await ready;
   const key = legKey(from, to, mode),
     km = distance(from, to);
