@@ -912,20 +912,26 @@ dialog::backdrop {
   font-size: 1.12rem;
 }
 .day-tabs {
-  padding: 11px 15px 9px;
-  gap: 5px;
-  overflow-x: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 90px), 1fr));
+  align-items: stretch;
+  padding: 6px 12px 8px;
+  gap: 4px;
 }
 .day-tabs button {
-  flex: none;
+  display: grid;
+  align-content: center;
+  justify-content: stretch;
+  gap: 1px;
+  min-width: 0;
   border-color: var(--line);
   color: #555b54;
   font-size: 0.8rem;
-  padding: 4px 10px;
+  padding: 5px 6px;
   text-align: start;
   line-height: 1.45;
 }
-.day-tabs button small { display: block; font-size: .7rem; font-weight: 400; white-space: nowrap; }
+.day-tabs button small { display: block; font-size: .7rem; font-weight: 400; overflow-wrap: anywhere; }
 .day-tabs button[aria-current="true"],
 button[aria-pressed="true"] {
   background: var(--tint);
@@ -940,6 +946,7 @@ button[aria-pressed="true"] {
   color: var(--ink);
   font-size: 1.04rem;
   margin: 3px 0 13px;
+  overflow-wrap: anywhere;
 }
 .day-title small {
   display: block;
@@ -1009,6 +1016,7 @@ button[aria-pressed="true"] {
 .stop > div {
   grid-area: description;
   min-width: 0;
+  overflow-wrap: anywhere;
 }
 .stop h3 { font-size: 1rem; line-height: 1.45; }
 .stop p, .leg { color: var(--muted); font-size: .79rem; }
@@ -1055,12 +1063,16 @@ button[aria-pressed="true"] {
   color: inherit;
   font: inherit;
   text-align: start;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 .stop-open::after { content: ''; position: absolute; inset: 0; }
 .stop .stop-open:focus-visible { outline: none; }
 .stop .stop-actions, .stop details, .stop .stop-menu { position: relative; z-index: 1; }
 .stop .stop-actions { width: fit-content; }
 .stop .stop-note { margin-top: 4px; }
+.stop-note a { position: relative; z-index: 1; overflow-wrap: anywhere; }
 .leg {
   margin: 0 0 0 66px;
   padding: 2px 0 3px 20px;

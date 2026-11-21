@@ -1,6 +1,7 @@
 import { renderBookingTasks, reservationStatus, setReservationDone } from './booking-tasks.js';
 import { describePlanChange, renderPlanReview } from './plan-review.js';
 import { openPlaceSheet, closePlaceSheet, createStopMenu } from './place-details.js';
+import { renderStopNote } from './stop-note.js';
 import { attachLocationSuggestions, localSuggestions } from './location-suggest.js';
 import { bindWorkspace, renderPeople } from './workspace-controls.js';
 import { installSetupExtras, chooseCandidates } from './setup-extras.js';
@@ -353,7 +354,8 @@ function render() {
       content.append(heading, meta);
       const badge = forecast.badge(stop, state.selected, plan);
       if (badge) content.append(badge);
-      if (stop.note) content.append(node('p', stop.note, 'stop-note'));
+      const note = renderStopNote(stop.note, 'stop-note');
+      if (note) content.append(note);
       const actions = node('div', null, 'stop-actions');
       if (stop.res?.todo || stop.res?.done || state.bookings[stop.id]) {
         const booked = reservationStatus(state, stop);

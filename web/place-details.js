@@ -1,3 +1,4 @@
+import { renderStopNote } from './stop-note.js';
 import { mediaUrl } from './setup-extras.js';
 import { readEvents } from './stream.js';
 import { samplePlaceInfo } from './sample-place-details.js';
@@ -329,7 +330,8 @@ function header(container, context, visit) {
     ['คนที่อยากไป', visit.wish],
   ]);
   if (fields) plan.append(fields);
-  if (visit.note) plan.append(el('p', visit.note, 'pd-note'));
+  const note = renderStopNote(context.stop.note, 'pd-note');
+  if (note) plan.append(note);
   if (visit.closure) plan.append(el('p', visit.closure, 'pd-warning'));
   const map = link('เปิดตำแหน่งใน Google Maps ↗', mapLink(context.stop, context.city));
   if (map) plan.append(map);
