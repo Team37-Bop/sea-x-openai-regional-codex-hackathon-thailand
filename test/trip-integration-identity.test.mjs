@@ -26,8 +26,12 @@ test('resizing a linked trip retains its LINE session and flight receipt through
     t.after(() => descriptor ? Object.defineProperty(globalThis, name, descriptor) : delete globalThis[name]);
   }
   const posts = [];
+  let configReads = 0;
   t.mock.method(globalThis, 'fetch', async (url, options) => {
-    if (url === '/api/config') return Response.json({ enabled: true });
+    if (url === '/api/config') {
+      configReads++;
+      return Response.json({ enabled: true });
+    }
     if (url.endsWith('/post')) {
       posts.push({ url, token: options.headers['x-bop-trip-token'], data: JSON.parse(options.body) });
       return Response.json({ posted: true });
@@ -38,12 +42,16 @@ test('resizing a linked trip retains its LINE session and flight receipt through
   });
   const { bindTripIntegrations, canNotifyWeather, newTripIntegrationKey, renderAppliedLine, renderTripIntegrations } =
     await import('../web/trip-integrations.js');
+  const { publicLineConfig } = await import('../web/stream.js');
+  const setupConfig = publicLineConfig();
   const receipt = { orderId: 'ord_test', bookingReference: 'BOOKED' };
   const initial = { localTripId: 'original-link', setup, plan: { days: [], flags: { transport: { back: { order: receipt } } } } };
   bindTripIntegrations(initial);
   const first = element();
   renderTripIntegrations(first, initial);
   await setImmediate();
+  assert.ok((await setupConfig).enabled);
+  assert.equal(configReads, 1);
   assert.ok(canNotifyWeather(initial));
   const [flight, line] = first.children;
   assert.ok(flight.children.some(node => node.textContent?.includes('BOOKED')));

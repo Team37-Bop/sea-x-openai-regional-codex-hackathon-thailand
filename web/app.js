@@ -9,22 +9,12 @@ import { renderStopNote, splitStopNote } from './stop-note.js';
 import { attachLocationSuggestions, localSuggestions } from './location-suggest.js';
 import { bindWorkspace, renderPeople } from './workspace-controls.js';
 import { installSetupExtras, chooseCandidates } from './setup-extras.js';
-import { createForecast } from './forecast.js';
 import { visitDate, visitAvailability, stopFacts, legFacts } from './itinerary-facts.js';
 import { coordinates, drawMap, visitCoordinates } from './map.js';
 import { legLabels, legMode, isScheduledService } from './leg-modes.js';
 import { applySavedMap } from './saved-map.js';
 import { fetchStream, readEvents } from './stream.js';
-import {
-  bindTripIntegrations,
-  newTripIntegrationKey,
-  renderTripIntegrations,
-  renderLineVote,
-  renderAppliedLine,
-  lineMessageBubble,
-  canNotifyWeather,
-  notifyWeather,
-} from './trip-integrations.js';
+import { publicLineConfig } from './integration-ui.js';
 const $ = (selector) => document.querySelector(selector);
 const setupForm = $('#setup-form');
 const setupDialog = $('#setup-dialog');
@@ -149,14 +139,22 @@ async function checkHealth(signal) {
 }
 const hasLiveService = () => readiness?.ai === true && readiness.provider !== 'fake';
 let pendingVotes = null;
-const forecast = createForecast({
-  getState: () => state,
-  isBusy: () => busy || !!pendingVotes || !!preview,
-  onChange: () => render(),
-  onReplan: (command, day) => task(() => adjust(command, day)),
-  canNotify: canNotifyWeather,
-  notify: notifyWeather,
-});
+let forecast, bindTripIntegrations, newTripIntegrationKey, renderTripIntegrations, renderLineVote,
+  renderAppliedLine, lineMessageBubble;
+async function loadTripTools() {
+  if (forecast) return;
+  const tools = await import('./trip-tools.js');
+  ({ bindTripIntegrations, newTripIntegrationKey, renderTripIntegrations, renderLineVote,
+    renderAppliedLine, lineMessageBubble } = tools);
+  forecast = tools.createForecast({
+    getState: () => state,
+    isBusy: () => busy || !!pendingVotes || !!preview,
+    onChange: () => render(),
+    onReplan: (command, day) => task(() => adjust(command, day)),
+    canNotify: tools.canNotifyWeather,
+    notify: tools.notifyWeather,
+  });
+}
 function node(tag, text, className) {
   const element = document.createElement(tag);
   if (text != null) element.textContent = String(text);
@@ -1195,7 +1193,7 @@ async function generateTrip(input) {
   $('#planning-phase').focus({ preventScroll: true });
   try {
     const lookup = input.cityLL ? Promise.resolve(known) : locate(input.city, signal).catch(() => null);
-    const [health] = await Promise.all([checkHealth(signal), lookup.then((found) => {
+    const [health] = await Promise.all([checkHealth(signal), loadTripTools(), lookup.then((found) => {
       signal.throwIfAborted();
       if (found) {
         input.cityLL = found.ll;
@@ -1582,11 +1580,11 @@ $('#undo').addEventListener('click', () => {
 bindWorkspace(setupForm);
 render();
 checkHealth();
-fetch('/api/config').catch(() => {});
+publicLineConfig().catch(() => {});
 const localTrip = /^#trip=([0-9a-f-]{36})$/.exec(location.hash);
 if (localTrip)
   task(async () => {
-    const response = await fetch('/api/local-trips/' + localTrip[1]);
+    const [response] = await Promise.all([fetch('/api/local-trips/' + localTrip[1]), loadTripTools()]);
     if (!response.ok) {
       $('#form-error').textContent = response.status === 404
         ? 'ไม่พบแผนที่บันทึกไว้ในเครื่องนี้แล้ว เริ่มสร้างทริปใหม่ได้'

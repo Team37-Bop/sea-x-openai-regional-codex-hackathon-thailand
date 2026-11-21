@@ -1,5 +1,6 @@
-import { copyFile, cp, lstat, mkdir, rm, stat } from 'node:fs/promises';
-import { build } from 'esbuild';
+import { createHash } from 'node:crypto';
+import { copyFile, cp, lstat, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { build, transform } from 'esbuild';
 await rm('dist', { force: true, recursive: true });
 await mkdir('dist/assets', { recursive: true });
 // The release only contains reviewed public files. Reject symlinks at each allowlisted path.
@@ -41,6 +42,7 @@ const publicFiles = [
   'style.css',
   'transport-endpoints.js',
   'trip-integrations.js',
+  'trip-tools.js',
   'workspace-controls.js',
 ];
 for (const name of publicFiles) {
@@ -48,12 +50,13 @@ for (const name of publicFiles) {
   if (!(await lstat(source)).isFile()) throw Error('Expected a regular file at ' + source);
   await copyFile(source, 'dist/' + name);
 }
-for (const name of [
+const mapAssets = [
   'maplibre-gl.mjs',
   'maplibre-gl-shared.mjs',
   'maplibre-gl-worker.mjs',
   'maplibre-gl.css',
-]) {
+];
+for (const name of mapAssets) {
   await cp('node_modules/maplibre-gl/dist/' + name, 'dist/assets/' + name);
 }
 await cp('node_modules/maplibre-gl/LICENSE.txt', 'dist/assets/maplibre-license.txt');
@@ -73,7 +76,6 @@ const sample = await planTrip(
   { signal: new AbortController().signal, emit() {}, step() {}, usage: {} },
   true,
 );
-const { writeFile } = await import('node:fs/promises');
 await writeFile(
   'dist/assets/sample.json',
   JSON.stringify({ plan: sample.plan, routes: sample.routes, summary: sample.summary }),
@@ -96,12 +98,11 @@ await build({
 });
 
 // Published assets are cached for a year. Give application-generated files content-specific URLs.
-const { createHash } = await import('node:crypto');
-const { readFile } = await import('node:fs/promises');
 for (const [asset, consumer] of [
   ['sample.json', 'app.js'],
   ['sample-replan.js', 'app.js'],
   ['liff.js', 'liff.js'],
+  ['anuphan-variable.woff2', 'planner-theme.css'],
 ]) {
   const content = await readFile('dist/assets/' + asset);
   const digest = createHash('sha256').update(content).digest('hex').slice(0, 12);
@@ -110,3 +111,45 @@ for (const [asset, consumer] of [
   const source = await readFile('dist/' + consumer, 'utf8');
   await writeFile('dist/' + consumer, source.replaceAll('/assets/' + asset, '/assets/' + versioned));
 }
+
+// Keep the vendor modules and worker together so their relative imports resolve.
+const mapDigest = createHash('sha256');
+for (const name of mapAssets) mapDigest.update(name).update(await readFile('dist/assets/' + name));
+const mapDirectory = 'assets/maplibre-' + mapDigest.digest('hex').slice(0, 12);
+await mkdir('dist/' + mapDirectory);
+let mapSource = await readFile('dist/map.js', 'utf8');
+for (const name of mapAssets) {
+  await copyFile('dist/assets/' + name, 'dist/' + mapDirectory + '/' + name);
+  mapSource = mapSource.replaceAll('/assets/' + name, '/' + mapDirectory + '/' + name);
+}
+await writeFile('dist/map.js', mapSource);
+
+// Bundle each load phase, keeping shared modules at their public URLs. An open
+// planner can still import its lazy entry after a deployment.
+const browserBuild = {
+  bundle: true, format: 'esm', minify: true, charset: 'utf8', target: 'es2022',
+  outdir: 'dist', allowOverwrite: true, external: ['/assets/*'],
+};
+const graph = await build({
+  ...browserBuild, entryPoints: ['dist/app.js'], splitting: true, write: false, metafile: true,
+});
+const publicSources = new Set(publicFiles.map(name => 'dist/' + name));
+for (const input of Object.keys(graph.metafile.inputs))
+  if (!publicSources.has(input)) throw Error('Browser import outside the public file list: ' + input);
+const modules = new Set();
+for (const output of Object.values(graph.metafile.outputs)) {
+  for (const input of output.entryPoint ? [output.entryPoint] : Object.keys(output.inputs)) modules.add(input);
+}
+const moduleUrls = [...modules].map(file => './' + file.slice('dist/'.length));
+await build({
+  ...browserBuild, entryPoints: [...modules], external: [...browserBuild.external, ...moduleUrls],
+});
+
+let html = await readFile('dist/index.html', 'utf8');
+const styleTags = [...html.matchAll(/<link rel="stylesheet" href="\/(\w[\w-]*\.css)"\s*\/?>/g)];
+const styles = await Promise.all(styleTags.map(([, name]) => readFile('dist/' + name, 'utf8')));
+const css = await transform(styles.join('\n'), { loader: 'css', minify: true, charset: 'utf8' });
+await writeFile('dist/planner.css', css.code);
+for (const [index, [tag]] of styleTags.entries())
+  html = html.replace(tag, index === 0 ? '<link rel="stylesheet" href="/planner.css" />' : '');
+await writeFile('dist/index.html', html);

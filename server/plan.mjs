@@ -109,6 +109,24 @@ function repairActions(before, after, edits) {
 }
 
 const transportLeg = (setup, dir) => (dir === 'go' ? setup.arrive : setup.depart);
+async function searchWebTransport(setup, dir, ctx) {
+  const { value, verified } = await model(
+    'ค้นเที่ยวบิน รถบัส หรือรถไฟตามโหมด ราคา THB ต่อคน เทียบตัวเลือกและเลือกหนึ่งแถว. คืน {options:[{by,carrier,code,from,to,dep,arr,price,bag,src:{url,title,checked},checked,recommended,why}]} ค่า checked เป็น web ถ้ามาจากผลค้นจริง มิฉะนั้น estimate.',
+    {
+      setup,
+      dir,
+      date: dir === 'go' ? setup.startDate : dateAt(setup.startDate, setup.days - 1),
+      country: setup.country,
+      window: dir === 'go' ? '07:00–12:00' : '19:30–23:00',
+    },
+    { ...ctx, operation: 'transport', quick: true, searches: 4 },
+  );
+  const mode = transportLeg(setup, dir).by;
+  return (Array.isArray(value.options) ? value.options : [])
+    .map((row, i) => transportOption(row, dir + '-' + (i + 1), verified))
+    .filter((row) => row && (mode === 'undecided' || row.by === mode))
+    .slice(0, 5);
+}
 export async function transport(input, dir, ctx) {
   const setup = resolveTransportEndpoints(input);
   const leg = transportLeg(setup, dir);
@@ -118,30 +136,20 @@ export async function transport(input, dir, ctx) {
   ctx.step(
     'ค้นการเดินทาง ' + (dir === 'go' ? (leg.from ?? '') + ' → ' + setup.city : setup.city + ' → ' + (leg.to ?? '')),
   );
-  const live = ['undecided', 'flight'].includes(leg.by) ? await searchFlights(setup, dir, ctx) : [];
-  if (live.length && leg.by === 'flight') return live;
-  let web = [];
-  if (provider) {
-    try {
-      const { value, verified } = await model(
-        'ค้นเที่ยวบิน รถบัส หรือรถไฟตามโหมด ราคา THB ต่อคน เทียบตัวเลือกและเลือกหนึ่งแถว. คืน {options:[{by,carrier,code,from,to,dep,arr,price,bag,src:{url,title,checked},checked,recommended,why}]} ค่า checked เป็น web ถ้ามาจากผลค้นจริง มิฉะนั้น estimate.',
-        {
-          setup,
-          dir,
-          date: dir === 'go' ? setup.startDate : dateAt(setup.startDate, setup.days - 1),
-          country: setup.country,
-          window: dir === 'go' ? '07:00–12:00' : '19:30–23:00',
-        },
-        { ...ctx, operation: 'transport', quick: true, searches: 4 },
-      );
-      web = (Array.isArray(value.options) ? value.options : [])
-        .map((row, i) => transportOption(row, dir + '-' + (i + 1), verified))
-        .filter((row) => row && (leg.by === 'undecided' || row.by === leg.by))
-        .slice(0, 5);
-    } catch (error) {
-      if (!live.length || protectedError(error)) throw error;
-    }
+  ctx.signal?.throwIfAborted();
+  const flights = ['undecided', 'flight'].includes(leg.by) ? searchFlights(setup, dir, ctx) : [];
+  if (leg.by === 'flight') {
+    const offers = await flights;
+    if (offers.length) return offers;
+    ctx.signal?.throwIfAborted();
   }
+  const webSearch = provider ? searchWebTransport(setup, dir, ctx) : [];
+  const [flightResult, webResult] = await Promise.allSettled([flights, webSearch]);
+  ctx.signal?.throwIfAborted();
+  if (flightResult.status === 'rejected') throw flightResult.reason;
+  const live = flightResult.value;
+  if (webResult.status === 'rejected' && (!live.length || protectedError(webResult.reason))) throw webResult.reason;
+  const web = webResult.status === 'fulfilled' ? webResult.value : [];
   const options = live.length ? [...live, ...web.filter((o) => ['train', 'bus'].includes(o.by))].slice(0, 6) : web;
   const recommendation = live[0] ?? options.find((o) => o.recommended) ?? options[0];
   for (const o of options) o.recommended = o === recommendation;

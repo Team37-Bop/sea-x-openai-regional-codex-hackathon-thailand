@@ -48,6 +48,8 @@ The setup form SHALL provide separate visible outbound and return mode groups. E
 
 An explicit flight or undecided leg SHALL try Duffel when configured. An explicit flight with supplier results SHALL return those results immediately. A bus or train SHALL use model-assisted web search. For an undecided leg with supplier results the endpoint SHALL put live flights first, append web bus/train rows, discard web flight duplicates and cap the combined list at six. The first live option remains recommended.
 
+For an undecided direction, the supplier flight lookup and model-assisted web lookup SHALL run concurrently. An explicit flight request SHALL wait for supplier results before spending a model call on the fallback.
+
 #### Scenario: Mixed sources
 
 - **WHEN** an undecided traveler gets five Duffel offers and three web options comprising one flight and two trains

@@ -1,9 +1,9 @@
 import { splitStopNote } from './stop-note.js';
 import { el, action, message, tripRequest, label } from './integration-ui.js';
+import { publicLineConfig } from './stream.js';
 import { renderFlightPanels } from './flight-panel.js';
 import { pendingReservationMessage } from './booking-tasks.js';
 
-let config;
 let current;
 let appliedMessage;
 const sessions = new Map();
@@ -203,11 +203,7 @@ function drawLine(s) {
   );
 }
 async function loadLine(s) {
-  config ??= tripRequest('/api/config').catch((err) => {
-    config = null;
-    throw err;
-  });
-  s.enabled = (await config).enabled;
+  s.enabled = (await publicLineConfig()).enabled;
   s.host.hidden = !s.enabled;
   if (!s.enabled || !s.auth || s.trip) return;
   s.loading ??= access(s).then((trip) => {

@@ -52,3 +52,26 @@ export async function readEvents(response, onEvent) {
     await reader.cancel().catch(() => {});
   }
 }
+
+export async function tripRequest(path, { method = 'GET', data, token } = {}) {
+  const response = await fetch(path, {
+    method,
+    headers: {
+      ...(data != null ? { 'Content-Type': 'application/json' } : {}),
+      ...(token ? { 'x-bop-trip-token': token } : {}),
+    },
+    ...(data == null ? {} : { body: JSON.stringify(data) }),
+  });
+  const result = await response.json();
+  if (!response.ok)
+    throw Object.assign(new Error(result.message || 'Bop ทำรายการไม่สำเร็จ'), { code: result.error });
+  return result;
+}
+let configRequest;
+export function publicLineConfig() {
+  configRequest ??= tripRequest('/api/config').catch(error => {
+    configRequest = undefined;
+    throw error;
+  });
+  return configRequest;
+}

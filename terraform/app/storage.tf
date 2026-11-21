@@ -294,7 +294,7 @@ resource "aws_s3_object" "frontend" {
   source        = "${local.frontend_source_dir}/${each.value}"
   etag          = filemd5("${local.frontend_source_dir}/${each.value}")
   content_type  = lookup(local.content_types, regex("\\.[^.]+$", each.value), "application/octet-stream")
-  cache_control = startswith(each.value, "assets/") ? "public,max-age=31536000,immutable" : "no-cache"
+  cache_control = can(regex("^assets/(maplibre-[0-9a-f]{12}/[^/]+|[^/]+-[0-9a-f]{12}\\.[^/]+)$", each.value)) ? "public,max-age=31536000,immutable" : "no-cache"
 
   server_side_encryption = "AES256"
 }
