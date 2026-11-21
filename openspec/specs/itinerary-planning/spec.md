@@ -182,12 +182,12 @@ When `setup.picks` is present, must-picks SHALL be pinned to the coordinates the
 - **WHEN** the design includes a place the group answered "ไม่เอา"
 - **THEN** the repair report says "ต้องเอา "…" ออก (กลุ่มไม่เอา)"
 
-### Requirement: Offline sample without a model
-When `/api/health` reports no usable model, the UI SHALL offer the built-in Chiang Mai sample plan and its pre-built offline scenarios, and agent endpoints SHALL answer with `no_key` (no provider) or `auth` (subscription CLI logged out).
+### Requirement: Planner availability
+When `/api/health` reports no usable model, the UI SHALL display the service status. Agent endpoints that require a provider SHALL answer with `no_key` (no provider) or `auth` (subscription CLI logged out).
 
 #### Scenario: No provider
 - **WHEN** neither an API key nor the CLI is available
-- **THEN** `/api/plan` ends with `error` code `no_key` and the UI offers the sample plan as an explicit action. The sample is also available on the demo URL.
+- **THEN** `/api/plan` ends with `error` code `no_key`. Opening the planner with a legacy demo query shows trip setup.
 
 ### Requirement: Per-day start and end hotel
 With booked stays, day 1 SHALL start at the arrival point and end at the hotel of night 1, every day i in between SHALL start at the hotel of night i-1 and end at the hotel of night i, and the last day SHALL start at its hotel (check-out) and end at the departure point. The model SHALL be told each day's hotels (`TripSetup.stayPlan`, per-day role and hotel lines in split design, `planBrief` day headers in repair and replan). The server SHALL pin the day's hotel stops to that day's hotels (by name, else the first stop to the start hotel, else the nearest), add a hotel stop when the model leaves out the start or the end, and put a check-out/luggage note on the start hotel stop of a day that changes hotel. Replans SHALL pin inserted or replaced hotel stops to that day's hotels. Auto mode SHALL keep its single recommended hotel.

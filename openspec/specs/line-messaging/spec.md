@@ -72,7 +72,7 @@ The applied replan card SHALL display the selected option's exact group-facing t
 
 #### Scenario: Apply an ordinary change
 - **WHEN** Bop applies a restaurant change for a trip linked to LINE
-- **THEN** the result card displays the message sent to the authenticated trip endpoint and confirms submission only after LINE accepts it. A retry after an uncertain response reuses the same retry key for this message and group.
+- **THEN** the result card displays the message sent to the authenticated trip endpoint and confirms submission only after LINE accepts it. During LINE's 24-hour retry window, a retry after an uncertain response reuses the same key and monthly quota reservation for this message and group. After the window closes the organizer is asked to check the group.
 
 #### Scenario: Review a vote or an unlinked trip
 - **WHEN** a LINE vote selects an option

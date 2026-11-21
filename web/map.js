@@ -137,8 +137,8 @@ function scheduleCamera() {
       left: rect.left - box.left + gutter, right: box.right - rect.right + gutter,
       top: rect.top - box.top + gutter, bottom: box.bottom - rect.bottom + gutter,
     };
-    const { bounds, focus, focusedStop, drafting, center } = cameraTarget;
-    const signature = JSON.stringify([box.width, box.height, padding, bounds, focus, focusedStop, drafting, center]);
+    const { bounds, focus, drafting, center } = cameraTarget;
+    const signature = JSON.stringify([box.width, box.height, padding, cameraTarget]);
     if (signature === previousCamera) return;
     previousCamera = signature;
     if (focus) {
@@ -374,7 +374,8 @@ function paint() {
   renderLegend(features);
   arrangePins();
   const bounds = points.length && points.reduce((box, p) => box.extend(p), new library.LngLatBounds()).toArray();
-  cameraTarget = { bounds, focus: focusPoint, focusedStop, drafting, center };
+  const visibleDays = days.map(day => day && [day.date, day.stops?.map(stop => stop.id)]);
+  cameraTarget = { bounds, focus: focusPoint, focusedStop, drafting, center, visibleDays };
   scheduleCamera();
 }
 export function drawMap(days, routes, open, before, focusedStop, draft) {

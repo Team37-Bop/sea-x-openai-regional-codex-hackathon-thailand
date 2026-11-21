@@ -293,27 +293,58 @@ export function createOperationStore(send = execute) {
         delete rows[pk];
       });
   }
-  async function consumePush() {
+  async function consumePush(retryKey) {
     const configured = Number(process.env.BOP_LINE_MONTHLY_CAP ?? 200);
     const cap = Number.isFinite(configured) ? Math.max(0, Math.floor(configured)) : 200;
     if (!cap) return false;
     const pk = 'LINE_QUOTA#' + new Date().toISOString().slice(0, 7);
-    const ttl = now() + 40 * day;
+    const started = now();
+    const ttl = started + 40 * day;
+    const receipt = retryKey && { ...key('LINE_PUSH#' + retryKey), expires_at: started + day };
     if (!table())
       return local((rows) => {
+        if (receipt) {
+          if (rows[receipt.record_key]?.expires_at > started) return true;
+          for (const [id, row] of Object.entries(rows))
+            if (id.startsWith('LINE_PUSH#') && row.expires_at <= started) delete rows[id];
+        }
         const usage = (rows[pk] ??= { ...key(pk), count: 0, expires_at: ttl });
         if (usage.count >= cap) return false;
         usage.count++;
+        if (receipt) rows[receipt.record_key] = receipt;
         return true;
       });
+    const increment = {
+      Key: key(pk),
+      UpdateExpression: 'SET expires_at = :ttl ADD #c :one',
+      ConditionExpression: 'attribute_not_exists(#c) OR #c < :cap',
+      ExpressionAttributeNames: { '#c': 'count' },
+      ExpressionAttributeValues: { ':cap': cap, ':one': 1, ':ttl': ttl },
+    };
+    if (receipt) {
+      for (let attempt = 0; attempt < 8; attempt++) {
+        try {
+          await transaction([
+            ['Put', { Item: receipt, ConditionExpression: mustBeNew + ' OR expires_at <= :now',
+              ExpressionAttributeValues: { ':now': started } }],
+            ['Update', increment],
+          ]);
+          return true;
+        } catch (err) {
+          const missingReasons = err.name === 'TransactionCanceledException' && !err.CancellationReasons?.length;
+          if (!conflict(err) && !missingReasons) throw err;
+          const capped = missingReasons
+            ? (await get(pk))?.count >= cap
+            : err.CancellationReasons?.[1]?.Code === 'ConditionalCheckFailed';
+          // A concurrent attempt may have won this last slot for the very same message.
+          if ((await get(receipt.record_key))?.expires_at > now()) return true;
+          if (capped) return false;
+        }
+      }
+      throw failure('rate_limit', 'กำลังตรวจสอบโควตา LINE กรุณาลองใหม่');
+    }
     try {
-      await command('Update', {
-        Key: key(pk),
-        UpdateExpression: 'SET expires_at = :ttl ADD #c :one',
-        ConditionExpression: 'attribute_not_exists(#c) OR #c < :cap',
-        ExpressionAttributeNames: { '#c': 'count' },
-        ExpressionAttributeValues: { ':cap': cap, ':one': 1, ':ttl': ttl },
-      });
+      await command('Update', increment);
       return true;
     } catch (err) {
       if (conflict(err)) return false;

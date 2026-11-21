@@ -262,7 +262,7 @@ function menuSection(info, sample) {
   const dishes = dishList(info.dishes);
   const body = dishes || el('p', sample ? 'ยังไม่มีเมนูตัวอย่างของร้านนี้' : 'ยังไม่พบเมนูแนะนำของร้านนี้');
   const menu = section(sample ? 'ไอเดียมื้ออาหารในเดโม' : 'เมนูแนะนำ', body, 'pd-dishes');
-  const source = link('ดูเมนูจากเว็บไซต์ของร้าน', info.menuSource);
+  const source = link('ดูหน้าเมนูที่เผยแพร่', info.menuSource);
   if (source) menu.append(source);
   return menu;
 }
@@ -341,7 +341,7 @@ function header(container, context, visit) {
     ['คนที่อยากไป', visit.wish],
   ]);
   if (fields) plan.append(fields);
-  const note = renderStopNote(context.stop.note, 'pd-note');
+  const note = renderStopNote(context.stop.note, 'pd-note', context.stop.src);
   if (note) plan.append(note);
   if (visit.closure) plan.append(el('p', visit.closure, 'pd-warning'));
   const map = link('เปิดตำแหน่งใน Google Maps ↗', mapLink(context.stop, context.city));

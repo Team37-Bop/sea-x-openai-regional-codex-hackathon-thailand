@@ -10,6 +10,8 @@ import { visitDate, visitAvailability, stopFacts, legFacts } from './itinerary-f
 import { coordinates, drawMap } from './map.js';
 import { fetchStream, readEvents } from './stream.js';
 import {
+  bindTripIntegrations,
+  newTripIntegrationKey,
   renderTripIntegrations,
   renderLineVote,
   renderAppliedLine,
@@ -103,6 +105,7 @@ function updateTripLink() {
   if (state.localTripId) window.history.replaceState(null, '', '#trip=' + state.localTripId);
 }
 function newTrip() {
+  bindTripIntegrations(state);
   closePlaceSheet($('#place-panel'), { restoreFocus: false });
   focusedStop = null;
   presentSummary('');
@@ -411,7 +414,7 @@ function render() {
       content.append(heading, meta);
       const badge = forecast.badge(stop, state.selected, plan);
       if (badge) content.append(badge);
-      const note = renderStopNote(stop.note, 'stop-note');
+      const note = renderStopNote(stop.note, 'stop-note', stop.src);
       if (note) content.append(note);
       const actions = node('div', null, 'stop-actions');
       if (stop.res?.todo || stop.res?.done || state.bookings[stop.id]) {
@@ -1056,6 +1059,7 @@ async function generateTrip(input) {
     state = {
       plan: result.plan, routes: result.routes, setup: result.plan.setup,
       selected: 0, demo: false, bookings: {}, cancellations: [], usage: result.usage,
+      integrationKey: newTripIntegrationKey(),
       localTripId: result.localTripId,
     };
     showPlanning(false);
@@ -1149,7 +1153,7 @@ $('#chat-dismiss').onclick = () => {
   clearChat();
   $('#command').focus();
 };
-function applyOption(option, routes, summary = '', fromLineVote = false) {
+function applyOption(option, routes, { summary = '', fromLineVote = false, selected = state.selected } = {}) {
   closePlaceSheet($('#place-panel'), { restoreFocus: false });
   preview = null;
   history.push(structuredClone(state));
@@ -1179,6 +1183,7 @@ function applyOption(option, routes, summary = '', fromLineVote = false) {
   }
   state = {
     ...state,
+    selected,
     plan: option.plan,
     setup: option.plan.setup,
     ...(option.usage?.provider && option.usage.provider !== 'fake' ? { demo: false, sample: false, usage: option.usage } : {}),
@@ -1190,6 +1195,7 @@ function applyOption(option, routes, summary = '', fromLineVote = false) {
   $('#options').replaceChildren();
   $('#alerts').replaceChildren();
   state.localTripId = option.localTripId || state.localTripId;
+  bindTripIntegrations(state);
   updateTripLink();
   presentSummary(option.line);
   const details = [...new Set([option.title, summary || option.head])].filter(Boolean);
@@ -1243,11 +1249,12 @@ async function adjust(command, day = state.selected) {
     if (activeReplan === ctrl) activeReplan = null;
   }
   for (const option of result.options) option.usage = result.usage;
-  if (Number.isInteger(result.day)) state.selected = result.day;
+  const selected = Number.isInteger(result.day) ? result.day : state.selected;
   if (!result.needs_vote) {
-    applyOption(result.options[0], result.routes, result.summary);
+    applyOption(result.options[0], result.routes, { summary: result.summary, selected });
     return;
   }
+  state.selected = selected;
   pendingVotes = result;
   preview = { plan: result.options[0].plan, routes: result.routes };
   render();
@@ -1270,9 +1277,9 @@ async function adjust(command, day = state.selected) {
   async function chooseLocal(option) {
     if (pendingVotes !== result || choosingLocal) return;
     choosingLocal = true;
-    const chosen = syncChoice ? await syncChoice(option) : option;
+    const confirmed = await syncChoice?.(option);
     if (pendingVotes !== result) return;
-    applyOption(chosen, result.routes);
+    applyOption(confirmed || option, result.routes, { fromLineVote: Boolean(confirmed) });
     setBusy(false);
   }
   for (const option of result.options) {
@@ -1301,7 +1308,7 @@ async function adjust(command, day = state.selected) {
     for (const show of localActions) show();
     local.hidden = false;
   };
-  if (!renderLineVote(area, state, result, (option) => applyOption(option, result.routes, '', true), showLocalVote))
+  if (!renderLineVote(area, state, result, (option) => applyOption(option, result.routes, { fromLineVote: true }), showLocalVote))
     showLocalVote();
   area.append(local);
   local.append(button('คงแผนเดิม', () => {

@@ -85,3 +85,52 @@ test('shortening offers the original itinerary when a removed day holds a confir
   for (const command of ['เพิ่มอีก 5 วัน', 'ลด 3 วัน', 'ปรับเป็น 1.5 วัน'])
     await assert.rejects(replan({ plan, command, demo: true }, ctx()), { code: 'bad_request' });
 });
+
+test('adding the first night schedules and charges the recommended stay, including after a round trip to one day', async () => {
+  const draft = demoSetup('2026-11-20');
+  draft.days = 1;
+  draft.endDate = draft.startDate;
+  const { plan } = await planTrip(draft, ctx(), true);
+  const hotel = { name: 'Hotel A', ll: draft.cityLL, priceNight: 2400 };
+  plan.flags.stay.examples = [hotel];
+  let dayTrip = plan;
+  for (let pass = 0; pass < 2; pass++) {
+    const result = await replan({ plan: dayTrip, command: 'เพิ่มอีกหนึ่งวัน', demo: true }, ctx());
+    const overnight = result.options[0].plan;
+    const stay = overnight.flags.stay.stays[0];
+    assert.equal(stay.name, hotel.name);
+    assert.equal(stay.nights, 1);
+    assert.equal(stay.checkIn, overnight.setup.startDate);
+    assert.equal(stay.checkOut, overnight.setup.endDate);
+    assert.equal(stay.cost, 1200);
+    const checkIn = overnight.days[0].stops.at(-1);
+    assert.equal(checkIn.name, hotel.name);
+    assert.equal(checkIn.cost, 1200);
+    const checkOut = overnight.days[1].stops[0];
+    assert.equal(checkOut.name, hotel.name);
+    assert.equal(checkOut.cost, 0);
+    const total = overnight.days.flatMap((d) => d.stops).reduce((sum, s) => sum + s.cost + (s.leg?.cost || 0), 0);
+    assert.equal(overnight.report.total, total);
+    assert.equal(result.needs_vote, true);
+    const shortened = await replan({ plan: overnight, command: 'ลดเหลือหนึ่งวัน', demo: true }, ctx());
+    dayTrip = shortened.options[0].plan;
+    assert.deepEqual(dayTrip.flags.stay.stays, []);
+    assert.equal(dayTrip.days[0].stops.some((s) => s.name === hotel.name), false);
+  }
+});
+
+test('ending a trip on a former hotel move day replaces its transfer note with final checkout', async () => {
+  const draft = demoSetup('2026-11-20');
+  draft.days = 4;
+  draft.endDate = '2026-11-24';
+  draft.stay = { mode: 'booked', stays: [
+    { name: 'Hotel A', nights: 2, ll: draft.cityLL },
+    { name: 'Hotel B', nights: 1, ll: [18.75, 98.91] },
+  ] };
+  const { plan } = await planTrip(draft, ctx(), true);
+  assert.equal(plan.days[2].stops[0].note, 'เช็กเอาต์ ขนกระเป๋าไปHotel B');
+  const [shorter, keep] = (await replan({ plan, command: 'ลดเหลือ 3 วัน', demo: true }, ctx())).options;
+  assert.deepEqual(shorter.plan.flags.stay.stays.map((s) => s.name), ['Hotel A']);
+  assert.equal(shorter.plan.days[2].stops[0].note, 'เช็กเอาต์และนำสัมภาระ');
+  assert.equal(keep.plan.days[2].stops[0].note, plan.days[2].stops[0].note);
+});
