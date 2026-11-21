@@ -206,6 +206,11 @@ The organizer SHALL be able to inspect a proposed plan alongside the committed i
 - **WHEN** a change needs a decision and the group has no linked remote vote
 - **THEN** the organizer may select a proposed plan, collect local ballots or discard the preview. A linked LINE vote follows its own result and tie-break rules.
 
+#### Scenario: Compare an option with the current itinerary
+
+- **WHEN** the traveler previews A or B
+- **THEN** both the map and the itinerary show the proposed visits for the affected day and identify the active option. The traveler can switch directly to the other option or return to the original itinerary. Previewing or leaving a preview preserves the trip and its reservations until the traveler applies an option or a vote closes.
+
 #### Scenario: Editing an archived plan containing unpositioned stops
 
 - **WHEN** an archived itinerary submits a replan with a stop explicitly marked as a fallback and its coordinates set to null

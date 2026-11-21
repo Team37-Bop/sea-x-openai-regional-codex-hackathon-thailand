@@ -465,7 +465,19 @@ function render() {
     plan.days.length + ' วัน',
     'เพื่อน ' + (state.setup.members?.length ?? 0) + ' คน',
   ].filter(Boolean).join(' · ');
-  if (preview) $('#itinerary').append(node('p', 'กำลังดูตัวอย่างแผน · รอผลโหวต', 'preview-note'));
+  if (pendingVotes) {
+    const notice = node('div', null, 'preview-note');
+    const date = itineraryDate(day, state.selected, plan.setup || state.setup);
+    const title = node('strong', (preview ? 'ตัวอย่างแผน ' + preview.key : 'แผนปัจจุบัน') + ' · ' + date);
+    title.tabIndex = -1;
+    notice.append(title, button('กลับไปดูตัวเลือก', () => {
+      setChatExpanded(true);
+      const control = $('#options [data-preview][aria-pressed="true"]') || $('#options [data-preview]');
+      control?.focus({ preventScroll: true });
+      control?.scrollIntoView({ block: 'nearest' });
+    }));
+    $('#itinerary').append(notice);
+  }
   const stops = plan.days.flatMap((row) => row?.stops ?? []);
   const lodgingPending = !preview && !state.sample && !state.demo && needsLodgingChoice(plan);
   const total = stops.reduce((sum, stop) => sum + Number(stop.cost || 0) + Number(stop.leg?.cost || 0), 0);
@@ -1409,32 +1421,55 @@ async function adjust(command, day = state.selected) {
     applyOption(result.options[0], result.routes, { summary: result.summary, selected });
     return;
   }
-  state.selected = selected;
   pendingVotes = result;
-  preview = { plan: result.options[0].plan, routes: result.routes };
-  render();
   chatState('decision', 'อยากใช้แผนไหน?', result.vote_reason || result.summary);
   const area = $('#options');
   const choices = node('div', null, 'chat-choices');
-  area.replaceChildren(choices);
+  const viewing = node('p', null, 'preview-status');
+  viewing.setAttribute('role', 'status');
+  area.replaceChildren(viewing, choices);
   if (document.activeElement !== $('#command')) $('#chat-state').focus({ preventScroll: true });
-  function showPreview(option) {
-    preview = option ? { plan: option.plan, routes: result.routes } : null;
-    state.selected = result.day ?? state.selected;
-    for (const control of choices.querySelectorAll('[data-preview]')) {
-      control.setAttribute('aria-pressed', String(control.dataset.preview === option?.key));
+  const previewDays = new Map();
+  let originalDay = state.selected, originalAllDays = allDays;
+  const currentPlan = button('ดูแผนปัจจุบัน', () => showPreview(null));
+  function showPreview(option, reveal = true) {
+    if (pendingVotes !== result) return;
+    if (!preview && option) {
+      originalDay = state.selected;
+      originalAllDays = allDays;
     }
-    render();
+    preview = option ? { key: option.key, plan: option.plan, routes: result.routes } : null;
+    state.selected = option ? previewDays.get(option.key) : originalDay;
+    allDays = option ? false : originalAllDays;
+    focusedStop = null;
+    closePlaceSheet($('#place-panel'), { restoreFocus: false });
+    for (const control of choices.querySelectorAll('[data-preview]')) {
+      const key = control.dataset.preview, active = key === option?.key;
+      control.setAttribute('aria-pressed', String(active));
+      control.textContent = active ? 'กลับไปดูแผนปัจจุบัน' : 'ดูตัวอย่างแผน ' + key;
+    }
+    currentPlan.hidden = !option;
+    viewing.textContent = option ? 'กำลังดูตัวอย่างแผน ' + option.key : 'กำลังดูแผนปัจจุบัน';
+    switchView('plan');
+    if (reveal) {
+      const title = $('#itinerary .preview-note strong');
+      title.focus({ preventScroll: true });
+      title.scrollIntoView({ block: 'start' });
+    }
   }
   const ballot = {};
   const localActions = [];
   let syncChoice, choosingLocal = false;
+  function applyDecision(option, fromLineVote) {
+    if (preview) state.selected = originalDay;
+    applyOption(option, result.routes, { selected: previewDays.get(option.key), fromLineVote });
+  }
   async function chooseLocal(option) {
     if (pendingVotes !== result || choosingLocal) return;
     choosingLocal = true;
     const confirmed = await syncChoice?.(option);
     if (pendingVotes !== result) return;
-    applyOption(confirmed || option, result.routes, { fromLineVote: Boolean(confirmed) });
+    applyDecision(confirmed || option, Boolean(confirmed));
     setBusy(false);
   }
   for (const option of result.options) {
@@ -1443,18 +1478,20 @@ async function adjust(command, day = state.selected) {
     row.append(heading);
     if (option.head && option.head !== option.title) row.append(node('p', option.head));
     const actions = node('div', null, 'inline');
-    const compare = button('ดูตัวอย่าง', () => showPreview(option));
+    const compare = button('ดูตัวอย่างแผน ' + option.key, () => showPreview(preview?.key === option.key ? null : option));
     compare.dataset.preview = option.key;
-    compare.setAttribute('aria-pressed', String(option === result.options[0]));
+    compare.setAttribute('aria-controls', 'itinerary map');
     actions.append(compare);
     row.append(actions);
-    renderPlanReview(row, state.plan, option);
+    const { changes } = renderPlanReview(row, state.plan, option);
+    const days = changes.map(change => (change.after || change.before).day - 1).filter(i => i < option.plan.days.length);
+    previewDays.set(option.key, days.includes(selected) ? selected : days[0] ?? Math.min(selected, option.plan.days.length - 1));
     if (option.line) row.append(lineMessageBubble(option.line, 'ข้อความ LINE หากเลือกแผนนี้'));
     renderRepairOutcome(row, option.plan.repairOutcome);
     choices.append(row);
     localActions.push(() => actions.append(button('ใช้แผน ' + option.key, () => chooseLocal(option), 'primary')));
   }
-  area.append(button('ดูแผนปัจจุบัน', () => showPreview(null)));
+  area.append(currentPlan);
   const local = node('div');
   local.hidden = true;
   const showLocalVote = (sync) => {
@@ -1463,10 +1500,17 @@ async function adjust(command, day = state.selected) {
     for (const show of localActions) show();
     local.hidden = false;
   };
-  if (!renderLineVote(area, state, result, (option) => applyOption(option, result.routes, { fromLineVote: true }), showLocalVote))
-    showLocalVote();
+  const linkedVote = renderLineVote(area, state, result, (option) => applyDecision(option, true), showLocalVote);
+  if (!linkedVote) showLocalVote();
+  showPreview(linkedVote ? result.options[0] : null, false);
   area.append(local);
   local.append(button('คงแผนเดิม', () => {
+    if (preview) {
+      state.selected = originalDay;
+      allDays = originalAllDays;
+    }
+    focusedStop = null;
+    closePlaceSheet($('#place-panel'), { restoreFocus: false });
     pendingVotes = preview = null;
     area.replaceChildren();
     render();
