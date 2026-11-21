@@ -47,3 +47,26 @@
   font-weight: 600;
   margin-top: 13px;
 }
+.flight-editor {
+  min-width: 0;
+}
+.flight-editor h4:focus {
+  outline: none;
+}
+.flight-editor form {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+.flight-passenger {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 135px), 1fr));
+  gap: 7px 10px;
+}
+.flight-editor input,
+.flight-editor select {
+  width: 100%;
+}
+.flight-editor > button {
+  margin-top: 12px;
+}

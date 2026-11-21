@@ -412,7 +412,7 @@ export function candidateQuestions(result) {
   }
   return [...grouped.values()];
 }
-export function chooseCandidates({ dialog, content, result, signal }) {
+export function chooseCandidates({ dialog, content, result, signal, partySize }) {
   const questions = candidateQuestions(result),
     picks = { must: [], avoid: [] };
   if (!questions.length) return Promise.resolve(picks);
@@ -427,6 +427,8 @@ export function chooseCandidates({ dialog, content, result, signal }) {
       answers = new Map();
     };
     const finish = (includeCurrent, aborted = false) => {
+      dialog.classList.remove('candidate-survey');
+      dialog.removeAttribute('aria-labelledby');
       dialog.removeEventListener('close', close);
       signal?.removeEventListener('abort', abort);
       if (includeCurrent) collect();
@@ -438,22 +440,49 @@ export function chooseCandidates({ dialog, content, result, signal }) {
       abort = () => finish(false, true);
     const draw = () => {
       const q = questions[index];
-      content.replaceChildren(element('h2', plain(q.title) || 'เลือกสถานที่ที่สนใจ'));
+      const head = element('header', null, 'survey-head');
+      const progress = element('progress');
+      progress.max = questions.length;
+      progress.value = index + 1;
+      progress.setAttribute('aria-label', 'ความคืบหน้าคำถาม');
+      const title = element('h2', plain(q.title) || 'เลือกสถานที่ที่สนใจ');
+      title.id = 'survey-question';
+      title.tabIndex = -1;
+      head.append(
+        element(
+          'p',
+          ['คำถาม ' + (index + 1) + ' จาก ' + questions.length, partySize > 0 && 'กลุ่ม ' + partySize + ' คน']
+            .filter(Boolean)
+            .join(' · '),
+          'muted',
+        ),
+        progress,
+        title,
+      );
+      if (q.sub || q.why) head.append(element('p', plain(q.sub || q.why), 'muted'));
+      const grid = element('div', null, 'candidate-grid');
+      content.replaceChildren(head, grid);
       for (const option of q.options.filter((o) => o?.name)) {
         const row = element('article', null, 'question-option');
-        row.append(element('h3', plain(option.name)));
         const fig = photoFigure(option.photo, option.name);
         if (fig) row.append(fig);
-        if (plain(option.why)) row.append(element('p', plain(option.why)));
-        const labels = (Array.isArray(option.tags) ? option.tags : []).map(plain).filter(Boolean);
-        const price =
-          typeof option.price === 'number'
-            ? '฿' + money.format(option.price)
-            : plain(option.price ?? option.priceHint);
-        if (price) labels.push(price);
-        if (labels.length) row.append(element('p', labels.join(' · '), 'muted'));
+        const body = element('div', null, 'candidate-body');
+        body.append(element('h3', plain(option.name)));
+        if (plain(option.why)) body.append(element('p', plain(option.why)));
+        const tags = (Array.isArray(option.tags) ? option.tags : []).map(plain).filter(Boolean);
+        if (tags.length) {
+          const list = element('ul', null, 'candidate-tags');
+          for (const tag of tags) list.append(element('li', tag));
+          body.append(list);
+        }
         const page = option.src?.checked === 'web' && link(option.src.url, option.src.title || 'แหล่งข้อมูล');
-        if (page) row.append(page);
+        const raw = option.price ?? option.priceHint;
+        const price =
+          typeof raw === 'number' || (typeof raw === 'string' && /^\d+(?:\.\d+)?$/.test(raw))
+            ? '฿' + money.format(Number(raw))
+            : plain(raw);
+        if (price) body.append(element('p', (page ? 'ราคาที่พบ ' : 'ราคาประมาณ ') + price, 'muted'));
+        if (page) body.append(page);
         const toggles = element('div', null, 'inline');
         toggles.setAttribute('role', 'group');
         toggles.setAttribute('aria-label', plain(option.name));
@@ -465,6 +494,7 @@ export function chooseCandidates({ dialog, content, result, signal }) {
           const toggle = button(label, () => {
             if (answers.get(option) === value) answers.delete(option);
             else answers.set(option, value);
+            row.dataset.answer = answers.get(option) || '';
             for (const item of toggles.children)
               item.setAttribute('aria-pressed', String(item.dataset.answer === answers.get(option)));
           });
@@ -472,8 +502,9 @@ export function chooseCandidates({ dialog, content, result, signal }) {
           toggle.setAttribute('aria-pressed', 'false');
           toggles.append(toggle);
         }
-        row.append(toggles);
-        content.append(row);
+        body.append(toggles);
+        row.append(body);
+        grid.append(row);
       }
       const next = (accept) => {
         if (accept) collect();
@@ -483,20 +514,25 @@ export function chooseCandidates({ dialog, content, result, signal }) {
           content.querySelector('h2')?.focus();
         } else finish(false);
       };
-      content.append(
-        button(index === questions.length - 1 ? 'เริ่มวางแผน' : 'ถัดไป', () => next(true), 'primary'),
+      const footer = element('footer', null, 'survey-footer');
+      footer.append(
+        button('ให้ Bop เลือกที่เหลือเอง', () => finish(true)),
         button('ข้ามคำถามนี้', () => next(false)),
-        button('ให้ Bop เลือกที่เหลือเอง', () => finish(false)),
+        button(index === questions.length - 1 ? 'เริ่มวางแผน' : 'ถัดไป', () => next(true), 'primary'),
       );
-      content.querySelector('h2').tabIndex = -1;
+      content.append(footer);
+      dialog.scrollTop = 0;
     };
     if (signal?.aborted) {
       abort();
       return;
     }
+    dialog.classList.add('candidate-survey');
+    dialog.setAttribute('aria-labelledby', 'survey-question');
     draw();
     dialog.addEventListener('close', close, { once: true });
     signal?.addEventListener('abort', abort, { once: true });
     if (!dialog.open) dialog.showModal();
+    content.querySelector('h2').focus({ preventScroll: true });
   });
 }

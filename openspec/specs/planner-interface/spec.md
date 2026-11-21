@@ -104,3 +104,12 @@ Switching between the itinerary and bookings SHALL change the contents of the tr
 
 - **WHEN** a saved trip is opened for editing
 - **THEN** the form restores its members, dates, both travel legs, selected options and booked stays. Closing and reopening the form keeps the current draft for that trip.
+
+### Requirement: Docked place cards and persistent map
+
+The desktop workspace SHALL keep the timeline or booking list at the left and the map in the main area. Selecting a stop SHALL open a third adjacent column for place details and leave the map and itinerary interactive. On a narrow screen the map, expanded place card and selected tab content SHALL stack without a modal overlay.
+
+#### Scenario: Exploring a place while keeping trip context
+
+- **WHEN** the organizer selects an itinerary row or map marker
+- **THEN** the same stop is selected on the map and timeline. The place card opens beside the map or below it at narrow widths. Escape or the close control restores focus to the stop.

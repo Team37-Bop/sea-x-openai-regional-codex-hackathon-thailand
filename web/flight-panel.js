@@ -1,6 +1,10 @@
 import { el, action, label, message } from './integration-ui.js';
 
 const orders = new Map();
+const activePanels = new Map();
+const uncertainOrders = new Set();
+const pendingMutations = new Set();
+let currentTrip;
 const directions = { go: 'ขาไป', back: 'ขากลับ' };
 const displayMoney = (total) =>
   total
@@ -31,21 +35,19 @@ async function flightApi(action, input) {
     });
   return end;
 }
-function dialog(title) {
-  const shell = el('dialog');
+function inlinePage(panel, title, done) {
+  const section = el('section', null, 'flight-editor');
+  const heading = el('h4', title);
+  heading.tabIndex = -1;
   const content = el('div');
-  const close = action('ปิด', () => shell.close());
-  shell.append(el('h2', title), content, close);
-  shell.addEventListener(
-    'close',
-    () => {
-      shell.remove();
-    },
-    { once: true },
-  );
-  document.body.append(shell);
-  shell.showModal();
-  return { shell, content, close };
+  const close = action('ปิดรายละเอียด', () => {
+    done();
+    panel.host.querySelector('button')?.focus();
+  });
+  section.append(heading, content, close);
+  panel.host.replaceChildren(section);
+  heading.focus({ preventScroll: true });
+  return { content, close, active: () => panel.host.contains(section), done, panel };
 }
 function selector(options) {
   const select = el('select');
@@ -63,11 +65,13 @@ function input(type, maxLength) {
   if (maxLength) item.maxLength = maxLength;
   return item;
 }
-function passengerForm(form, passenger, i) {
+function passengerForm(form, passenger, i, member) {
   const group = el('fieldset');
-  group.append(el('legend', 'ผู้โดยสารคนที่ ' + (i + 1)));
+  group.className = 'flight-passenger';
+  group.append(el('legend', 'ผู้โดยสาร ' + (i + 1) + (member?.name ? ' · ' + member.name : '')));
   const fields = {
     title: selector([
+      ['', 'เลือกคำนำหน้า'],
       ['mr', 'Mr'],
       ['mrs', 'Mrs'],
       ['ms', 'Ms'],
@@ -78,12 +82,15 @@ function passengerForm(form, passenger, i) {
     family_name: input('text', 40),
     born_on: input('date'),
     gender: selector([
+      ['', 'เลือกเพศตามเอกสาร'],
       ['m', 'ชาย'],
       ['f', 'หญิง'],
     ]),
     email: input('email', 254),
     phone_number: input('tel', 24),
   };
+  fields.title.required = fields.gender.required = true;
+  fields.phone_number.pattern = '\\+[0-9 \\-]{8,22}';
   fields.given_name.pattern = "[A-Za-z][A-Za-z '\\-]{0,39}";
   fields.family_name.pattern = fields.given_name.pattern;
   fields.phone_number.placeholder = '+66812345678';
@@ -105,7 +112,7 @@ function passengerForm(form, passenger, i) {
 }
 function showReview(page, details, save) {
   const { offer, services, mode, bookable } = details;
-  const { content, shell, close } = page;
+  const { content, close, panel } = page;
   const heading = () =>
     el(
       'p',
@@ -135,8 +142,9 @@ function showReview(page, details, save) {
     );
     return;
   }
+  content.append(el('p', 'กรอกข้อมูลตามเอกสารเดินทางสำหรับผู้โดยสาร ' + offer.passengers.length + ' คน', 'muted'));
   const form = el('form');
-  const gather = offer.passengers.map((p, i) => passengerForm(form, p, i));
+  const gather = offer.passengers.map((p, i) => passengerForm(form, p, i, panel.members[i]));
   const type = selector(
     offer.instantOnly
       ? [['instant', 'จองและชำระทันที']]
@@ -183,13 +191,12 @@ function showReview(page, details, save) {
     e.preventDefault();
     const passengers = gather.map((read) => read());
     const choices = type.value === 'hold' ? [] : selections.filter((x) => Number(x.quantity.value) > 0);
+    const bagTotal = choices.reduce(
+      (sum, item) => sum + item.service.price.amount * Number(item.quantity.value),
+      0,
+    );
     const approvedTotal = {
-      amount: Number(
-        (
-          offer.total.amount +
-          choices.reduce((sum, x) => sum + x.service.price.amount * Number(x.quantity.value), 0)
-        ).toFixed(4),
-      ),
+      amount: Number((Number(offer.total.amount) + bagTotal).toFixed(4)),
       currency: offer.total.currency,
     };
     const operation = {
@@ -205,6 +212,13 @@ function showReview(page, details, save) {
       heading(),
       el('h3', type.value === 'hold' ? 'ยืนยันพักการจอง' : 'ยืนยันจองและชำระเงิน'),
       el('p', passengers.map((p) => p.given_name + ' ' + p.family_name).join(' · ')),
+      el(
+        'p',
+        'สัมภาระเพิ่ม ' +
+          choices.reduce((sum, item) => sum + Number(item.quantity.value), 0) +
+          ' ใบ · ' +
+          displayMoney({ amount: bagTotal, currency: offer.total.currency }),
+      ),
       el('p', 'ยอดยืนยันทั้งกลุ่ม ' + displayMoney(approvedTotal)),
     );
     const back = action('แก้ไขข้อมูล', () => {
@@ -215,15 +229,15 @@ function showReview(page, details, save) {
     const confirm = action(
       mode === 'test' ? 'ยืนยันการจองทดสอบ' : 'ยืนยันทำรายการ',
       async () => {
+        if (pendingMutations.has(panel.id)) return;
+        pendingMutations.add(panel.id);
         back.disabled = close.disabled = true;
-        shell.oncancel = (event) => event.preventDefault();
         let mayEdit = true;
         try {
           const { order } = await flightApi('order', operation);
           form.reset();
           content.replaceChildren();
           save(order);
-          shell.close();
         } catch (err) {
           output.textContent = err.message + (err.total ? ' · ยอดใหม่ ' + displayMoney(err.total) : '');
           if (err.code === 'price_changed' || err.code === 'offer_expired') {
@@ -241,13 +255,15 @@ function showReview(page, details, save) {
               );
           } else if (!['bad_request', 'no_key', 'not_enabled', 'auth'].includes(err.code)) {
             mayEdit = false;
+            uncertainOrders.add(panel.id);
             confirm.hidden = true;
             output.textContent += ' · กรุณาตรวจสอบผลการจองกับผู้ให้บริการก่อนทำรายการใหม่';
           }
         } finally {
+          pendingMutations.delete(panel.id);
           close.disabled = false;
           back.disabled = !mayEdit;
-          shell.oncancel = null;
+          refreshReceipt(panel);
         }
       },
       'primary',
@@ -257,22 +273,22 @@ function showReview(page, details, save) {
     content.append(reviewArea);
   });
 }
-async function openOffer(dir, option, save) {
-  const page = dialog('ตรวจสอบเที่ยวบิน' + directions[dir]);
+async function openOffer(panel, dir, option, save, done) {
+  const page = inlinePage(panel, 'ตรวจสอบเที่ยวบิน' + directions[dir], done);
   page.content.append(el('p', 'กำลังตรวจราคาล่าสุด'));
   try {
     const details = await flightApi('offer', { offerId: option.offerId });
-    if (page.shell.open) showReview(page, details, save);
+    if (page.active()) showReview(page, details, save);
   } catch (err) {
     page.content.replaceChildren(el('p', err.message));
   }
 }
-async function cancelOrder(order, save) {
-  const { shell, content, close } = dialog('ตรวจสอบยอดคืนก่อนยกเลิก');
+async function cancelOrder(panel, order, save, done) {
+  const { active, content, close } = inlinePage(panel, 'ตรวจสอบยอดคืนก่อนยกเลิก', done);
   const output = message(content);
   try {
     const { quote } = await flightApi('cancel', { orderId: order.orderId });
-    if (!shell.open) return;
+    if (!active()) return;
     content.append(
       el(
         'p',
@@ -287,12 +303,13 @@ async function cancelOrder(order, save) {
       ),
     );
     const idempotencyKey = crypto.randomUUID();
-    const keep = action('เก็บการจองไว้', () => shell.close());
+    const keep = action('เก็บการจองไว้', done);
     const confirm = action(
       'ยืนยันยกเลิกการจอง',
       async () => {
+        if (pendingMutations.has(panel.id)) return;
+        pendingMutations.add(panel.id);
         close.disabled = keep.disabled = true;
-        shell.oncancel = (e) => e.preventDefault();
         try {
           const { cancelled } = await flightApi('cancel', {
             orderId: order.orderId,
@@ -300,12 +317,12 @@ async function cancelOrder(order, save) {
             idempotencyKey,
           });
           save({ ...order, cancelled });
-          shell.close();
         } catch (err) {
           output.textContent = err.message;
         } finally {
+          pendingMutations.delete(panel.id);
           close.disabled = keep.disabled = false;
-          shell.oncancel = null;
+          refreshReceipt(panel);
         }
       },
       'primary',
@@ -315,21 +332,56 @@ async function cancelOrder(order, save) {
     output.textContent = err.message;
   }
 }
+function refreshReceipt(panel) {
+  for (const current of activePanels.values()) {
+    if (current.id === panel.id && (current !== panel || current.pendingReceipt)) current.draw();
+  }
+}
 export function renderFlightPanels(container, state, key) {
+  if (currentTrip !== key) {
+    for (const panel of activePanels.values()) panel.host.replaceChildren();
+    activePanels.clear();
+    currentTrip = key;
+  }
   for (const dir of ['go', 'back']) {
     const route = state.plan?.flags?.transport?.[dir];
+    const setupLeg = dir === 'go' ? state.setup?.arrive : state.setup?.depart;
     const option =
-      typeof route?.chosen === 'string' ? route.options?.find((o) => o.id === route.chosen) : route?.chosen;
+      route?.options?.find((row) => row.id === route.chosen) ||
+      (typeof route?.chosen === 'object' && route.chosen) ||
+      route?.chosenOption ||
+      setupLeg?.choice;
     const id = key + '/' + dir;
+    const slot = container.querySelector('[data-booking-flight="' + dir + '"]') || container;
+    if (route?.order && !orders.has(id)) orders.set(id, route.order);
+    const existing = activePanels.get(dir);
+    if (existing && existing.offer === option?.offerId && (option?.offerId || orders.has(id))) {
+      slot.append(existing.host);
+      continue;
+    }
+    existing?.host.replaceChildren();
+    activePanels.delete(dir);
     if (!option?.offerId && !orders.has(id)) continue;
-    const host = el('article', null, 'alert');
-    container.append(host);
+    const host = el('article', null, 'alert flight-booking');
+    const panel = { host, id, offer: option?.offerId, members: state.setup?.members || [] };
+    activePanels.set(dir, panel);
+    slot.append(host);
     function save(order) {
       orders.set(id, order);
-      draw();
+      uncertainOrders.delete(id);
+      if (activePanels.get(dir) === panel) draw();
     }
     function draw() {
-      host.replaceChildren(el('h3', 'จองเที่ยวบิน' + directions[dir]));
+      host.replaceChildren(el('h4', 'จองเที่ยวบิน' + directions[dir]));
+      panel.pendingReceipt = pendingMutations.has(id);
+      if (panel.pendingReceipt) {
+        host.append(el('p', 'กำลังรอผลการยืนยันจากระบบจอง'));
+        return;
+      }
+      if (uncertainOrders.has(id)) {
+        host.append(el('p', 'ยังยืนยันผลการจองครั้งก่อนไม่ได้ กรุณาตรวจสอบกับผู้ให้บริการก่อนทำรายการใหม่'));
+        return;
+      }
       const order = orders.get(id);
       if (order) {
         host.append(
@@ -346,17 +398,19 @@ export function renderFlightPanels(container, state, key) {
               .join(' · '),
           ),
         );
-        if (!order.cancelled) host.append(action('ตรวจสอบการยกเลิก', () => cancelOrder(order, save)));
+        if (!order.cancelled)
+          host.append(action('ตรวจสอบการยกเลิก', () => cancelOrder(panel, order, save, draw)));
       }
       if (option?.offerId && (!order || order.cancelled))
         host.append(
           action(
             'ตรวจราคาและสัมภาระ ' + [option.carrier, option.code].filter(Boolean).join(' '),
-            () => openOffer(dir, option, save),
+            () => openOffer(panel, dir, option, save, draw),
             'primary',
           ),
         );
     }
+    panel.draw = draw;
     draw();
   }
 }

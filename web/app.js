@@ -1,6 +1,6 @@
 import { renderBookingTasks, reservationStatus, setReservationDone } from './booking-tasks.js';
-import { renderPlanReview } from './plan-review.js';
-import { openPlaceSheet } from './place-details.js';
+import { describePlanChange, renderPlanReview } from './plan-review.js';
+import { openPlaceSheet, closePlaceSheet } from './place-details.js';
 import { attachLocationSuggestions } from './location-suggest.js';
 import { bindWorkspace, renderPeople } from './workspace-controls.js';
 import { installSetupExtras, chooseCandidates } from './setup-extras.js';
@@ -97,6 +97,7 @@ function updateTripLink() {
   if (state.localTripId) window.history.replaceState(null, '', '#trip=' + state.localTripId);
 }
 function newTrip() {
+  closePlaceSheet($('#place-panel'), { restoreFocus: false });
   focusedStop = null;
   presentSummary('');
   forecast.reset();
@@ -253,6 +254,7 @@ function render() {
     const tab = button('วันที่ ' + (i + 1), () => {
       focusedStop = null;
       state.selected = i;
+      closePlaceSheet($('#place-panel'), { restoreFocus: false });
       allDays = false;
       render();
     });
@@ -278,6 +280,7 @@ function render() {
       ),
     );
     $('#itinerary').append(title);
+    const changes = new Map((preview ? describePlanChange(state.plan, plan).changes : []).map(change => [change.id, change]));
     for (const stop of day.stops) {
       if (stop.leg)
         $('#itinerary').append(
@@ -310,28 +313,36 @@ function render() {
       const time = node('time', stop.start);
       time.append(node('small', stop.end));
       const content = node('div');
-      content.append(
-        node('h3', stop.name),
-        node('p', (kind[stop.kind] || 'กิจกรรม') + ' · ฿' + cash.format(stop.cost || 0) + ' / คน'),
-      );
+      const meta = node('div', null, 'stop-meta');
+      const chip = (text, style = '') => meta.append(node('span', text, 'stop-chip ' + style));
+      const label = kind[stop.kind] || stop.kind || 'กิจกรรม';
+      chip(label);
+      if (Number.isFinite(stop.cost)) chip('฿' + cash.format(stop.cost) + ' / คน');
+      const opening = Array.isArray(stop.open) ? stop.open.join('–') : stop.open;
+      if (typeof opening === 'string' && opening.trim()) chip('เปิด ' + opening);
+      const closure = (stop.closures || []).find(c => (c?.date ?? c) === day.date);
+      if (closure) chip('ปิดวันที่เลือก' + (closure.why ? ' · ' + closure.why : ''), 'warning');
+      const interested = state.setup.members?.find(person => stop.star && person.id === stop.star);
+      if (interested) chip(interested.name + ' อยากไป', 'wish');
+      if (stop.veg) chip('มีตัวเลือกมังสวิรัติ', 'diet');
+      const change = changes.get(stop.id);
+      if (change?.kinds.includes('retimed')) time.append(node('del', change.before.start));
+      if (change) content.append(node('small', change.kinds.includes('added') ? 'เพิ่มในแผน' : 'ปรับจากแผนเดิม', 'stop-change'));
+      content.append(node('h3', stop.name), meta);
       const badge = forecast.badge(stop, state.selected, plan);
       if (badge) content.append(badge);
-      const closure = (stop.closures || []).find((c) => (c?.date ?? c) === day.date);
-      if (closure)
-        content.append(node('p', 'ปิดวันที่เลือก' + (closure.why ? ' · ' + closure.why : ''), 'feedback'));
-      content.append(button('รายละเอียด', () => place(stop)));
+      const actions = node('div', null, 'stop-actions');
+      actions.append(button('รายละเอียด', () => place(stop)));
       if (stop.res?.todo || stop.res?.done || state.bookings[stop.id]) {
         const booked = reservationStatus(state, stop);
-        content.append(
-          button(
-            booked === 'move' ? 'ต้องโทรเลื่อน' : booked === 'done' ? 'จองแล้ว ✓' : 'ทำเครื่องหมายว่าจองแล้ว',
-            () => {
-              setReservationDone(state, stop, booked !== 'done');
-              render();
-            },
-          ),
-        );
+        const mark = button(booked === 'move' ? 'ต้องโทรเลื่อน' : booked === 'done' ? 'จองแล้ว ✓' : 'ทำเครื่องหมายว่าจองแล้ว', () => {
+          setReservationDone(state, stop, booked !== 'done');
+          render();
+        });
+        mark.dataset.status = booked;
+        actions.append(mark);
       }
+      content.append(actions);
       row.append(time, content);
       $('#itinerary').append(row);
     }
@@ -381,6 +392,7 @@ window.addEventListener(
   { once: true },
 );
 function switchView(next) {
+  if (view !== next) closePlaceSheet($('#place-panel'), { restoreFocus: false });
   view = next;
   render();
 }
@@ -427,8 +439,8 @@ function place(stop) {
   render();
   document.querySelector('.stop[data-focused="true"]')?.scrollIntoView({ block: 'nearest' });
   return openPlaceSheet({
-    dialog: detail,
-    content: detailContent,
+    panel: $('#place-panel'),
+    content: $('#place-panel-content'),
     stop,
     city: plan.city,
     day: plan.days[state.selected],
@@ -707,7 +719,7 @@ function setupInput(found, transportOnly = false) {
       maxWalkKm: read('walk'),
       budget: read('budget'),
       wants: read('wants')
-        .split(',')
+        .split(/[,，]/)
         .map((item) => item.trim())
         .filter(Boolean),
       note: read('note'),
@@ -765,6 +777,7 @@ setupForm.addEventListener('submit', (event) => {
           dialog: detail,
           content: detailContent,
           result: found,
+          partySize: input.members.length,
           signal: activePlanning.signal,
         });
         activePlanning.signal.throwIfAborted();
@@ -825,6 +838,7 @@ $('#cancel-plan').onclick = () => {
   if (detail.open) detail.close();
 };
 function applyOption(option, routes) {
+  closePlaceSheet($('#place-panel'), { restoreFocus: false });
   preview = null;
   history.push(structuredClone(state));
   const nextStops = option.plan.days.flatMap((day) => day.stops);
@@ -984,6 +998,7 @@ $('#replan').addEventListener('submit', (event) => {
 });
 $('#undo').addEventListener('click', () => {
   if (!history.length) return;
+  closePlaceSheet($('#place-panel'), { restoreFocus: false });
   state = history.pop();
   updateTripLink();
   preview = null;

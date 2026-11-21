@@ -1,0 +1,140 @@
+#detail.candidate-survey {
+  width: min(940px, calc(100% - 48px));
+  max-height: 88dvh;
+  padding: 0;
+  margin: auto;
+  background: var(--canvas);
+}
+.candidate-survey #detail-close {
+  display: none;
+}
+.survey-head {
+  padding: 20px 22px 14px;
+}
+.survey-head progress {
+  display: block;
+  width: 100%;
+  height: 6px;
+  margin: 6px 0 12px;
+  border: none;
+  border-radius: 6px;
+  overflow: hidden;
+  accent-color: var(--accent);
+}
+.survey-head progress::-webkit-progress-bar {
+  background: var(--line);
+}
+.survey-head progress::-webkit-progress-value {
+  background: var(--accent);
+}
+.survey-head h2:focus {
+  outline: none;
+}
+.candidate-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr));
+  align-items: stretch;
+  gap: 12px;
+  padding: 0 22px 14px;
+}
+.candidate-grid .question-option {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+.candidate-grid .place-photo {
+  margin: 0;
+}
+.candidate-grid .place-photo img {
+  width: 100%;
+  height: 145px;
+  object-fit: cover;
+  border-radius: 0;
+}
+.candidate-grid .place-photo figcaption {
+  padding: 2px 9px;
+}
+.candidate-grid .candidate-body {
+  flex: 1;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.candidate-body h3,
+#detail-content .candidate-body p {
+  margin: 0;
+}
+.candidate-body > p,
+.candidate-body > a {
+  font-size: 0.84rem;
+}
+.candidate-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.candidate-tags li {
+  background: var(--canvas);
+  color: var(--muted);
+  padding: 2px 6px;
+  border-radius: 5px;
+  font-size: 0.74rem;
+}
+#detail-content .candidate-body .inline {
+  margin-top: auto;
+  padding-top: 5px;
+}
+.candidate-body .inline button {
+  padding: 4px 6px;
+  flex: 1;
+  font-size: 0.81rem;
+}
+.candidate-grid .question-option[data-answer='yes'] {
+  border-color: var(--accent);
+}
+.candidate-grid .question-option[data-answer='no'] {
+  border-color: var(--red);
+}
+.candidate-body button[data-answer='no'][aria-pressed='true'] {
+  background: #fae8e5;
+  border-color: var(--red);
+  color: var(--red);
+}
+.survey-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  position: sticky;
+  bottom: 0;
+  padding: 12px 22px;
+  border-top: 1px solid var(--line);
+  background: var(--paper);
+  z-index: 1;
+}
+.survey-footer button:first-child {
+  margin-right: auto;
+}
+@media (max-width: 680px) {
+  #detail.candidate-survey {
+    width: 100%;
+    max-height: 92dvh;
+    margin: auto 0 0;
+    border-radius: var(--radius) var(--radius) 0 0;
+  }
+  .survey-head {
+    padding: 15px 15px 10px;
+  }
+  .candidate-grid {
+    padding: 0 15px 12px;
+  }
+  .survey-footer {
+    padding: 9px 15px max(9px, env(safe-area-inset-bottom));
+  }
+}
