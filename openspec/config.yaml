@@ -1,0 +1,4 @@
+schema: spec-driven
+context: |
+  Bop is a Thai group-trip planner. This repository implements the
+  competition entry from the requirements in openspec/specs.
