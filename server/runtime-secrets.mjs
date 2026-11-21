@@ -7,6 +7,15 @@ const ALLOWED_KEYS = new Set([
   'OPENAI_APIKEY',
   'OPENAI_API_KEY',
   'OPEN_METEO_API_KEY',
+  'DUFFEL_ACCESS_TOKEN',
+  'LINE_CHANNEL_SECRET',
+  'LINE_CHANNEL_ACCESS_TOKEN',
+  'LINE_LOGIN_CHANNEL_ID',
+  'LINE_LIFF_ID',
+  'LINE_BOT_BASIC_ID',
+  'LIFF_ID',
+  'LINE_CHANNEL_ID',
+  'LINE_ACCESS_TOKEN',
 ]);
 
 export function isMissingCurrentVersion(error) {

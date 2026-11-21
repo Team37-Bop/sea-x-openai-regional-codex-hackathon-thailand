@@ -1,385 +1,804 @@
-import { applyEdits, bad, checks, cities, clock, coordinates, dateAt, minutes, normalize, source, total, transportOption, validTime } from './domain.mjs';
-import { findCity, findPlace, route } from './geo.mjs';
-import { wikipediaPhoto } from './photos.mjs';
+import { stopKinds, stopKind } from './stop-kinds.mjs';
+import {
+  bad,
+  checks,
+  cities,
+  clock,
+  coordinates,
+  dateAt,
+  explain,
+  minutes,
+  normalize,
+  source,
+  str,
+  total,
+  transportOption,
+  validTime,
+} from './domain.mjs';
+import { applyEdits, fields, uniqueId } from './edits.mjs';
+import { findCity, legKey, route } from './geo.mjs';
 import { model, provider } from './model.mjs';
 import { indoor, sampleDay } from './sample.mjs';
+import { bookedStays, concurrent, dayHotels, isHotel, isTransit, schedule } from './schedule.mjs';
+import { matchesPick, resolvePicks } from './candidates.mjs';
+import { searchFlights } from './flights.mjs';
+export { candidates } from './candidates.mjs';
 
-const shape = 'คืน {days:[{title,stops:[{id,name,kind,query,ll:[lat,lon],start,end,cost,mode,diet,src:{url,title}}]}],summary,stay:{area,why,examples:[{name,ll,priceNight,src}]}} เวลา HH:MM, ค่าใช้จ่ายบาทต่อคน, diet ระบุข้อความข้อจำกัดของสมาชิกที่รองรับตามจริง, mode เป็น walk/red/van/own/car';
-const protectedError = error => ['auth', 'rate_limit', 'no_key'].includes(error.code);
-const budget = (value, fallback, max) => Math.min(max, Math.max(1, Number(value) || fallback));
-const cleanName = value => typeof value === 'string' ? value.trim().slice(0, 130) : '';
-const score = rows => rows.reduce((sum, item) => sum + (item.pass ? 10 : -item.problems.length), 0);
-const isMode = value => ['walk', 'red', 'van', 'own', 'car'].includes(value);
-const remembered = new Map();
-
-function stayStops(setup, index, stays) {
-  const hotelAt = night => stays.find(stay => stay.first <= night && night < stay.first + stay.nights);
-  const start = index > 0 ? hotelAt(index - 1) : null;
-  const end = index < setup.days - 1 ? hotelAt(index) : null;
-  return [start, end].map((hotel, i) => hotel && {
-    id: 'd' + (index + 1) + (i ? '_stay_end' : '_stay_start'), name: hotel.name, ll: hotel.ll,
-    kind: 'hotel', mode: 'car', start: i ? '18:30' : '09:00', end: i ? '19:00' : '09:15',
-    cost: hotel.first === index && i ? hotel.cost ?? 0 : 0, pinned: true,
-  });
-}
-
-async function schedule(raw, index, setup, ctx, stays, verified, { keep = false, offline = false } = {}) {
-  const date = dateAt(setup.startDate, index);
-  const rows = Array.isArray(raw?.stops) ? raw.stops.slice(0, 18) : [];
-  const [morning, evening] = keep ? [null, null] : stayStops(setup, index, stays);
-  const candidates = [...(morning ? [morning] : []), ...rows, ...(evening ? [evening] : [])];
-  const day = { date, title: cleanName(raw?.title) || 'วันที่ ' + (index + 1), stops: [] };
-  const routes = {};
-  const ids = new Set();
-  for (const [i, row] of candidates.entries()) {
-    const name = cleanName(row?.name);
-    if (!name) continue;
-    const picked = setup.picks.must?.find(pick => pick.name === name && coordinates(pick.ll));
-    const hint = coordinates(row.ll) ? row.ll : null;
-    const previous = day.stops.at(-1);
-    const ll = picked?.ll || (row.pinned || (keep && hint) || offline ? hint : await findPlace(
-      (cleanName(row.query) || name) + ' ' + setup.city, hint ?? setup.cityLL, hint ? 3 : 40, ctx.signal,
-    ));
-    const idPrefix = 'd' + (index + 1) + '_';
-    let id = typeof row.id === 'string' && row.id.startsWith(idPrefix) ? row.id.slice(0, 70) : idPrefix + (i + 1);
-    if (ids.has(id)) id = idPrefix + 'stop_' + i;
-    ids.add(id);
-    const point = ll || hint || previous?.ll || setup.cityLL;
-    const mode = isMode(row.mode) ? row.mode : isMode(row.leg?.mode) ? row.leg.mode : 'car';
-    const stop = {
-      id, name, ll: point, kind: cleanName(row.kind) || 'sight', outdoor: row.outdoor === true,
-      place: { source: picked || row.pinned ? 'pick' : keep ? row.place?.source ?? 'model' : ll && !offline ? 'geocoded' : 'model' },
-      cost: Math.min(100_000, Math.max(0, Number(row.cost) || 0)), diet: Array.isArray(row.diet) ? row.diet.slice(0, 20) : [],
-      hours: row.hours, closedDays: Array.isArray(row.closedDays) ? row.closedDays : [],
-      closures: Array.isArray(row.closures) ? row.closures : [], src: keep ? row.src : source(row.src, verified), res: row.res,
-    };
-    const planned = validTime(row.start) ? minutes(row.start) : 600 + i * 90;
-    const stay = validTime(row.end) ? Math.max(0, minutes(row.end) - planned) : 60;
-    let start = planned;
-    if (!index && !i && setup.arrive.time) start = minutes(setup.arrive.time);
-    const isDeparture = index === setup.days - 1 && i === candidates.length - 1 && setup.depart.time
-      && ['flight', 'train', 'bus'].includes(setup.depart.by) && !keep;
-    if (isDeparture && row.kind === 'terminal') start = minutes(setup.depart.time) - (setup.depart.by === 'flight' ? 90 : 40);
-    if (previous) {
-      const road = await route(previous.ll, point, mode, ctx.signal, offline);
-      const key = previous.id + ':' + id;
-      routes[key] = road.geometry;
-      const travellers = Math.min(5, setup.members.length);
-      const cost = mode === 'walk' ? 0 : mode === 'own' ? (4 * road.km) / travellers
-        : mode === 'red' ? Math.max(20, Math.ceil(road.km * 4)) : Math.ceil((35 + road.km * 9) / travellers);
-      stop.leg = { key, mode, cost, km: road.km, min: road.min, real: road.real, geometry: road.geometry, src: source(null, verified) };
-      start = Math.max(start, minutes(previous.end) + road.min);
-    }
-    stop.start = clock(start);
-    stop.end = clock(start + stay);
-    day.stops.push(stop);
-  }
-  return { day, routes };
-}
-
+const protectedError = (e) => ['auth', 'rate_limit', 'no_key'].includes(e.code) || e.name === 'AbortError';
+const conf = (name, fallback, min, max) => {
+  const raw = process.env[name],
+    value = raw?.trim() ? Number(raw) : fallback;
+  return Math.min(max, Math.max(min, Number.isFinite(value) ? Math.floor(value) : fallback));
+};
+const stopInstructions = [
+  'kind ใช้รหัสภาษาอังกฤษ ' + stopKinds.join('/') + ' เท่านั้น ร้านอาหาร ร้านกาแฟ และคาเฟ่ใช้ food.',
+  'walk คือระยะเดินภายในสถานที่เป็นกิโลเมตรต่อคน เช่น 250 เมตร = 0.25 กม. คาเฟ่ที่นั่งอย่างเดียวใช้ 0; เส้นทางเดินป่าจริง 10 กม. ใช้ 10.',
+  'ห้ามใส่นาทีหรือระยะเดินระหว่างจุดใน walk. legMin (leg.min ในแผนที่จัดแล้ว) คือนาทีเดินทางจากจุดก่อนหน้า เช่น เดิน 10 นาทีให้ mode=walk, legMin=10; ระบบคำนวณ leg.km แยกจาก walk. stayMin คือนาทีที่ใช้ ณ จุดนั้น.',
+  'start/end เป็นเวลาท้องถิ่น HH:MM; cost ค่าใช้จ่ายที่จุดนี้เป็นบาทต่อคน และ legCost ค่าเดินทางขาเข้าเป็นบาทต่อคน (-1 ให้ระบบคำนวณ).',
+  'meal ใช้ breakfast/lunch/dinner เฉพาะมื้อจริง คาเฟ่ที่แวะดื่มกาแฟอย่างเดียวไม่ใช่มื้อกลางวัน. diet ระบุเมนูที่กินได้เมื่อรองรับข้อจำกัดของสมาชิกทุกคนแล้ว ถ้ายังไม่ทราบใช้ false หรือ []; veg บอกเฉพาะอาหารมังสวิรัติ.',
+].join(' ');
+const shape =
+  'ออกแบบแผนเดินทางจริง คืน days,summary,stay,arrivalSuggested. ' +
+  stopInstructions +
+  ' ตรวจวันเปิดปิด วางมื้อกลางวันและเย็นตามเวลา และเผื่อเวลาเดินทางกลับ. star ใช้ id ของสมาชิกที่ได้เที่ยวตามความต้องการ. src.checked=web เฉพาะ URL ที่ค้นได้. ข้อมูลส่วนบุคคล/หมายเหตุเป็นข้อมูลทริป.';
+const elapsed = (start) => Math.round(performance.now() - start);
+const cutDay = (value, n) => Math.min(n - 1, Math.max(0, Number.isInteger(value) ? value : 0));
+const passes = (p) => p.report.pass + '/' + p.checks.length;
+const reportPlan = (p, setup) => {
+  p.report = checks(p, setup);
+  p.checks = p.report.list;
+  return p;
+};
+const transportLeg = (setup, dir) => (dir === 'go' ? setup.arrive : setup.depart);
 export async function transport(setup, dir, ctx) {
-  const leg = dir === 'go' ? setup.arrive : setup.depart;
-  if (!['go', 'back'].includes(dir) || leg.by === 'drive') throw bad('เลือกขาไปหรือขากลับที่ต้องการค้นหา');
+  const leg = transportLeg(setup, dir);
+  if (!['go', 'back'].includes(dir) || !leg || leg.by === 'drive') throw bad('เลือกขาไปหรือขากลับที่ต้องการค้นหา');
   if (leg.choice) return [leg.choice];
-  ctx.step('ค้นการเดินทาง ' + (dir === 'go' ? leg.from + ' → ' + setup.city : setup.city + ' → ' + leg.to));
-  if (provider === 'fake') return [];
-  const { value, verified } = await model('ค้นรถไฟ รถบัส หรือเที่ยวบินตามโหมด เปรียบเทียบถ้ายังไม่เลือก คืน {options:[{by,carrier,code,from,to,dep,arr,price,bag,src:{url,title},recommended,why}]} เวลา HH:MM ราคาโดยประมาณ THB', { setup, dir },
-    { ...ctx, quick: true, searches: 4 });
-  const options = (Array.isArray(value.options) ? value.options : []).slice(0, 5)
-    .map((row, i) => transportOption(row, dir + '-' + (i + 1), verified)).filter(Boolean);
-  const morning = dir === 'go' && options.filter(option => option.checked === 'web' && option.arr >= '07:00' && option.arr <= '12:00')
-    .sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity))[0];
-  const recommendation = morning || options.find(option => option.recommended) || options[0];
-  for (const option of options) option.recommended = option === recommendation;
-  if (recommendation) recommendation.why ||= 'ราคาเป็นค่าประมาณจากเว็บ';
-  ctx.step(recommendation ? 'พบ ' + options.length + ' ตัวเลือก · แนะนำ ' + recommendation.carrier : 'ไม่พบตัวเลือกที่เชื่อถือได้');
+  ctx.step(
+    'ค้นการเดินทาง ' + (dir === 'go' ? (leg.from ?? '') + ' → ' + setup.city : setup.city + ' → ' + (leg.to ?? '')),
+  );
+  const live = ['undecided', 'flight'].includes(leg.by) ? await searchFlights(setup, dir, ctx) : [];
+  if (live.length && leg.by === 'flight') return live;
+  let web = [];
+  if (provider) {
+    try {
+      const { value, verified } = await model(
+        'ค้นเที่ยวบิน รถบัส หรือรถไฟตามโหมด ราคา THB ต่อคน เทียบตัวเลือกและเลือกหนึ่งแถว. คืน {options:[{by,carrier,code,from,to,dep,arr,price,bag,src:{url,title,checked},checked,recommended,why}]} ค่า checked เป็น web ถ้ามาจากผลค้นจริง มิฉะนั้น estimate.',
+        {
+          setup,
+          dir,
+          date: dir === 'go' ? setup.startDate : dateAt(setup.startDate, setup.days - 1),
+          country: setup.country,
+          window: dir === 'go' ? '07:00–12:00' : '19:30–23:00',
+        },
+        { ...ctx, operation: 'transport', quick: true, searches: 4 },
+      );
+      web = (Array.isArray(value.options) ? value.options : [])
+        .map((row, i) => transportOption(row, dir + '-' + (i + 1), verified))
+        .filter(Boolean)
+        .slice(0, 5);
+    } catch (error) {
+      if (!live.length || protectedError(error)) throw error;
+    }
+  }
+  const options = live.length ? [...live, ...web.filter((o) => ['train', 'bus'].includes(o.by))].slice(0, 6) : web;
+  const recommendation = live[0] ?? options.find((o) => o.recommended) ?? options[0];
+  for (const o of options) o.recommended = o === recommendation;
+  if (recommendation) recommendation.why ||= 'เหมาะกับเวลาเดินทางของกลุ่ม';
+  ctx.step(
+    recommendation
+      ? 'พบ ' +
+          options.length +
+          ' ตัวเลือก · แนะนำ ' +
+          recommendation.carrier +
+          ' ' +
+          recommendation.dep +
+          '–' +
+          recommendation.arr
+      : 'ไม่พบตัวเลือกที่เชื่อถือได้',
+  );
   return options;
 }
-
-export async function candidates(setup, ctx) {
-  const cityLL = setup.cityLL ?? (await findCity(setup.city, ctx.signal))?.ll;
-  const { value, verified } = provider === 'fake'
-    ? { value: { questions: [{ kind: 'sight', title: 'กลุ่มอยากไปที่ไหน', options: sampleDay(setup.city, 0).stops }] }, verified: new Set() }
-    : await model('คืน {questions:[{kind: food|sight|stay,title,options:[{name,why,query,tags,price,ll,src:{url,title}}]}]} ระบุร้านที่เหมาะกับข้อจำกัดอาหารแต่ละคน', setup,
-      { ...ctx, quick: true, searches: 5 });
-  const run = crypto.randomUUID().slice(0, 8);
-  const questions = await Promise.all((Array.isArray(value.questions) ? value.questions : []).slice(0, 3).map(async (question, i) => ({
-    id: 'q' + i, kind: question.kind, title: cleanName(question.title), multi: true,
-    options: await Promise.all((Array.isArray(question.options) ? question.options : []).slice(0, 6).map(async (item, j) => {
-      const id = 'c' + run + '_' + i + '_' + j;
-      const name = cleanName(item.name);
-      const ll = cityLL && provider !== 'fake'
-        ? await findPlace((cleanName(item.query) || name) + ' ' + setup.city, coordinates(item.ll) ? item.ll : cityLL, coordinates(item.ll) ? 3 : 40, ctx.signal)
-        : null;
-      const src = source(item.src, verified);
-      const point = ll || (coordinates(item.ll) ? item.ll : undefined);
-      const photo = provider === 'fake' ? null : await wikipediaPhoto(name, point, setup.country === 'TH' ? 'th' : 'en', ctx.signal);
-      const option = { id, name, why: cleanName(item.why), tags: Array.isArray(item.tags) ? item.tags.slice(0, 4) : [],
-        price: typeof item.price === 'number' ? item.price : undefined, ll: point, photo: photo ?? undefined,
-        src: src.checked === 'web' ? src : undefined };
-      if (remembered.size >= 400) remembered.delete(remembered.keys().next().value);
-      remembered.set(id, option);
-      return option;
-    })),
-  })));
-  ctx.step('ได้ ' + questions.length + ' คำถาม · ' + questions.reduce((sum, question) => sum + question.options.length, 0) + ' ตัวเลือก');
-  return { questions };
+function choose(options, dir) {
+  const selected = options.find((o) => o.recommended) ?? options[0];
+  if (!selected) return null;
+  const fit = (o) => (dir === 'go' ? o.arr >= '07:00' && o.arr <= '12:00' : o.dep >= '19:30' && o.dep <= '23:00');
+  if (fit(selected)) return selected;
+  const rank = (o) => ({ live: 0, web: 1, estimate: 2 })[o.checked] ?? 2;
+  return (
+    options.filter(fit).sort((a, b) => rank(a) - rank(b) || (a.price ?? Infinity) - (b.price ?? Infinity))[0] ??
+    selected
+  );
 }
-async function bookedStays(setup, ctx, offline) {
-  if (setup.stay.mode !== 'booked') return [];
-  let first = 0;
-  const rows = setup.stay.stays.map(stay => {
-    const row = { ...stay, first, checkIn: dateAt(setup.startDate, first), checkOut: dateAt(setup.startDate, first + stay.nights) };
-    first += stay.nights;
-    return row;
-  });
-  return Promise.all(rows.map(async stay => {
-    let ll;
-    if (!offline) {
-      for (const name of new Set([stay.name, stay.name.split(' ').slice(0, 3).join(' '), stay.name.split(' ').slice(0, 2).join(' ')])) {
-        ll = await findPlace(name + ' ' + setup.city, setup.cityLL, 40, ctx.signal)
-          ?? await findPlace(name, setup.cityLL, 200, ctx.signal);
-        if (ll) break;
-      }
-    }
-    ctx.step('ที่พักที่จองไว้: ' + stay.name + ' · ' + (ll ? 'พบบนแผนที่' : 'ใช้พิกัดประมาณ'));
-    return { ...stay, ll: ll ?? setup.cityLL };
-  }));
+function setTransport(setup, flags, dir, options, chosen) {
+  const leg = transportLeg(setup, dir);
+  if (leg.by === 'undecided') flags.arrivalSuggested ??= { by: chosen.by, why: chosen.why || 'เหมาะกับเวลาทริป' };
+  leg.by = chosen.by;
+  leg.time = dir === 'go' ? chosen.arr : chosen.dep;
+  flags.transport[dir] = { chosen: chosen.id, chosenOption: chosen, options };
 }
 function stayExamples(stay, verified) {
-  return (Array.isArray(stay?.examples) ? stay.examples : []).slice(0, 3)
-    .filter(example => cleanName(example.name)).map(example => ({
-      name: cleanName(example.name), ll: coordinates(example.ll) ? example.ll : undefined,
-      priceNight: Math.max(0, Number(example.priceNight) || 0), ...source(example.src, verified),
+  return (Array.isArray(stay?.examples) ? stay.examples : [])
+    .filter((e) => str(e?.name))
+    .slice(0, 3)
+    .map((e) => ({
+      name: str(e.name),
+      ll: coordinates(e.ll) ? e.ll : undefined,
+      priceNight: Math.max(0, Number(e.priceNight) || 0),
+      ...source(e.src ?? e, (e.src?.checked ?? e.checked) === 'web' ? verified : []),
     }));
 }
-export async function planTrip(setup, ctx, demo = false) {
-  const started = performance.now();
+function makeDayHotels(setup, stays) {
+  return Array.from({ length: setup.days }, (_, i) => {
+    const { start, end } = dayHotels(stays, i, setup.days);
+    return {
+      day: i + 1,
+      start: start?.name,
+      end: end?.name,
+      startLL: start?.ll,
+      endLL: end?.ll,
+      role: i === 0 ? 'arrival' : i === setup.days - 1 ? 'departure' : start?.name !== end?.name ? 'move' : 'stay',
+    };
+  });
+}
+function brief(plan, only) {
+  return plan.days.flatMap((day, i) => {
+    if (only && !only.has(i)) return [];
+    const h = plan.setup?.stayPlan?.[i];
+    const header = h
+      ? 'ที่พัก: ' +
+        (h.start ? 'เริ่มวันจาก ' + h.start : 'จุดเดินทางเข้า') +
+        ' → ' +
+        (h.end ? 'นอนที่ ' + h.end : 'จุดเดินทางกลับ')
+      : '';
+    return [
+      {
+        day: i,
+        date: day.date,
+        hotel: header,
+        stops: day.stops.map((s) => ({ ...s, reservation: s.res?.done ? 'จองแล้วยืนยันแล้ว' : undefined })),
+      },
+    ];
+  });
+}
+function pickIssues(plan, picks) {
+  const stops = plan.days.flatMap((d) => d.stops);
+  return [
+    ...(picks?.must ?? [])
+      .filter((p) => !stops.some((s) => matchesPick(s, p, true)))
+      .map((p) => 'ต้องเพิ่ม "' + p.name + '" (กลุ่มเลือก)'),
+    ...(picks?.avoid ?? []).flatMap((p) =>
+      plan.days.flatMap((d, i) =>
+        d.stops
+          .filter((s) => matchesPick(s, p, false))
+          .map(() => 'วันที่ ' + (i + 1) + ' ต้องเอา "' + p.name + '" ออก (กลุ่มไม่เอา)'),
+      ),
+    ),
+  ];
+}
+function duplicates(plan) {
+  const seen = new Map(),
+    problems = [];
+  for (const [i, d] of plan.days.entries())
+    for (const s of d.stops) {
+      if (isHotel(s) || isTransit(s)) continue;
+      const id = s.catalogId || (s.query || s.n).toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+      if (!id) continue;
+      if (seen.has(id) && seen.get(id) !== i) problems.push('วันที่ ' + (i + 1) + ' สถานที่ซ้ำกับวันก่อน ' + s.n);
+      else seen.set(id, i);
+    }
+  return problems;
+}
+function uniqueAcross(days) {
+  const ids = new Set();
+  for (const d of days) for (const s of d.stops) s.id = uniqueId(s.id, ids);
+}
+function fixtureDay(setup, index, demo, raw) {
+  const day = structuredClone(raw ?? sampleDay(setup.city, index));
+  if (!demo && index === 0 && setup.city === 'เชียงใหม่' && setup.members.some((m) => m.avoid)) {
+    const lunch = day.stops.find((s) => s.meal === 'lunch');
+    if (lunch) {
+      lunch.diet = false;
+      lunch.veg = false;
+    }
+  }
+  for (const stop of day.stops) {
+    const member = setup.members.find((m) => m.wants?.some((w) => stop.name.includes(w)));
+    if (member) stop.star = member.id;
+  }
+  if (!index && demo && setup.arrive && setup.city === 'เชียงใหม่')
+    day.stops.unshift({
+      name: 'ท่าอากาศยานเชียงใหม่',
+      kind: 'transit',
+      catalogId: 'cnx',
+      ll: [18.7666, 98.9626],
+      start: setup.arrive.time,
+      end: setup.arrive.time,
+      cost: 0,
+    });
+  if (index === setup.days - 1 && setup.depart?.time && ['flight', 'train', 'bus'].includes(setup.depart.by)) {
+    const t = clock(minutes(setup.depart.time) - (setup.depart.by === 'flight' ? 90 : 40));
+    day.stops.push({
+      name: setup.depart.by === 'flight' ? 'สนามบิน ' + (cities[setup.city]?.airport ?? setup.city) : 'สถานีขากลับ',
+      kind: 'transit',
+      ll: setup.city === 'เชียงใหม่' ? [18.7666, 98.9626] : setup.cityLL,
+      start: t,
+      end: t,
+      mode: 'car',
+      cost: 0,
+    });
+  }
+  return day;
+}
+export async function planTrip(input, ctx, demo = false) {
+  const setup = structuredClone(input),
+    started = performance.now(),
+    timing = {};
   const offline = demo || provider === 'fake';
-  if (!offline && !provider) throw Object.assign(new Error('Bop ยังไม่ได้เชื่อมต่อบริการจัดทริป'), { code: 'no_key' });
-  if (offline && !setup.cityLL) setup.cityLL = [18.7883, 98.9853];
-  setup.cityLL ??= (await findCity(setup.city, ctx.signal))?.ll;
-  if (!setup.cityLL) throw bad('Bop ไม่พบพิกัดเมืองนี้');
-  setup.picks = {
-    must: (Array.isArray(setup.picks.must) ? setup.picks.must : []).slice(0, 18).map(pick => remembered.get(pick?.id) ?? pick).filter(pick => pick?.name),
-    avoid: (Array.isArray(setup.picks.avoid) ? setup.picks.avoid : []).map(id => remembered.get(id)?.name).filter(Boolean),
-  };
+  if (!offline && !provider) throw Object.assign(Error('Bop ยังไม่ได้เชื่อมต่อบริการจัดทริป'), { code: 'no_key' });
+  if (!setup.cityLL && !offline) {
+    const city = await findCity(setup.city, ctx.signal);
+    if (city) {
+      setup.cityLL = city.ll;
+      setup.country ||= city.cc;
+    }
+  }
+  setup.picks = resolvePicks(setup.picks);
   ctx.step('อ่านความต้องการของ ' + setup.members.length + ' คน');
   ctx.step('Bop ออกแบบแผน ' + setup.days + ' วันใน' + setup.city);
-  const pending = ['go', 'back'].map(async dir => {
-    const leg = dir === 'go' ? setup.arrive : setup.depart;
-    if (leg.by === 'drive' || (leg.time && !leg.auto && !leg.choice)) return [dir, []];
-    try { return [dir, offline ? [] : await transport(setup, dir, ctx)]; }
-    catch (error) {
-      if (protectedError(error)) throw error;
-      ctx.step('ค้นการเดินทางไม่สำเร็จ ใช้เวลาประมาณ');
-      return [dir, []];
-    }
-  });
-  const transportResults = Promise.all(pending);
-  transportResults.catch(() => {});
+  const flags = { stay: {}, transport: {} };
+  const pending = Promise.all(
+    ['go', 'back'].map(async (dir) => {
+      const leg = transportLeg(setup, dir);
+      if (!leg) return [dir, []];
+      if (leg.by === 'drive') {
+        if (leg.auto && !leg.time) leg.time = dir === 'go' ? '10:00' : '18:00';
+        return [dir, []];
+      }
+      if (leg.choice) {
+        setTransport(setup, flags, dir, [leg.choice], leg.choice);
+        return [dir, []];
+      }
+      if (leg.time && !leg.auto) return [dir, []];
+      leg.time = dir === 'go' ? '10:00' : '20:30';
+      try {
+        return [dir, demo ? [] : await transport(setup, dir, ctx)];
+      } catch (error) {
+        if (protectedError(error)) throw error;
+        ctx.step(
+          'หาเที่ยว' +
+            (leg.by === 'flight' ? 'บิน' : 'เดินทาง') +
+            (dir === 'go' ? 'ขาไป' : 'ขากลับ') +
+            'ไม่สำเร็จ ใช้เวลาประมาณ',
+        );
+        return [dir, []];
+      }
+    }),
+  );
+  pending.catch(() => {});
   let stays = await bookedStays(setup, ctx, offline);
-  const split = setup.days >= budget(process.env.BOP_SPLIT_MIN_DAYS, 3, 7);
-  const ask = (instruction, data, searches) => model(instruction, data, { ...ctx, searches });
-  let design = { stay: {}, summary: 'แผนทริป' }, verified = new Set();
-  if (!offline) {
-    const request = { ...setup, arrive: { ...setup.arrive, time: setup.arrive.time || '10:00' }, depart: { ...setup.depart, time: setup.depart.time || '20:30' } };
-    const result = split
-      ? await ask('ออกแบบโครงทริป คืน {days:[{title,area,places}],summary,stay:{area,why,examples:[{name,ll,priceNight,src}]}} กระจายความต้องการและงบรายวัน กำหนดมื้ออาหาร กิจกรรม 3–6 แห่งต่อวัน ไม่ซ้ำ จัดเวลาให้ทันเดินทางกลับ', request, setup.stay.mode === 'auto' ? 1 : 0)
-      : await ask(shape, request, Math.min(8, 5 + (setup.country !== 'TH' ? 3 : 0) + ([setup.arrive.by, setup.depart.by].includes('undecided') ? 2 : 0)));
+  setup.stayPlan = makeDayHotels(setup, stays);
+  const split = setup.days >= conf('BOP_SPLIT_MIN_DAYS', 3, 1, 100);
+  let design = { days: [], summary: 'แผนทริปพร้อมแล้ว' },
+    verified = new Set(),
+    history;
+  const allUrls = new Set();
+  const tDesign = performance.now();
+  if (!demo) {
+    const base = conf('BOP_SEARCH_PLAN', 5, 0, 8),
+      foreign = setup.country && !['TH', 'THAILAND', 'ไทย', 'ประเทศไทย'].includes(setup.country.toUpperCase());
+    const searchCap = base
+      ? Math.min(
+          8,
+          base + (foreign ? 3 : 0) + ([setup.arrive?.by, setup.depart?.by].includes('undecided') ? 2 : 0),
+        )
+      : 0;
+    const stayInstruction =
+      setup.stay.mode === 'booked'
+        ? 'ใช้ที่พักตาม stayPlan โดยไม่ค้นโรงแรม'
+        : 'เลือกย่านที่เหมาะกับงบและการเดินทาง ค้นตัวอย่างโรงแรมจริง 2–3 แห่งไม่เกินหนึ่งการค้น ระบุพิกัดและ priceNight บาทต่อห้อง';
+    const result = await model(
+      (split
+        ? 'ออกแบบโครงทริป days:[{title,theme,area,places,meals,wishes}], summary,stay. เลือก 3–6 สถานที่หลักต่อวันไม่ซ้ำและกระจายความต้องการสมาชิก. '
+        : shape + ' ') + stayInstruction,
+      setup,
+      {
+        ...ctx,
+        operation: split ? 'skeleton' : 'design',
+        searches: split ? (setup.stay.mode === 'booked' ? 0 : 1) : searchCap,
+      },
+    );
     design = result.value;
+    history = result.messages;
     verified = result.verified;
+    for (const url of verified) allUrls.add(url);
   }
+  if (split) timing.skeleton = elapsed(tDesign);
   const examples = setup.stay.mode === 'auto' ? stayExamples(design.stay, verified) : [];
   if (examples.length && setup.days > 1) {
-    const option = examples[0];
-    stays = [{ name: option.name, ll: option.ll ?? setup.cityLL, first: 0, nights: setup.days - 1, cost: option.priceNight * (setup.days - 1) / 2 }];
+    const e = examples.find((e) => coordinates(e.ll)) ?? examples[0];
+    stays = [
+      {
+        ...e,
+        first: 0,
+        nights: setup.days - 1,
+        cost: (e.priceNight * (setup.days - 1)) / 2,
+        locationSource: 'model',
+      },
+    ];
   }
-  const flags = { stay: { area: design.stay?.area ?? '', why: design.stay?.why ?? '', booked: setup.stay.mode === 'booked', stays, examples }, transport: {} };
-  for (const [dir, options] of await transportResults) {
-    const leg = dir === 'go' ? setup.arrive : setup.depart;
-    const chosen = leg.choice || options.find(option => option.recommended);
-    if (chosen) {
-      leg.time = dir === 'go' ? chosen.arr : chosen.dep;
-      if (leg.by === 'undecided') {
-        if (dir === 'go') flags.arrivalSuggested = { by: chosen.by, why: chosen.why };
-        leg.by = chosen.by;
-      }
-      flags.transport[dir] = { chosen, options: options.length ? options : [chosen] };
+  setup.stayPlan = makeDayHotels(setup, stays);
+  flags.stay = {
+    area: str(design.stay?.area) || stays[0]?.name || '',
+    why: str(design.stay?.why, 400),
+    booked: setup.stay.mode === 'booked',
+    examples,
+    stays,
+  };
+  const requested = Array.isArray(design.days) ? design.days : [];
+  const count = split || offline ? setup.days : Math.min(requested.length, setup.days);
+  if (!split && count < setup.days) console.warn('Bop received ' + count + ' of ' + setup.days + ' design days');
+  const skeleton = Array.from({ length: count }, (_, i) => requested[i] ?? { title: 'วันว่าง', places: [] });
+  const rawDays = [],
+    results = [];
+  const budgets = setup.members.map((m) => m.budget).filter((n) => n > 0),
+    limits = setup.members.map((m) => m.maxWalkKm).filter((n) => n > 0);
+  const tParallel = performance.now();
+  await concurrent(skeleton, conf('BOP_DAY_CONCURRENCY', 3, 1, 7), async (skel, i) => {
+    let raw = skel,
+      urls = verified;
+    if (!demo && split) {
+      const day = await model(
+        shape + ' ออกแบบเฉพาะวันที่ ' + (i + 1) + ' คืนหนึ่งวัน ตั้ง id ขึ้นต้น d' + (i + 1) + '_',
+        {
+          setup,
+          index: i,
+          today: skel,
+          hotel: setup.stayPlan[i],
+          otherDays: skeleton.filter((_, n) => n !== i),
+          budget: budgets.length ? Math.max(0, (Math.min(...budgets) - (stays[0]?.cost ?? 0)) / setup.days) : null,
+          maxWalkKm: limits.length ? Math.min(...limits) : null,
+        },
+        { ...ctx, operation: 'daily', searches: 2 },
+      );
+      raw = day.value.days?.[0] ?? day.value.day ?? day.value;
+      urls = day.verified;
+      for (const url of urls) allUrls.add(url);
     }
-  }
-  const rows = Array.from({ length: setup.days }, (_, index) => ({ index, raw: design.days?.[index] }));
-  const rendered = [];
-  const routes = {};
-  const width = budget(process.env.BOP_DAY_CONCURRENCY, 3, 7);
-  for (let offset = 0; offset < rows.length; offset += width) {
-    await Promise.all(rows.slice(offset, offset + width).map(async ({ index, raw }) => {
-      let sources = verified;
-      if (offline) raw = sampleDay(setup.city, index);
-      else if (split) {
-        const result = await ask(shape + ' ออกแบบเฉพาะวันนี้ ตั้ง id ขึ้นต้น d' + (index + 1) + '_', {
-          setup, today: raw ?? { title: 'วันว่าง' }, otherDays: rows.filter(row => row.index !== index).map(row => row.raw), stays, index,
-        }, 2);
-        raw = result.value.days?.[0];
-        sources = result.verified;
-      }
-      if (index === setup.days - 1 && setup.depart.time && ['flight', 'train', 'bus'].includes(setup.depart.by)) {
-        const cutoff = clock(minutes(setup.depart.time) - (setup.depart.by === 'flight' ? 90 : 40));
-        const cityInfo = cities[setup.city];
-        raw = { ...raw, stops: [...(Array.isArray(raw?.stops) ? raw.stops : []), {
-          name: setup.depart.by === 'flight' ? 'สนามบิน' + (cityInfo?.airport ? ' ' + cityInfo.airport : '') : 'สถานีขากลับ',
-          start: cutoff, end: cutoff, kind: 'terminal', mode: 'car',
-        }] };
-      }
-      const item = await schedule(raw, index, setup, ctx, stays, sources, { offline });
-      rendered[index] = item.day;
-      Object.assign(routes, item.routes);
-      if (split) ctx.emit({ type: 'day', index, day: item.day, routes: item.routes });
-      ctx.step('วันที่ ' + (index + 1) + ' พร้อมแล้ว (' + item.day.stops.length + ' จุด)');
-    }));
-  }
-  if (!rendered.some(day => day.stops.length)) throw new Error('Empty plan');
-  const plan = { days: rendered, flags, city: setup.city, setup };
-  plan.checks = checks(plan, setup);
-  const pickProblems = setup.picks.must.filter(pick => !rendered.some(day => day.stops.some(stop => stop.name === pick.name)))
-    .map(pick => 'ต้องเพิ่ม ' + pick.name);
-  const seen = new Set();
-  for (const day of rendered) for (const stop of day.stops) {
-    if (setup.picks.avoid.includes(stop.name)) pickProblems.push('ต้องเอา ' + stop.name + ' ออก (กลุ่มไม่เอา)');
-    if (stop.kind !== 'hotel' && seen.has(stop.name)) pickProblems.push('สถานที่ซ้ำ ' + stop.name);
-    seen.add(stop.name);
-  }
-  const passed = report => report.filter(row => row.pass).length + '/' + report.length;
-  ctx.step('ตรวจเงื่อนไข: ผ่าน ' + passed(plan.checks));
-  let repaired = false;
-  if (!offline && (plan.checks.some(row => !row.pass) || pickProblems.length)) {
+    if (offline) raw = fixtureDay(setup, i, demo, demo ? undefined : raw);
+    rawDays[i] = { raw, urls };
     try {
-      const result = await ask('ซ่อมแผนเฉพาะจุด คืน {edits:[{op:remove|insert|replace,id,stop}]}', { plan, problems: pickProblems }, 0);
-      const update = await editPlan(plan, result.value.edits, setup, ctx);
-      if (!update.errors.length && score(update.plan.checks) >= score(plan.checks)) {
-        Object.assign(plan, update.plan);
-        Object.assign(routes, update.routes);
-        repaired = true;
-        ctx.step('ตรวจเงื่อนไขหลังซ่อม: ผ่าน ' + passed(plan.checks));
+      results[i] = await schedule(raw, i, setup, ctx, stays, urls, {
+        offline,
+        fakeArrival: provider === 'fake' && !demo,
+      });
+      if (split) {
+        timing.firstDay ??= elapsed(started);
+        ctx.emit({ type: 'day', index: i, day: results[i].day, routes: results[i].routes });
+        ctx.step('วันที่ ' + (i + 1) + ' พร้อมแล้ว (' + results[i].day.stops.length + ' จุด)');
+      }
+    } catch (error) {
+      if (!split || protectedError(error)) throw error;
+      console.warn('Bop could not stream day ' + (i + 1), error.message);
+    }
+  });
+  if (split) timing.parallelDays = elapsed(tParallel);
+  timing.design = elapsed(tDesign);
+  const tTransport = performance.now();
+  const retime = new Set();
+  for (const [dir, options] of await pending) {
+    const chosen = choose(options, dir);
+    if (!chosen) continue;
+    setTransport(setup, flags, dir, options, chosen);
+    retime.add(dir === 'go' ? 0 : count - 1);
+  }
+  timing.transport = elapsed(tTransport);
+  if (
+    !flags.arrivalSuggested &&
+    [setup.arrive?.by, setup.depart?.by].includes('undecided') &&
+    design.arrivalSuggested?.by &&
+    design.arrivalSuggested.by !== 'none'
+  )
+    flags.arrivalSuggested = { by: str(design.arrivalSuggested.by), why: str(design.arrivalSuggested.why) };
+  for (const [i, { raw, urls }] of rawDays.entries()) {
+    if (!results[i] || retime.has(i)) results[i] = await schedule(raw, i, setup, ctx, stays, urls, { offline });
+  }
+  timing.geocode = Math.round(results.reduce((n, r) => n + r.geoMs, 0));
+  timing.route = Math.round(results.reduce((n, r) => n + r.routeMs, 0));
+  const days = results.map((r) => r.day);
+  uniqueAcross(days);
+  if (!days.some((d) => d.stops.length)) throw Error('Empty design');
+  let plan = reportPlan({ days, flags, city: setup.city, setup }, setup);
+  let routes = Object.assign({}, ...results.map((r) => r.routes));
+  const stops = days.flatMap((d) => d.stops),
+    loc = (s) => stops.filter((p) => p.place.source === s).length;
+  ctx.step(
+    'หาพิกัดสถานที่ ' +
+      stops.length +
+      ' แห่ง · OSM ' +
+      loc('geocoded') +
+      ' · คลังข้อมูล ' +
+      loc('catalog') +
+      ' · พิกัดประมาณ ' +
+      loc('model'),
+  );
+  const real = stops.filter((s) => s.leg?.real).length;
+  const via = results.reduce((all, r) => {
+    for (const [k, v] of Object.entries(r.stats)) all[k] = (all[k] ?? 0) + v;
+    return all;
+  }, {});
+  ctx.step(
+    'คำนวณเส้นทางจริง ' +
+      real +
+      ' ช่วง · OSRM ' +
+      (via.OSRM ?? 0) +
+      ' · Valhalla ' +
+      (via.Valhalla ?? 0) +
+      ' · แคช ' +
+      (via.cache ?? 0),
+  );
+  const backed = stops.filter((s) => s.src?.checked === 'web').length;
+  if (backed || allUrls.size)
+    ctx.step('ตรวจจากเว็บ ' + backed + ' จุด · ประมาณการ ' + (stops.length - backed) + ' จุด');
+  const picks = pickIssues(plan, setup.picks),
+    repeated = split ? duplicates(plan) : [];
+  if (setup.picks.must.length)
+    ctx.step(
+      'ใส่ที่ที่กลุ่มเลือก ' +
+        (setup.picks.must.length - picks.filter((v) => v.startsWith('ต้องเพิ่ม')).length) +
+        '/' +
+        setup.picks.must.length +
+        ' แห่ง',
+    );
+  ctx.step('ตรวจเงื่อนไข: ผ่าน ' + passes(plan));
+  let repaired = false;
+  const failures = explain(plan, setup).flatMap((r) => r.problems.map((p) => r.label + ' · ' + p));
+  if (!demo && failures.length + picks.length + repeated.length) {
+    const tRepair = performance.now();
+    try {
+      const issues = [...failures, ...picks, ...repeated],
+        indices = issues.map((line) => line.match(/วันที่ (\d+)/)?.[1]);
+      const only = split && indices.every(Boolean) ? new Set(indices.map((n) => Number(n) - 1)) : null;
+      const result = await model(
+        'ซ่อมแผนเฉพาะจุด คืน edits:[{op:remove|insert|replace|flag,id,day,after,stop}]. ' +
+          (only ? 'ห้ามแก้วันที่ไม่ได้ระบุ' : 'พิจารณาทั้งทริป') +
+          ' ' +
+          stopInstructions,
+        { plan: brief(plan, only), setup, problems: issues },
+        { ...ctx, operation: 'repair', searches: 0, history },
+      );
+      if (result.value.edits?.length) {
+        const update = await editPlan(plan, result.value.edits, setup, ctx, offline, new Set(), allUrls);
+        if (
+          update.plan.report.pass * 10 - pickIssues(update.plan, setup.picks).length >=
+          plan.report.pass * 10 - picks.length - repeated.length
+        ) {
+          plan = update.plan;
+          routes = update.routes;
+          repaired = true;
+          ctx.step('ตรวจเงื่อนไขหลังซ่อม: ผ่าน ' + passes(plan));
+        } else ctx.step('ตรวจเงื่อนไขหลังซ่อม: ผ่าน ' + passes(update.plan) + ' (แย่ลง ใช้แผนเดิม)');
       }
     } catch (error) {
       if (protectedError(error)) throw error;
       ctx.step('ซ่อมไม่สำเร็จ ใช้แผนก่อนซ่อม');
     }
+    timing.repair = elapsed(tRepair);
   }
-  return { plan, routes, summary: cleanName(design.summary) || 'แผนทริปพร้อมแล้ว', repaired,
-    timing: {}, ms: Math.round(performance.now() - started), usage: ctx.usage };
+  return {
+    plan,
+    routes,
+    summary: str(design.summary, 600) || 'แผนทริปพร้อมแล้ว',
+    repaired,
+    timing,
+    ms: elapsed(started),
+    usage: ctx.usage,
+  };
 }
-
-async function editPlan(original, edits, setup, ctx, offline = false, retimed = []) {
-  const { plan, errors } = applyEdits(original, Array.isArray(edits) ? edits : []);
-  const routes = {};
-  for (const [index, row] of plan.days.entries()) {
-    if (retimed.includes(index) || JSON.stringify(row) !== JSON.stringify(original.days[index])) {
-      const rendered = await schedule(row, index, setup, ctx, [], new Set(), { keep: true, offline });
-      plan.days[index] = rendered.day;
-      Object.assign(routes, rendered.routes);
-    }
-    for (const [i, stop] of plan.days[index].stops.entries()) {
-      if (i && stop.leg && !routes[stop.leg.key]) routes[stop.leg.key] = stop.leg.geometry ?? [plan.days[index].stops[i - 1].ll, stop.ll];
+async function editPlan(original, edits, setup, ctx, offline = false, retimed = new Set(), verified = new Set()) {
+  const verifiedEdits = (Array.isArray(edits) ? edits : []).map((edit) => {
+    if (!edit?.stop?.src) return edit;
+    return {
+      ...edit,
+      stop: { ...edit.stop, src: source(edit.stop.src, edit.stop.src.checked === 'web' ? verified : []) },
+    };
+  });
+  const { plan, errors } = applyEdits(original, verifiedEdits),
+    routes = {};
+  for (const [i, day] of plan.days.entries()) {
+    if (retimed.has(i) || JSON.stringify(day.stops) !== JSON.stringify(original.days[i].stops)) {
+      const item = await schedule(day, i, setup, ctx, plan.flags?.stay?.stays ?? [], verified, {
+        keep: true,
+        offline,
+      });
+      plan.days[i] = item.day;
+      Object.assign(routes, item.routes);
+    } else {
+      for (const [j, s] of day.stops.entries()) {
+        if (!j || !s.leg) continue;
+        const prev = day.stops[j - 1],
+          k = legKey(prev.ll, s.ll, s.leg.m ?? s.leg.mode);
+        s.leg.key = k;
+        if (Array.isArray(s.leg.geometry) && s.leg.geometry.length >= 2) {
+          routes[k] = {
+            geom: s.leg.geometry.map(([lat, lng]) => [lng, lat]),
+            ...(s.leg.real ? {} : { approx: true }),
+          };
+        } else {
+          const road = await route(prev.ll, s.ll, s.leg.m ?? s.leg.mode, ctx.signal, offline, s.leg);
+          routes[k] = { geom: road.geom, ...(road.real ? {} : { approx: true }) };
+        }
+      }
     }
   }
   plan.setup = setup;
-  plan.checks = checks(plan, setup);
+  uniqueAcross(plan.days);
+  reportPlan(plan, setup);
   return { plan, routes, errors };
 }
-export function validatePlan(plan) {
-  if (!Array.isArray(plan?.days) || !plan.days.length || plan.days.length > 7 || plan.days.some(day =>
-    !Array.isArray(day?.stops) || day.stops.length > 30 || day.stops.some(stop =>
-      typeof stop?.id !== 'string' || !coordinates(stop.ll) || !validTime(stop.start) || !validTime(stop.end)))) throw bad('แผนทริปไม่ถูกต้อง');
+export function validatePlan(input) {
+  if (
+    !Array.isArray(input?.days) ||
+    !input.days.length ||
+    input.days.length > 7 ||
+    input.days.some(
+      (d) =>
+        !Array.isArray(d?.stops) ||
+        d.stops.length > 100 ||
+        d.stops.some(
+          (s) =>
+            typeof s?.id !== 'string' ||
+            !coordinates(s.ll) ||
+            !validTime(s.t0 ?? s.start) ||
+            !validTime(s.t1 ?? s.end),
+        ),
+    )
+  )
+    throw bad('แผนทริปไม่ถูกต้อง');
+  const plan = structuredClone(input);
+  for (const d of plan.days)
+    d.stops = d.stops.map((raw) => {
+      const s = fields(raw);
+      s.kind = s.k = stopKind(s.k);
+      return s;
+    });
   return plan;
 }
+function changeTrip(change, setup, base) {
+  if (!['go', 'back'].includes(change?.dir)) return null;
+  const dir = change.dir;
+  const leg = transportLeg(setup, dir);
+  if (!leg) return null;
+  base.flags ??= {};
+  base.flags.transport ??= {};
+  const options = [...(base.flags.transport[dir]?.options ?? [])];
+  const code = (s) =>
+    str(s)
+      .replace(/[^a-z\d]/gi, '')
+      .toLowerCase();
+  const carrier = (x) => str(x).toLowerCase();
+  let selected =
+    options.find((o) => code(change.code) && code(o.code) === code(change.code)) ??
+    options.find(
+      (o) => carrier(change.carrier) && carrier(o.carrier) === carrier(change.carrier) && o.dep === change.dep,
+    );
+  if (!selected) {
+    selected = transportOption(change, uniqueId(dir + '-changed', new Set(options.map((o) => o.id))), []);
+    if (!selected) return null;
+    options.push(selected);
+  }
+  leg.choice = selected;
+  setTransport(setup, base.flags, dir, options, selected);
+  return dir === 'go' ? 0 : base.days.length - 1;
+}
+function offlineAnswer(plan, command, day) {
+  const found = plan.days.flatMap((d) => d.stops).find((s) => command.includes(s.n));
+  if (/ดีเลย์|เที่ยวบิน.*(?:ช้า|เลื่อน)/.test(command))
+    return {
+      options: [{ title: 'เลื่อนเวลาเริ่มทริป', edits: [] }],
+      transport: { dir: 'go', by: 'flight', carrier: 'เที่ยวบินตัวอย่าง', dep: '10:30', arr: '12:00' },
+    };
+  const target =
+    found ??
+    (/ฝน|น้ำตก/.test(command)
+      ? (plan.days[day].stops.find((s) => s.kind === 'nature') ??
+        plan.days.flatMap((d) => d.stops).find((s) => s.kind === 'nature'))
+      : plan.days[day].stops.find((s) => s.kind === 'food'));
+  if (!target) return { options: [{ title: 'คงแผนเดิม', edits: [] }] };
+  if (/ตัด|เอาออก/.test(command))
+    return {
+      day: plan.days.findIndex((d) => d.stops.includes(target)),
+      options: [{ title: 'ตัด' + target.n + 'ออก', edits: [{ op: 'remove', id: target.id }] }],
+    };
+  if (/ฝน/.test(command)) {
+    return {
+      day: plan.days.findIndex((d) => d.stops.includes(target)),
+      needs_vote: true,
+      vote_reason: 'เลือกค่าเข้าพิพิธภัณฑ์หรือเก็บช่วงบ่ายไว้พัก',
+      options: [
+        {
+          title: 'เข้าพิพิธภัณฑ์แทน' + target.n,
+          edits: [{ op: 'replace', id: target.id, stop: indoor(target, plan.city) }],
+        },
+        { title: 'ข้าม' + target.n + ' และพักก่อนมื้อถัดไป', edits: [{ op: 'remove', id: target.id }] },
+      ],
+    };
+  }
+  if (/ปิด/.test(command) && target.kind === 'food') {
+    return {
+      day: plan.days.findIndex((d) => d.stops.includes(target)),
+      options: [
+        {
+          title: 'ย้ายมื้อเดิมไปร้านใกล้เคียงที่เปิด',
+          edits: [
+            {
+              op: 'replace',
+              id: target.id,
+              stop: {
+                name: 'มื้ออาหารใกล้ตลาด (ตัวอย่าง)',
+                ll: target.ll,
+                cost: target.cost,
+                res: { todo: true, note: 'โทรยืนยันโต๊ะที่ร้านใหม่' },
+              },
+            },
+          ],
+        },
+      ],
+    };
+  }
+  if (/เต็ม/.test(command) && target.kind === 'food') {
+    return {
+      needs_vote: true,
+      vote_reason: 'เลือกระหว่างงบกับความสะดวก',
+      options: [
+        {
+          title: 'จองร้านใกล้จุดเดิม',
+          edits: [
+            {
+              op: 'replace',
+              id: target.id,
+              stop: { name: 'ร้านอาหารใกล้ตลาด (ตัวอย่าง)', ll: target.ll, cost: target.cost + 450 },
+            },
+          ],
+        },
+        {
+          title: 'ย้ายไปกินที่ตลาด',
+          edits: [
+            {
+              op: 'replace',
+              id: target.id,
+              stop: { name: 'มื้ออาหารที่ตลาด (ตัวอย่าง)', ll: target.ll, cost: target.cost },
+            },
+          ],
+        },
+      ],
+    };
+  }
+  return {
+    day: plan.days.findIndex((d) => d.stops.includes(target)),
+    options: [
+      {
+        title: 'เปลี่ยนเป็นกิจกรรมในร่ม',
+        edits: [{ op: 'replace', id: target.id, stop: indoor(target, plan.city) }],
+      },
+    ],
+  };
+}
 export async function replan(input, ctx) {
-  const started = performance.now();
+  const t = performance.now();
   const original = validatePlan(input.plan);
-  const command = cleanName(input.command);
+  const command = str(input.command, 1000);
   if (!command) throw bad('ไม่มีคำสั่ง');
   const setup = normalize(input.setup ?? original.setup);
-  setup.cityLL ??= original.days.flatMap(day => day.stops)[0]?.ll;
-  const day = Math.min(original.days.length - 1, Math.max(0, Number.isInteger(input.day) ? input.day : 0));
+  setup.stayPlan = makeDayHotels(setup, original.flags?.stay?.stays ?? []);
+  setup.cityLL ??= original.days.flatMap((d) => d.stops)[0]?.ll;
+  const day = cutDay(input.day, original.days.length),
+    offline = input.demo === true || provider === 'fake';
+  const previous = checks(original, setup),
+    timing = {};
   ctx.step('Bop กำลังปรับเฉพาะจุดที่ได้รับผลกระทบ');
-  const offline = input.demo === true || provider === 'fake';
-  let answer;
-  if (offline) {
-    const stops = original.days.flatMap(row => row.stops);
-    const target = stops.find(stop => command.includes(stop.name)) ?? (/ฝน|น้ำตก/.test(command)
-      ? stops.find(stop => stop.kind === 'nature') : original.days[day].stops.find(stop => stop.kind === 'food'));
-    const edits = target ? [/ตัด|เอาออก/.test(command) ? { op: 'remove', id: target.id }
-      : { op: 'replace', id: target.id, stop: indoor(target) }] : [];
-    answer = { options: [{ title: 'ปรับแผนเฉพาะจุด', edits }] };
-    if (target?.kind === 'food' && /เต็ม|ปิด/.test(command)) {
-      answer.options = [
-        { title: 'หาร้านใกล้จุดเดิม', vote_reason: 'เพิ่มงบเพื่อรักษาเวลา', edits: [{
-          op: 'replace', id: target.id, stop: { ...target, name: 'ร้านอาหารใกล้ตลาด (ตัวอย่าง)', cost: target.cost + 450 },
-        }] },
-        { title: 'แวะตลาดแทน', vote_reason: 'รักษางบและเปลี่ยนรูปแบบมื้ออาหาร', edits: [{
-          op: 'replace', id: target.id, stop: { ...target, name: 'มื้ออาหารที่ตลาด (ตัวอย่าง)', cost: target.cost },
-        }] },
-      ];
-    }
-    if (/เที่ยวบิน.*ช้า|ดีเลย์/.test(command)) answer = { options: [{ title: 'เลื่อนเวลาเริ่มทริป', edits: [], transport: { dir: 'go', by: 'flight', carrier: 'ตัวอย่าง', dep: '10:30', arr: '12:00' } }] };
-  } else {
-    answer = (await model('ปรับแผนให้น้อยที่สุด เก็บจุด res.done คืน {summary,day,options:[{title,head,vote_reason,edits:[{op,id,stop}],transport?:{dir,by,carrier,code,from,to,dep,arr}}]} เสนอ 2–3 ทางเฉพาะเมื่อมี trade-off', { plan: original, setup, day, command }, { ...ctx, searches: 2 })).value;
+  let answer,
+    verified = new Set(),
+    history;
+  if (offline) answer = offlineAnswer(original, command, day);
+  else {
+    const result = await model(
+      'เสนอ edits เท่านั้น เปลี่ยนเฉพาะจุดที่ได้รับผลกระทบ รักษา res.done ถ้าทำได้. เมื่อผิดข้อจำกัดสมาชิก ค่าใช้จ่ายเพิ่มเกิน 300 บาทต่อคน หรือเสียสถานที่ star ให้ needs_vote:true และเสนอ 2–3 ทาง นอกนั้นทางเดียว. คืน {summary,day,needs_vote,vote_reason,transport?,options:[{title,head,line,edits}]}. line ขึ้นต้น Bop: และเขียน 2–4 บรรทัด ระบุส่วนต่างราคาและคนรับงาน. ' +
+        stopInstructions,
+      { setup, plan: brief({ ...original, setup }), command, day },
+      { ...ctx, operation: 'replan', searches: 2 },
+    );
+    answer = result.value;
+    verified = result.verified;
+    history = result.messages;
   }
-  const options = [];
-  const routes = {};
-  let tradeoff = false;
-  let repaired = false;
-  const oldChecks = checks(original, setup);
-  for (const [index, row] of (answer.options ?? []).slice(0, 3).entries()) {
-    const optionSetup = structuredClone(setup);
-    const retimed = [];
-    const change = row.transport;
-    const selected = transportOption(change, 'changed-' + index, new Set());
-    const base = structuredClone(original);
-    if (selected && ['go', 'back'].includes(change.dir)) {
-      const going = change.dir === 'go';
-      const leg = going ? optionSetup.arrive : optionSetup.depart;
-      base.flags ??= {};
-      base.flags.transport ??= {};
-      const prior = base.flags.transport[change.dir]?.options ?? [];
-      leg.choice = prior.find(item => (selected.code && selected.code === item.code) || (selected.carrier === item.carrier && selected.dep === item.dep)) ?? selected;
-      leg.time = going ? leg.choice.arr : leg.choice.dep;
-      leg.by = leg.choice.by;
-      base.flags.transport[change.dir] = { chosen: leg.choice, options: prior.includes(leg.choice) ? prior : [...prior, leg.choice] };
-      retimed.push(going ? 0 : original.days.length - 1);
-      if (!going) {
-        const last = base.days.at(-1).stops.at(-1);
-        if (last) last.start = last.end = clock(minutes(leg.time) - (leg.by === 'flight' ? 90 : 40));
-      }
-    }
-    let updated = await editPlan(base, row.edits, optionSetup, ctx, offline, retimed);
-    const newlyFailed = plan => plan.checks.filter(item => !item.pass && oldChecks.find(old => old.id === item.id)?.pass);
-    if (!offline && (updated.errors.length || newlyFailed(updated.plan).some(check => !check.id.includes('/')))) {
+  timing.design = elapsed(t);
+  let raw = Array.isArray(answer.options) ? answer.options.slice(0, 3) : [];
+  const needs_vote = answer.needs_vote === true && raw.length >= 2;
+  if (!needs_vote) raw = raw.slice(0, 1);
+  if (!raw.length) throw Error('No options');
+  const options = [],
+    routes = {};
+  let repaired = false,
+    changedSetup;
+  for (const [i, row] of raw.entries()) {
+    const copy = structuredClone(setup),
+      base = structuredClone(original);
+    const index = changeTrip(row.transport ?? answer.transport, copy, base);
+    if (index != null) changedSetup ??= copy;
+    let updated = await editPlan(
+      base,
+      row.edits,
+      copy,
+      ctx,
+      offline,
+      new Set(index != null ? [index] : []),
+      verified,
+    );
+    const before = new Set(previous.list.filter((r) => !r.pass).map((r) => r.id));
+    const newFailures = updated.plan.checks.filter(
+      (r) => !r.pass && !before.has(r.id) && (!r.member || !needs_vote),
+    );
+    if (!offline && (updated.errors.length || newFailures.length)) {
+      const tRepair = performance.now();
       try {
-        const match = await model('แก้ข้อผิดพลาดเฉพาะจุด คืน {edits:[{op,id,stop}]}', { plan: updated.plan, errors: updated.errors, checks: newlyFailed(updated.plan) }, ctx);
-        const retry = await editPlan(updated.plan, match.value.edits, optionSetup, ctx);
-        if (score(retry.plan.checks) >= score(updated.plan.checks)) { updated = retry; repaired = true; }
-      } catch (error) { if (protectedError(error)) throw error; }
+        const result = await model(
+          'ซ่อมข้อผิดพลาดเฉพาะจุด คืน edits ตามรูปแบบเดิม. ' + stopInstructions,
+          { plan: brief(updated.plan), errors: updated.errors, checks: newFailures },
+          { ...ctx, operation: 'repair', searches: 0, history },
+        );
+        if (result.value.edits?.length) {
+          const fix = await editPlan(updated.plan, result.value.edits, copy, ctx, false, new Set(), verified);
+          if (fix.plan.report.pass >= updated.plan.report.pass) {
+            updated = fix;
+            repaired = true;
+          }
+        }
+      } catch (e) {
+        if (protectedError(e)) throw e;
+        ctx.step('ซ่อมไม่สำเร็จ ใช้ทางเลือกก่อนซ่อม');
+      }
+      timing.repair = (timing.repair ?? 0) + elapsed(tRepair);
     }
-    const delta = Math.round(total(updated.plan) - total(original));
-    const memberFailure = newlyFailed(updated.plan).some(check => check.id.includes('/'));
-    const lostWish = setup.members.flatMap(member => member.wants).some(wish => original.days.some(day => day.stops.some(stop => stop.name === wish))
-      && !updated.plan.days.some(day => day.stops.some(stop => stop.name === wish)));
-    tradeoff ||= delta > 300 || memberFailure || lostWish;
-    const key = 'ABC'[index];
-    for (const stop of updated.plan.days.flatMap(item => item.stops)) {
-      if (!stop.leg) continue;
-      const routeKey = stop.leg.key;
-      stop.leg.key = key + ':' + routeKey;
-      routes[stop.leg.key] = updated.routes[routeKey];
-    }
-    const title = cleanName(row.title) || 'ทางเลือก ' + key;
-    ctx.step('ทางเลือก ' + key + ': ตรวจเงื่อนไข ผ่าน ' + updated.plan.checks.filter(check => check.pass).length + '/' + updated.plan.checks.length + ' · ฿' + delta + '/คน');
-    options.push({ key, title, head: cleanName(row.head) || title, line: 'Bop: ' + title + '\nค่าใช้จ่ายเปลี่ยน ฿' + delta + '/คน\nผู้จัดทริปตรวจเวลาใหม่', plan: updated.plan, vote_reason: cleanName(row.vote_reason) });
+    const delta = Math.round(updated.plan.report.total - total(original));
+    const title = str(row.title) || 'ทางเลือก ' + 'ABC'[i],
+      head = str(row.head, 200) || title;
+    const generated =
+      'Bop: ' + title + '\nค่าใช้จ่าย ' + (delta >= 0 ? '+' : '−') + '฿' + Math.abs(delta) + '/คน\nผู้จัดทริปตรวจเวลาใหม่';
+    const rawLine = str(row.line, 800);
+    const line = rawLine ? str((rawLine.startsWith('Bop: ') ? '' : 'Bop: ') + rawLine, 800) : generated;
+    ctx.step(
+      'ทางเลือก ' +
+        'ABC'[i] +
+        ': ตรวจเงื่อนไข ผ่าน ' +
+        passes(updated.plan) +
+        ' · ' +
+        (delta >= 0 ? '+' : '−') +
+        '฿' +
+        Math.abs(delta) +
+        '/คน',
+    );
+    Object.assign(routes, updated.routes);
+    options.push({
+      key: 'ABC'[i],
+      title,
+      head,
+      line,
+      plan: updated.plan,
+      ...(needs_vote ? { vote_reason: str(row.vote_reason ?? answer.vote_reason, 400) } : {}),
+    });
   }
-  if (!options.length) throw new Error('No options');
-  const needs_vote = tradeoff && options.length > 1;
-  return { options: needs_vote ? options : options.slice(0, 1), needs_vote, day, routes,
-    summary: cleanName(answer.summary) || 'ปรับแผนแล้ว', setup: options[0].plan.setup, ms: Math.round(performance.now() - started), repaired };
+  return {
+    options,
+    needs_vote,
+    ...(needs_vote ? { vote_reason: str(answer.vote_reason ?? options[0].vote_reason, 400) } : {}),
+    day: cutDay(Number.isInteger(answer.day) ? answer.day : day, original.days.length),
+    summary: str(answer.summary, 600) || 'ปรับแผนแล้ว',
+    routes,
+    ...(changedSetup ? { setup: changedSetup } : {}),
+    timing,
+    usage: ctx.usage,
+    ms: elapsed(t),
+    repaired,
+  };
 }

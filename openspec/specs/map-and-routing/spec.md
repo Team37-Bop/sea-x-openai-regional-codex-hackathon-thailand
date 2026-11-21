@@ -1,7 +1,8 @@
 # map-and-routing Specification
 
 ## Purpose
-The server routes every leg on real roads with free public routers and returns the geometry; the browser draws it on a keyless MapLibre + OpenFreeMap map. Code: `server/geo.mjs` (geocoding, routing, breakers, disk cache), `legKey`/`allLegs`/`schedule`/`MODE_ADJ` in `src/plan.js`, map code in `src/main.js`.
+
+The server resolves places and obtains road geometry; the browser draws the active itinerary and exposes estimated segments. Reference evidence in prep commit `292ba5f` includes `server/geo.mjs`, `src/plan.js` (`legKey`, `allLegs`, `schedule`, `MODE_ADJ`), `src/main.js` (`normLL`, `routeInfo`, `mapPlan`, `drawMap`, `goBox`), `vite.config.js`, `scripts/package-lambda.sh`, `scripts/test-infrastructure.mjs` and `terraform/app/compute.tf`.
 
 ## Requirements
 
@@ -17,11 +18,11 @@ Each leg SHALL be routed by OSRM (routing.openstreetmap.de, `routed-foot` for wa
 - **THEN** the leg gets an `approx` straight line and `schedule()` keeps its estimated minutes
 
 ### Requirement: Geometry for every leg
-`routes` in every `done` and `day` event SHALL hold an entry keyed `legKey(prev.ll, stop.ll, leg.m)` for every leg in `allLegs(plan)` of each returned plan, as `[lng,lat]` geometry.
+`routes` in plan/replan `done` and progressive plan `day` events SHALL hold an entry keyed `legKey(prev.ll, stop.ll, leg.m)` for every leg in `allLegs(plan)` of each returned plan, as an object containing a `geom` array of `[lng,lat]` pairs and optional `approx: true`.
 
 #### Scenario: Browser needs no router
 - **WHEN** the UI renders a plan from the server
-- **THEN** it draws `routes[legKey]` (or `src/routes.json`) without calling OSRM
+- **THEN** it checks the bundled seed first, then the merged server geometry. If both miss, the browser draws an approximate straight line without calling a router
 
 ### Requirement: Travel time model
 Road legs SHALL be timed as OSRM/Valhalla free-flow duration × a mode factor plus waiting time (walk ×1.3; songthaew ×1.2 +7 min; ride-hail ×1.15 +5; van ×1.1 +3; own car ×1.1), with no live traffic; transit legs SHALL use web-found minutes when `leg.minSrc === 'web'` and otherwise 25 km/h plus 8 min.
@@ -35,14 +36,14 @@ Road legs SHALL be timed as OSRM/Valhalla free-flow duration × a mode factor pl
 - **THEN** it takes ceil(10 / 25 × 60 + 8) = 32 min
 
 ### Requirement: Circuit breakers and politeness
-Each of OSRM, Valhalla, Photon and Nominatim SHALL be skipped for 10 min after two consecutive failures or one HTTP 429; legs SHALL be fetched 3 at a time with a 120 ms gap per worker; Nominatim SHALL be serialised at 1 request per second and limited to 8 lookups per request.
+Each of OSRM, Valhalla, Photon and Nominatim SHALL be skipped for 10 min after two consecutive failures or one HTTP 429; legs SHALL be fetched 3 at a time with a 120 ms gap per worker; Nominatim fallback POI searches SHALL be serialized with a 1.1-second delay between operations. Each batch passed to `resolveSpecs` gets an eight-lookup Nominatim budget shared across its four geocoding workers.
 
 #### Scenario: Rate limited
 - **WHEN** OSRM answers 429
 - **THEN** OSRM is skipped for 10 min and Valhalla serves routes
 
 ### Requirement: Persistent caches
-Routes, geocodes (including searched-but-no-match answers, never outage fallbacks) and city lookups SHALL persist in `server/.cache/*.json`, written atomically, with `src/routes.json` seeding routes, so a repeated plan for the same places makes no routing calls.
+Successful routes, successful city lookups, geocoding hits and answered geocoding misses that retain model coordinates SHALL be cached in memory and persisted in `routes.json`, `cities.json` and `geocode.json`. The default directory is `server/.cache`; `BOP_CACHE_DIR` overrides it, including the deployed Lambda setting `/tmp/bop/cache`. Files are written using a temporary file then rename after a 500 ms debounce. When present, `src/routes.json` seeds the route cache before disk entries are applied. Failed external lookups alone do not populate persisted caches.
 
 #### Scenario: Chiang Mai sample offline
 - **WHEN** the sample is scheduled without network
@@ -69,3 +70,47 @@ The map SHALL use OpenFreeMap tiles (positron light, dark following the OS theme
 #### Scenario: Stop without coordinates
 - **WHEN** a stop has no valid `ll`
 - **THEN** it stays in the list and is left off the map
+
+### Requirement: Route identity and provider units
+
+The planner SHALL route legs between consecutive distinct coordinates within each day when the arriving stop carries a leg. Route keys SHALL encode the routing profile and both endpoints in travel order as `profile|lng1,lat1;lng2,lat2`. Walking has its own profile. Songthaew, car, van, own-car and transit share the car geometry profile. One routing batch SHALL deduplicate keys across all candidate plans.
+
+#### Scenario: Two modes use the same road
+- **WHEN** an option changes from ride-hail to own-car for an identical directed leg
+- **THEN** the server can reuse the car route for both options while scheduling a different wait, duration adjustment and fare for each mode. The return direction uses a separate key
+
+#### Scenario: Provider response has no usable line
+- **WHEN** OSRM returns fewer than two geometry points or no route
+- **THEN** the next available router is tried. Successful provider values are kept as rounded seconds and metres, with geometry rounded to five decimal places. Valhalla shape decoding uses precision six
+
+#### Scenario: Client response versus scheduling data
+- **WHEN** a route includes duration and distance internally
+- **THEN** the scheduler updates leg minutes, kilometres rounded to one decimal and the real-route flag. The route dictionary sent to the browser contains geometry and approximation status only
+
+### Requirement: City and POI resolution
+
+A city lookup SHALL cache a trimmed, lower-case name. It asks Nominatim for one result with address details and English language preference, then falls back to Photon place or boundary hits. A Photon city fallback can return an empty country code. Catalog stops and pinned stops with coordinates SHALL bypass external POI search. Other POIs use the stop query or display name, geographic bias and a bounded search radius.
+
+#### Scenario: Geocoder proposes a non-POI
+- **WHEN** a result is a highway, place classification, boundary, land-use area, railway, power feature or natural peak
+- **THEN** the POI resolver skips it. Candidates must also lie within the caller's configured radius of model coordinates (3 km by default), or within 40 km of the city centre when only the centre is known
+
+#### Scenario: Repeated geocoding query
+- **WHEN** two stops have the same trimmed query and model coordinates rounded to two decimals
+- **THEN** concurrent lookups share the in-flight promise. If a lookup produces only an outage fallback, a later request can retry it
+
+### Requirement: Map updates and readable route changes
+
+The browser SHALL normalize array, object and comma-separated stop coordinates into latitude/longitude order and reject nonfinite numbers, out-of-range coordinates and the zero pair. The map SHALL show delivered days as a split plan arrives, the current plan after completion, and the option preview during replanning. Single-day and all-days views SHALL use their respective visible stops for fitting. In single-day view, qualifying long road geometries and removed stops affect the framing.
+
+#### Scenario: Legacy server geometry order
+- **WHEN** a merged server geometry has at least two points and its first point is closer to the segment origin when read as latitude/longitude
+- **THEN** the client reverses the coordinate pairs before drawing. Bundled seed geometry is already longitude/latitude
+
+#### Scenario: Preview removes a stop
+- **WHEN** an option removes a positioned stop from the selected day in single-day view
+- **THEN** its previous position appears as a removal marker with adjacent ghost segments. In the all-days view, the map draws the visible routes without those single-day removal markers
+
+#### Scenario: Progressive or incomplete coordinates
+- **WHEN** only some planned days have arrived
+- **THEN** the browser fits the valid positions of the available days. A marker or line with insufficient usable coordinates is omitted; other itinerary entries remain available in the list

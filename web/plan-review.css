@@ -1,0 +1,78 @@
+.plan-review {
+  margin: 12px 0;
+  font-size: 0.86rem;
+}
+.review-totals {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 0 0 10px;
+  background: var(--canvas);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.review-totals > div {
+  padding: 8px 10px;
+}
+.review-totals > div + div {
+  border-left: 1px solid var(--line);
+}
+.review-totals dt {
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+.review-totals dd {
+  margin: 2px 0 0;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.review-totals > :last-child dd,
+.plan-review summary {
+  color: var(--accent-dark);
+}
+.plan-review summary {
+  padding: 3px 0;
+  font-weight: 600;
+}
+.review-changes {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  margin: 6px 0;
+}
+.review-changes th,
+.review-changes td {
+  padding: 5px 7px;
+  text-align: left;
+  vertical-align: top;
+  border-top: 1px solid var(--line);
+  overflow-wrap: anywhere;
+}
+.review-changes th {
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+.review-changes thead th:first-child {
+  width: 21%;
+}
+.review-changes td > * {
+  display: block;
+}
+.review-changes small {
+  color: var(--muted);
+}
+.plan-review h4 {
+  margin: 9px 0 3px;
+  color: var(--red);
+}
+.plan-review ul {
+  padding-inline-start: 1.2rem;
+  margin: 0 0 6px;
+}
+.plan-review > small {
+  margin-left: 7px;
+}
+.plan-review > textarea {
+  display: block;
+  min-height: 68px;
+  margin-top: 8px;
+}

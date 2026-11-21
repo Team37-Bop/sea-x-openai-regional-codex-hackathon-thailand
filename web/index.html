@@ -1,60 +1,394 @@
 <!doctype html>
 <html lang="th">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="theme-color" content="#f6f7ef">
-  <title>Bop — วางแผนทริปกับเพื่อน</title>
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
-  <link rel="stylesheet" href="/style.css">
-  <script defer src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
-  <script type="module" src="/app.js"></script>
-</head>
-<body>
-  <header class="top"><a class="brand" href="/" aria-label="Bop หน้าแรก"><span class="brand-mark" aria-hidden="true">✳</span>Bop<span class="dot">.</span></a>
-  <nav aria-label="เมนูหลัก"><button class="quiet" id="open-setup" type="button">ตั้งค่าทริป</button><button class="primary" id="demo" type="button">ลองทริปตัวอย่าง ↗</button></nav></header>
-  <main>
-    <section class="hero">
-      <div class="hero-copy"><p class="eyebrow"><span></span> วางแผนทริปกับเพื่อน</p><h1>ไปด้วยกัน<br><em>เที่ยวแบบเรา</em></h1><p>รวมสิ่งที่เพื่อนอยากทำ งบที่แต่ละคนมี และข้อจำกัดของทุกคนไว้ในแผนเดียว</p></div>
-      <div class="hero-card"><p class="eyebrow">ปลายทางของทริป</p><h2 id="city-title">เชียงใหม่</h2><p id="trip-summary">ทริปตัวอย่าง 3 วัน · เพื่อน 4 คน</p><button class="primary" type="button" id="hero-setup">วางแผนทริปของคุณ <span aria-hidden="true">→</span></button></div>
-    </section>
-    <p id="status" class="status" role="status"></p>
-    <section class="workspace" aria-label="แผนทริป">
-      <div class="planner">
-        <div class="section-title"><div><p class="eyebrow">กำหนดการ</p><h2>แผนเที่ยว</h2></div><div id="totals" class="total"></div></div>
-        <div class="tabs" id="tabs" aria-label="วันที่เดินทาง"></div>
-        <div id="itinerary"><p class="empty">กำลังเปิดแผนเชียงใหม่…</p></div>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+    <meta name="theme-color" content="#faf8f2" />
+    <title>Bop · วางแผนทริปกับเพื่อน</title>
+    <link rel="stylesheet" href="/assets/maplibre-gl.css?v=6.19.0" crossorigin="" />
+    <link rel="stylesheet" href="/style.css" />
+    <link rel="stylesheet" href="/location-suggest.css" />
+    <link rel="stylesheet" href="/booking-tasks.css" />
+    <link rel="stylesheet" href="/candidate-survey.css" />
+    <link rel="stylesheet" href="/plan-review.css" />
+    <link rel="stylesheet" href="/place-details.css" />
+    <script type="module" src="/app.js"></script>
+  </head>
+  <body>
+    <svg xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false" class="icon-library">
+      <symbol id="bop-mark" viewBox="0 0 40 40">
+        <rect width="40" height="40" rx="12" fill="#2d312c" />
+        <path
+          d="M12 29V12m0 11c0-6 4-10 10-10 5 0 8 3 8 7s-3 7-8 7h-4"
+          fill="none"
+          stroke="#fff"
+          stroke-width="4"
+          stroke-linecap="round"
+        />
+        <circle cx="28.5" cy="10.5" r="4" fill="#ffac51" stroke="#2d312c" stroke-width="2" />
+      </symbol>
+      <symbol id="i-pin" viewBox="0 0 24 24">
+        <path d="M19.5 10c0 5.7-7.5 11-7.5 11S4.5 15.7 4.5 10a7.5 7.5 0 1 1 15 0Z" />
+        <circle cx="12" cy="10" r="2.5" />
+      </symbol>
+      <symbol id="i-people" viewBox="0 0 24 24">
+        <circle cx="9" cy="8" r="3" />
+        <path d="M3 20v-2a6 6 0 0 1 12 0v2M16 5.3a3 3 0 0 1 0 5.5M18 14a5 5 0 0 1 3 4.6V20" />
+      </symbol>
+      <symbol id="i-route" viewBox="0 0 24 24">
+        <circle cx="5.5" cy="5.5" r="2.5" />
+        <circle cx="18.5" cy="18.5" r="2.5" />
+        <path d="M8 5.5h7.5a3.3 3.3 0 0 1 0 6.5h-7a3.3 3.3 0 0 0 0 6.5H16" />
+      </symbol>
+      <symbol id="i-arrow" viewBox="0 0 24 24">
+        <path d="M4 12h15m-6-6 6 6-6 6" />
+      </symbol>
+      <symbol id="i-close" viewBox="0 0 24 24">
+        <path d="m6 6 12 12M18 6 6 18" />
+      </symbol>
+      <symbol id="i-edit" viewBox="0 0 24 24">
+        <path d="m4 16 10.8-10.8a2.8 2.8 0 0 1 4 4L8 20l-5 1 1-5Zm9-9 4 4" />
+      </symbol>
+      <symbol id="i-plan" viewBox="0 0 24 24">
+        <rect x="4" y="3" width="16" height="18" rx="3" />
+        <path d="M8 8h8m-8 4h8m-8 4h4" />
+      </symbol>
+      <symbol id="i-book" viewBox="0 0 24 24">
+        <path d="M3 6h18v4a2 2 0 0 0 0 4v4H3v-4a2 2 0 0 0 0-4V6Z" />
+        <path d="M15 7v2m0 2v2m0 2v2" />
+      </symbol>
+      <symbol id="i-map" viewBox="0 0 24 24">
+        <path d="m3 6 6-3 6 3 6-3v15l-6 3-6-3-6 3V6Zm6-3v15m6-12v15" />
+      </symbol>
+      <symbol id="i-check" viewBox="0 0 24 24">
+        <path d="m12 3 8 3v6c0 4-4 7-8 9-4-2-8-5-8-9V6l8-3Z" />
+        <path d="m8.5 12 2.4 2.4 4.6-5" />
+      </symbol>
+      <symbol id="i-command" viewBox="0 0 24 24">
+        <path d="M4 4h16v12H9l-5 4V4Z" />
+        <path d="M8 8h8m-8 4h5" />
+      </symbol>
+      <symbol id="i-plus" viewBox="0 0 24 24">
+        <path d="M12 5v14m-7-7h14" />
+      </symbol>
+      <symbol id="i-sun" viewBox="0 0 24 24">
+        <circle cx="10" cy="10" r="4" />
+        <path d="M10 2v2m-8 6h2m11-5 1.5-1.5M4.5 4.5 6 6m6 12a4 4 0 1 1 3.3-6.3A3.5 3.5 0 1 1 18 18h-6Z" />
+      </symbol>
+      <symbol id="i-undo" viewBox="0 0 24 24">
+        <path d="M3 10h10a6 6 0 0 1 0 12M8 5l-5 5 5 5" transform="translate(1 -2)" />
+      </symbol>
+    </svg>
+    <header class="top trip-bar">
+      <div class="top-inner">
+        <a class="brand" href="/" aria-label="Bop หน้าแรก">
+          <svg aria-hidden="true"><use href="#bop-mark" /></svg>
+          Bop
+        </a>
+        <div class="trip-heading">
+          <h1 id="city-title">ทริปของคุณ</h1>
+          <p id="trip-summary"></p>
+        </div>
+        <div id="poc-people" aria-label="ผู้ร่วมทริป"></div>
+        <nav aria-label="เมนูหลัก">
+          <small id="usage-note"></small>
+          <button class="quiet sample-link" id="demo" type="button">ทริปตัวอย่าง</button>
+        </nav>
       </div>
-      <aside>
-        <section class="map-card"><div class="map-heading"><div><p class="eyebrow">เส้นทาง</p><h2>แผนที่ทริป</h2></div><span id="leg-label"></span></div><div id="map" aria-label="แผนที่สถานที่และเส้นทาง"><p class="empty" id="map-fallback">แผนที่กำลังโหลด</p></div></section>
-        <section class="checks"><div class="section-title"><h2>เงื่อนไขของกลุ่ม</h2><span id="checks-count" class="total"></span></div><div id="checks-list"></div></section>
-      </aside>
-    </section>
-    <section class="actions">
-      <div><p class="eyebrow">ปรับตามสถานการณ์</p><h2>แผนเปลี่ยนได้</h2></div>
-      <form id="replan"><label for="command">อยากปรับอะไรในทริป</label><div class="inline"><input id="command" name="command" placeholder="เช่น ถ้าฝนตกล่ะ" required maxlength="130"><button class="primary">ให้ Bop ปรับแผน</button></div></form>
-      <div class="inline tools"><button type="button" class="quiet" id="weather">ตรวจฝน</button><button type="button" class="quiet" id="undo" disabled>ย้อนกลับ</button></div>
-      <div id="alerts"></div><div id="options"></div><div id="reservations"></div>
-    </section>
-  </main>
-  <dialog id="setup-dialog">
-    <form id="setup-form">
-      <div class="dialog-heading"><div><p class="eyebrow">ทริปใหม่</p><h2>ตั้งค่าทริป</h2></div><button type="button" class="quiet" id="close-setup" aria-label="ปิด">×</button></div>
-      <label>เมืองปลายทาง<input name="city" list="cities" value="เชียงใหม่" required maxlength="120"></label>
-      <datalist id="cities"><option value="เชียงใหม่"><option value="กรุงเทพฯ"><option value="ดานัง"><option value="โตเกียว"><option value="ไทเป"><option value="โซล"></datalist>
-      <p id="city-result" class="muted"></p>
-      <div class="fields"><label>วันเริ่มเดินทาง<input type="date" name="startDate" required></label><label>วันสุดท้าย<input type="date" name="endDate" required></label></div>
-      <div class="fields" id="directions"></div>
-      <label class="checkbox"><input type="checkbox" name="hasCar"> มีรถส่วนตัวระหว่างทริป</label>
-      <label>ที่พัก<select name="stayMode"><option value="auto">ให้ Bop แนะนำ</option><option value="booked">จองไว้แล้ว</option></select></label>
-      <div id="stays" hidden><div id="stay-rows"></div><button class="quiet" id="add-stay" type="button">+ เพิ่มที่พัก</button><p id="stay-total" class="muted"></p></div>
-      <div class="section-title"><h3>เพื่อนร่วมทริป</h3><button class="quiet" type="button" id="add-member">+ เพิ่มสมาชิก</button></div>
-      <div id="members"></div>
-      <div class="fields"><label>จังหวะทริป<select name="pace"><option value="normal">พอดี ๆ</option><option value="chill">ไปเรื่อย ๆ</option><option value="packed">เที่ยวให้เต็มวัน</option></select></label><label>การเลือกสถานที่<select name="autonomy"><option value="auto">ให้ Bop เลือก</option><option value="ask">ให้กลุ่มเลือกก่อน</option></select></label></div>
-      <p class="feedback" id="form-error" role="alert"></p>
-      <button class="primary full" type="submit">เริ่มวางแผน →</button>
-    </form>
-  </dialog>
-  <dialog id="detail"><div id="detail-content"></div><button class="quiet" id="detail-close" type="button">ปิด</button></dialog>
-</body>
+    </header>
+    <main class="trip-page shell">
+      <p id="status" class="status" role="status"></p>
+      <button class="quiet" id="cancel-plan" type="button" hidden>กลับไปแก้ข้อมูลทริป</button>
+      <div class="empty-plan">
+        <span class="tile-icon">
+          <svg class="icon" aria-hidden="true"><use href="#i-map" /></svg>
+        </span>
+        <h1>วางแผนทริปกับเพื่อน</h1>
+        <p>เลือกวันเดินทางและเพิ่มเพื่อนร่วมทริปเพื่อสร้างแผนแรกของคุณ</p>
+        <button class="primary" type="button" id="hero-setup">
+          เตรียมทริปใหม่
+          <svg class="icon" aria-hidden="true"><use href="#i-arrow" /></svg>
+        </button>
+      </div>
+      <section class="actions command-panel" aria-label="ปรับแผนทริป" hidden>
+        <form id="replan">
+          <label for="command">
+            <svg class="icon" aria-hidden="true"><use href="#i-command" /></svg>
+            คุยกับ Bop
+          </label>
+          <div class="command-input">
+            <input
+              id="command"
+              name="command"
+              placeholder="อยากปรับอะไรในแผนเที่ยวของเรา"
+              required
+              maxlength="130"
+            />
+            <button class="primary" type="submit">
+              ปรับแผน
+              <svg class="icon" aria-hidden="true"><use href="#i-arrow" /></svg>
+            </button>
+          </div>
+        </form>
+        <div class="command-tools">
+          <div class="inline tools">
+            <button class="quiet" id="open-setup" type="button">
+              <svg class="icon" aria-hidden="true"><use href="#i-edit" /></svg>
+              ตั้งค่าทริป
+            </button>
+
+            <button type="button" class="plain" id="undo" disabled>
+              <svg class="icon" aria-hidden="true"><use href="#i-undo" /></svg>
+              ย้อนกลับ
+            </button>
+            <button id="reset-plan" type="button" class="plain">กลับไปแผนแรก</button>
+          </div>
+        </div>
+      </section>
+      <div class="trip-board">
+        <aside class="trip-sidebar" aria-label="รายละเอียดแผนการเดินทาง">
+          <div class="tabs view-tabs" role="tablist" id="views" aria-label="มุมมองทริป" hidden>
+            <button type="button" role="tab" id="plan-tab" aria-controls="plan-panel" aria-selected="true">
+              <svg class="icon" aria-hidden="true"><use href="#i-route" /></svg>
+              แผนเที่ยว
+            </button>
+            <button type="button" role="tab" id="book-tab" aria-controls="book-panel" aria-selected="false">
+              <svg class="icon" aria-hidden="true"><use href="#i-book" /></svg>
+              การจอง
+              <span id="booking-count"></span>
+            </button>
+          </div>
+          <section id="plan-panel" role="tabpanel" aria-labelledby="plan-tab" class="workspace">
+            <details id="plan-summary" class="summary-note" hidden>
+              <summary>อ่านรายละเอียดจาก Bop</summary>
+              <p></p>
+            </details>
+            <section class="checks panel">
+              <div class="panel-heading">
+                <span class="tile-icon warm">
+                  <svg class="icon" aria-hidden="true">
+                    <use href="#i-check" />
+                  </svg>
+                </span>
+                <h2>เงื่อนไขของกลุ่ม</h2>
+                <span id="checks-count" class="total"></span>
+              </div>
+              <div id="checks-list"></div>
+            </section>
+            <div id="alerts"></div>
+            <section class="planner panel">
+              <div class="panel-heading">
+                <span class="tile-icon">
+                  <svg class="icon" aria-hidden="true">
+                    <use href="#i-plan" />
+                  </svg>
+                </span>
+                <h2>กำหนดการ</h2>
+                <span id="totals" class="total"></span>
+              </div>
+              <div class="tabs day-tabs" id="tabs" aria-label="วันที่เดินทาง"></div>
+              <div id="itinerary">
+                <p class="empty">กำหนดการจะแสดงที่นี่เมื่อสร้างทริป</p>
+              </div>
+            </section>
+          </section>
+          <section
+            class="actions panel bookings"
+            id="book-panel"
+            role="tabpanel"
+            aria-labelledby="book-tab"
+            hidden
+          >
+            <div class="panel-heading">
+              <span class="tile-icon warm">
+                <svg class="icon" aria-hidden="true">
+                  <use href="#i-book" />
+                </svg>
+              </span>
+              <h2>การจองและการติดตาม</h2>
+            </div>
+            <div id="reservations"></div>
+          </section>
+        </aside>
+        <div class="map-stage">
+          <section class="map-card panel">
+            <div class="panel-heading">
+              <span class="tile-icon aqua">
+                <svg class="icon" aria-hidden="true"><use href="#i-map" /></svg>
+              </span>
+              <h2>แผนที่ทริป</h2>
+              <button id="whole-map" type="button" class="quiet">ดูแผนที่ทั้งทริป</button>
+            </div>
+            <div id="map" aria-label="แผนที่สถานที่และเส้นทาง">
+              <p class="empty" id="map-fallback">แผนที่กำลังโหลด</p>
+            </div>
+            <p id="leg-label"></p>
+          </section>
+        </div>
+        <aside id="place-panel" class="place-reader" hidden aria-labelledby="place-title">
+          <div id="place-panel-content"></div>
+        </aside>
+        <aside id="options" aria-label="ทางเลือกในการปรับแผน"></aside>
+      </div>
+    </main>
+    <dialog id="setup-dialog" aria-labelledby="setup-title">
+      <div class="top">
+        <div class="top-inner">
+          <a class="brand" href="/" aria-label="Bop หน้าแรก">
+            <svg aria-hidden="true"><use href="#bop-mark" /></svg>
+            Bop
+          </a>
+          <span class="app-context">วางแผนทริปกลุ่ม</span>
+          <nav aria-label="ตัวเลือกทริป">
+            <p id="readiness" role="status">กำลังตรวจการเชื่อมต่อ Bop…</p>
+            <button type="button" class="icon-button" id="close-setup" aria-label="ปิดการตั้งค่าทริป">
+              <svg class="icon" aria-hidden="true"><use href="#i-close" /></svg>
+            </button>
+          </nav>
+        </div>
+      </div>
+      <form id="setup-form">
+        <div class="shell setup-content">
+          <div class="setup-intro">
+            <div>
+              <h1 id="setup-title" tabindex="-1" autofocus>เตรียมทริปใหม่</h1>
+              <p>เลือกจุดหมายและวันเดินทาง แล้วบอก Bop ว่าแต่ละคนอยากเที่ยวแบบไหน</p>
+            </div>
+          </div>
+          <div class="setup-grid">
+            <section class="panel setup-card trip-settings" aria-labelledby="setup-trip-heading">
+              <div class="panel-heading">
+                <span class="tile-icon">
+                  <svg class="icon" aria-hidden="true">
+                    <use href="#i-map" />
+                  </svg>
+                </span>
+                <h2 id="setup-trip-heading">รายละเอียดทริป</h2>
+              </div>
+              <div class="form-group first-group">
+                <label>
+                  เมืองปลายทาง
+                  <span class="input-icon">
+                    <svg class="icon" aria-hidden="true">
+                      <use href="#i-pin" />
+                    </svg>
+                    <input name="city" value="เชียงใหม่" required maxlength="120" autocomplete="off" />
+                  </span>
+                </label>
+                <p id="city-result" class="muted" role="status"></p>
+                <div class="fields date-fields">
+                  <label>
+                    วันเริ่มเดินทาง
+                    <input type="date" name="startDate" required />
+                  </label>
+                  <label>
+                    วันสุดท้าย
+                    <input type="date" name="endDate" required />
+                  </label>
+                </div>
+              </div>
+              <div class="form-group">
+                <label>
+                  ที่พัก
+                  <select name="stayMode">
+                    <option value="auto">ให้ Bop แนะนำ</option>
+                    <option value="booked">จองไว้แล้ว</option>
+                  </select>
+                </label>
+                <div id="stays" hidden>
+                  <div id="stay-rows"></div>
+                  <button class="quiet" id="add-stay" type="button">+ เพิ่มที่พัก</button>
+                  <p id="stay-total" class="muted"></p>
+                </div>
+              </div>
+              <details class="form-disclosure" open>
+                <summary>การเดินทางไป–กลับ</summary>
+                <div>
+                  <div class="fields" id="directions"></div>
+                  <label class="checkbox">
+                    <input type="checkbox" name="hasCar" />
+                    มีรถส่วนตัวระหว่างทริป
+                  </label>
+                </div>
+              </details>
+              <div class="form-group last-group">
+                <h3>รูปแบบการเที่ยว</h3>
+                <div class="fields">
+                  <label>
+                    จังหวะทริป
+                    <select name="pace">
+                      <option value="normal">พอดี ๆ</option>
+                      <option value="chill">ไปเรื่อย ๆ</option>
+                      <option value="packed">เที่ยวให้เต็มวัน</option>
+                    </select>
+                  </label>
+                  <label>
+                    การเลือกสถานที่
+                    <select name="autonomy">
+                      <option value="auto">ให้ Bop เลือก</option>
+                      <option value="ask">ให้กลุ่มเลือกก่อน</option>
+                    </select>
+                  </label>
+                </div>
+                <p class="feedback" id="form-error" role="alert"></p>
+              </div>
+            </section>
+            <section class="panel setup-card party-settings" aria-labelledby="setup-party-heading">
+              <div class="panel-heading">
+                <span class="tile-icon warm">
+                  <svg class="icon" aria-hidden="true">
+                    <use href="#i-people" />
+                  </svg>
+                </span>
+                <h2 id="setup-party-heading">เพื่อนร่วมทริป</h2>
+                <span id="setup-person-count" class="count"></span>
+              </div>
+              <div id="members"></div>
+              <div class="add-person">
+                <button class="quiet" type="button" id="add-member">
+                  <svg class="icon" aria-hidden="true">
+                    <use href="#i-plus" />
+                  </svg>
+                  เพิ่มสมาชิก
+                </button>
+              </div>
+            </section>
+          </div>
+        </div>
+        <footer class="setup-footer">
+          <div class="shell footer-inner">
+            <div class="summary-line">
+              <span class="tile-icon">
+                <svg class="icon" aria-hidden="true">
+                  <use href="#i-route" />
+                </svg>
+              </span>
+              <div>
+                <strong id="setup-summary">ทริปใหม่</strong>
+              </div>
+            </div>
+            <div class="setup-buttons">
+              <button id="setup-demo" type="button" class="quiet sample-link">
+                <svg class="icon" aria-hidden="true">
+                  <use href="#i-route" />
+                </svg>
+                ลองทริปตัวอย่าง
+                <span class="wide-text">เชียงใหม่</span>
+              </button>
+              <button class="primary start-plan" type="submit">
+                เริ่มวางแผน
+                <svg class="icon" aria-hidden="true">
+                  <use href="#i-arrow" />
+                </svg>
+              </button>
+            </div>
+          </div>
+        </footer>
+      </form>
+    </dialog>
+    <dialog id="detail" aria-label="รายละเอียดทริป">
+      <div id="detail-content"></div>
+      <button class="quiet" id="detail-close" type="button">ปิด</button>
+    </dialog>
+  </body>
 </html>

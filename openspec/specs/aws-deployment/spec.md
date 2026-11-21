@@ -1,7 +1,9 @@
 # aws-deployment Specification
 
 ## Purpose
-Define the deployed AWS architecture, release controls, state protection, secret handling and operational checks for the Bop proof of concept.
+Describe the AWS resources, build outputs and release checks declared in the reference repository. Terraform defaults and workflow steps below describe the reference at commit `292ba5f`. They do not establish which configuration a running AWS account currently uses.
+
+Evidence: `terraform/app/{edge,api_gateway,compute,database,storage,variables,observability,budget,versions}.tf`, `terraform/bootstrap/main.tf`, `.github/workflows/ci-cd.yml`, `scripts/package-lambda.sh`, `server/lambda-handler.mjs`, `server/runtime-secrets.mjs`, and the Lambda, packaged-handler and infrastructure regression scripts in `scripts/`.
 
 ## Requirements
 
@@ -35,11 +37,17 @@ The Node.js 24 arm64 Lambda SHALL run a bundled CommonJS handler beneath a packa
 - **THEN** packaging fails before Terraform planning or alias movement
 
 ### Requirement: Versioned Lambda rollout and rollback
-Terraform SHALL publish an immutable Lambda version and point API Gateway at the `live` alias. A candidate artifact SHALL be invokable through `$LATEST` before the alias moves, and an urgent rollback SHALL move the alias to a known-good version followed by Terraform reconciliation.
+Terraform SHALL publish an immutable function version from the versioned S3 artifact and point the `live` alias at the published version. API Gateway SHALL integrate with the alias and its deployment fingerprint SHALL include the function version and transfer mode. The workflow tests the packaged handler locally before apply, then probes the public endpoint after apply. Direct candidate invocation and emergency alias rollback are operator procedures.
 
-#### Scenario: Candidate fails initialization
-- **WHEN** direct response-stream invocation of `$LATEST` returns an initialization error
-- **THEN** the `live` alias remains on its previous healthy version
+#### Scenario: Source content changes
+
+- **WHEN** the normalized ZIP has a new content hash
+- **THEN** Terraform selects the corresponding release object version, publishes a Lambda version, and updates the alias and API deployment.
+
+#### Scenario: Public smoke check fails after apply
+
+- **WHEN** retries against the public health endpoint are exhausted or direct S3 access returns a status other than 403
+- **THEN** the deploy job fails. The workflow contains no automatic rollback step or pre-alias production invocation gate.
 
 ### Requirement: Runtime secrets
 Terraform SHALL create the KMS-encrypted Secrets Manager container without a secret version. Lambda SHALL receive only the secret identifier, load allowlisted fields at runtime and keep secret values out of Terraform state, Git, logs and browser responses.
@@ -67,7 +75,7 @@ GitHub Actions SHALL use OIDC credentials restricted to the immutable repository
 - **THEN** Terraform reports no changes and applies zero additions, changes and destructions
 
 ### Requirement: Defense in depth and operations
-CloudFront and API Gateway SHALL each have AWS WAF managed-rule and per-IP rate controls, starting in Count mode until logs are reviewed. WAF logs SHALL redact authorization and cookie fields. API Gateway and Lambda logs, X-Ray, alarms, a dashboard, SNS and a budget SHALL monitor the POC.
+CloudFront and API Gateway SHALL each have AWS WAF managed-rule and per-IP rate controls, starting in Count mode until logs are reviewed. WAF logs SHALL redact the Authorization, X-Bop-Trip-Token and Cookie headers. API Gateway and Lambda logs, X-Ray, alarms, a dashboard, SNS and a budget SHALL monitor the POC.
 
 #### Scenario: WAF promotion
 - **WHEN** representative Count-mode logs have been reviewed and false positives tuned
@@ -79,3 +87,54 @@ Supported AWS resources SHALL carry `Project=sea-openai`, `Workload=sea-openai`,
 #### Scenario: Cost inventory is queried
 - **WHEN** resources are filtered by the `sea-openai` workload tag
 - **THEN** the deployed CloudFront, API, compute, data, security, logging and budget resources are attributable to the workload
+
+### Requirement: Edge routing and cache behavior
+
+The distribution SHALL serve frontend GET, HEAD and OPTIONS requests from its S3 regional origin using signed OAC requests. The ordered `/api/*` behavior SHALL forward viewer requests over HTTPS to the environment stage of the REST API with caching disabled and the viewer Host header replaced. All seven standard viewer methods are allowed by this behavior. The API origin read timeout is 120 seconds and is distinct from the Lambda and Gateway execution limits.
+
+#### Scenario: Interactive plan and static asset hit the same distribution
+
+- **WHEN** a browser fetches a built asset and then sends a JSON plan request
+- **THEN** the frontend object has a one-year immutable cache header under `assets/`, other uploaded frontend files use `no-cache`, and the POST reaches the API stage with its body, query and application headers.
+
+### Requirement: Lambda request adapter and resource limits
+
+The function SHALL use Node.js 24 on arm64 with 1,024 MiB of memory, 512 MiB of ephemeral storage and a 300-second timeout. Its adapter SHALL reconstruct a Node-style HTTP request, preserve webhook body bytes, lower-case header names and flush status and headers exactly once before streaming the application response. Lazy initialization SHALL load secrets before importing the API and reuse that initialization on warm invocations.
+
+#### Scenario: Encoded webhook and repeated query parameters
+
+- **WHEN** the event marks its body as base64 or carries multiple values for a query key
+- **THEN** the adapter decodes the original bytes before verification. URL reconstruction prefers the raw query if supplied, then the multi-value map, then the single-value map.
+
+#### Scenario: Production environment defaults
+
+- **WHEN** the reference Terraform configuration creates a function revision
+- **THEN** OpenAI is selected, the local cache is under `/tmp/bop/cache`, the state-table and runtime-secret identifiers are passed to the function, live flight booking is disabled and the LINE monthly cap is 200.
+
+### Requirement: CI validation, rollout and release identity
+
+Pull requests SHALL run the package/test/build procedure, Terraform formatting checks and offline-backend configuration validation for both stacks. The deploy job SHALL require successful validation, a push or manual dispatch on `main`, all required repository variables, and a matching STS account. It SHALL initialize a lockfile-enabled S3 backend and apply the saved application plan.
+
+#### Scenario: Bundle construction rejects an incomplete release
+
+- **WHEN** tests fail, the frontend worker is missing or empty, the production dependency audit fails at high severity, the packaged CommonJS health regression fails, or the package exceeds 250 MiB uncompressed
+- **THEN** packaging stops. The expected package contains the CommonJS handler and route seed, with normalized modes and timestamps. Terraform uses the ZIP SHA-256 in the release object key.
+
+#### Scenario: Checks performed by the deploy job
+
+- **WHEN** infrastructure apply succeeds
+- **THEN** the workflow retries the public health request and checks for HTTP 403 on direct S3 access to `index.html`. The health probe requires HTTP success and does not exercise a billed model call.
+
+### Requirement: Operational defaults and observability
+
+The default API stage SHALL enable X-Ray, metrics, ERROR logging and structured access logs. It SHALL disable body data tracing and stage caching, with configurable steady/burst throttles defaulting to 10/20. Both WAFs SHALL evaluate the Common and Known Bad Inputs managed rule groups and default to counting requests; the body-size managed rule retains its count override. Default rate thresholds are 100 requests per IP per five minutes. The edge rate rule is scoped to the API path.
+
+#### Scenario: Workload monitoring
+
+- **WHEN** default monitoring is provisioned
+- **THEN** the stack defines alarms for CloudFront 5xx, API 5xx, Lambda errors, DynamoDB throttling and WAF blocks, plus a dashboard and SNS topic. The default application log retention is 30 days.
+
+#### Scenario: Budget notification
+
+- **WHEN** tagged monthly costs exceed the configured forecast or actual thresholds
+- **THEN** the budget publishes via SNS at forecast above 80% or actual above 100% of the configurable limit (default USD 50). Attribution depends on the Project billing tag being active. The optional email subscription requires confirmation.

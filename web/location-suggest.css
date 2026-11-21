@@ -1,0 +1,54 @@
+.location-picker {
+  display: block;
+  position: relative;
+  min-width: 0;
+}
+
+.location-list {
+  position: absolute;
+  inset-inline: 0;
+  top: calc(100% + 0.25rem);
+  z-index: 12;
+  display: block;
+  max-height: min(16rem, 33vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: var(--paper);
+  color: var(--ink);
+  border: 1px solid var(--edge);
+  border-radius: 0.6rem;
+  box-shadow: var(--shadow);
+}
+
+.location-list[hidden] {
+  display: none;
+}
+
+.location-option {
+  display: block;
+  padding: 0.65rem 0.75rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.location-option:hover,
+.location-option[aria-selected='true'] {
+  background: var(--route-tint, var(--tint));
+  color: var(--route, var(--accent-dark));
+}
+
+.location-option[aria-selected='true'] {
+  box-shadow: inset 3px 0 currentColor;
+}
+
+.location-announcement {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}

@@ -24,3 +24,4 @@ terraform/**/generated/
 /map-live.png
 /map-fixed.png
 /.claude/
+build/

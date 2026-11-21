@@ -11,7 +11,7 @@ async function getApi() {
       const loaded = await loadRuntimeSecrets();
       if (loaded.length) console.info(`[bop] loaded ${loaded.length} runtime secret fields`);
       // The model module selects its provider and API key when it is imported.
-      const { handleRequest } = await import('./index.mjs');
+      const { handleRequest } = await import('./http.mjs');
       return handleRequest;
     })().catch(error => {
       // Let a later invocation retry after transient Secrets Manager failures.
@@ -57,7 +57,8 @@ class LambdaResponse extends EventEmitter {
     rawStream.on?.('close', () => this.emit('close'));
   }
 
-  setHeader(name, value) { this.headers.set(String(name).toLowerCase(), { name, value: String(value) }); }
+  setHeader(name, value) { this.headers.set(String(name).toLowerCase(), String(value)); }
+  get headersSent() { return this.stream !== null; }
   get writableFinished() { return this.rawStream.writableFinished; }
 
   writeHead(statusCode, headers = {}) {
@@ -69,7 +70,7 @@ class LambdaResponse extends EventEmitter {
 
   flushHeaders() {
     if (this.stream) return;
-    const headers = Object.fromEntries([...this.headers.values()].map(({ name, value }) => [name, value]));
+    const headers = Object.fromEntries(this.headers);
     this.stream = this.responseFactory(this.rawStream, { statusCode: this.statusCode, headers });
   }
 
@@ -98,6 +99,8 @@ export async function handleApiGatewayEvent(event, responseStream, runtime = glo
   request.url = requestUrl(event);
   request.method = event.httpMethod || event.requestContext?.http?.method || 'GET';
   request.headers = requestHeaders(event);
+  const identity = event.requestContext?.authorizer;
+  request.verifiedUser = identity?.claims?.sub || identity?.jwt?.claims?.sub || identity?.principalId;
 
   const handleRequest = await getApi();
   const response = new LambdaResponse(responseStream, runtime.HttpResponseStream.from);
@@ -107,7 +110,11 @@ export async function handleApiGatewayEvent(event, responseStream, runtime = glo
   ]);
 }
 
-async function streamingHandler(event, responseStream, context) {
+export function invoke(event, responseStream, responseFactory) {
+  return handleApiGatewayEvent(event, responseStream, { HttpResponseStream: { from: responseFactory } });
+}
+
+async function streamingHandler(event, responseStream, context = {}) {
   context.callbackWaitsForEmptyEventLoop = false;
   await handleApiGatewayEvent(event, responseStream);
 }

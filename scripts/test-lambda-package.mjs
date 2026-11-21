@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readdirSync, statSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -14,6 +14,9 @@ function checkModes(directory) {
   }
 }
 checkModes(root);
+assert.ok(Object.keys(JSON.parse(readFileSync(path.join(root, 'src/routes.json')))).length);
+process.env.LAMBDA_TASK_ROOT = root;
+process.env.BOP_NO_STORE = '1';
 
 process.env.BOP_FAKE_LLM = '1';
 process.env.BOP_SPLIT_MIN_DAYS = '3';

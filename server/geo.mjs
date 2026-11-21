@@ -1,154 +1,289 @@
+import { legKey, routeResult } from './route-result.mjs';
+export { legKey };
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { setTimeout as delay } from 'node:timers/promises';
 import { cities, coordinates, distance } from './domain.mjs';
+export { weather } from './weather.mjs';
 
-const cache = new Map();
-const blockedUntil = new Map();
-const pendingWeather = new Map();
-const forecastCache = new Map();
-let weatherFailures = 0;
-let weatherBlockedUntil = 0;
-async function lookup(url, signal, ttl = 900_000) {
-  const old = cache.get(url.href);
-  if (old && old.until > Date.now()) return old.value;
-  if ((blockedUntil.get(url.host) ?? 0) > Date.now()) return null;
+const dir = process.env.BOP_CACHE_DIR || fileURLToPath(new URL('./.cache', import.meta.url));
+const data = { routes: new Map(), cities: new Map(), geocode: new Map() },
+  timers = new Map(),
+  writes = new Map();
+async function loadFile(path, into) {
   try {
-    const response = await fetch(url, {
-      headers: { 'User-Agent': 'BopTripPlanner/1.0 (group itinerary planner)' },
+    for (const [key, value] of Object.entries(JSON.parse(await readFile(path, 'utf8')))) into.set(key, value);
+  } catch {}
+}
+const ready = (async () => {
+  const seed = process.env.LAMBDA_TASK_ROOT
+    ? join(process.env.LAMBDA_TASK_ROOT, 'src', 'routes.json')
+    : fileURLToPath(new URL('../src/routes.json', import.meta.url));
+  await loadFile(seed, data.routes);
+  await Promise.all(Object.entries(data).map(([name, into]) => loadFile(join(dir, name + '.json'), into)));
+})();
+function save(bucket, key, value) {
+  const map = data[bucket];
+  if (map.size >= 12000) map.delete(map.keys().next().value);
+  map.set(key, value);
+  clearTimeout(timers.get(bucket));
+  timers.set(
+    bucket,
+    setTimeout(() => {
+      const write = async () => {
+        const tmp = join(dir, bucket + '.' + crypto.randomUUID() + '.tmp');
+        try {
+          await mkdir(dir, { recursive: true });
+          await writeFile(tmp, JSON.stringify(Object.fromEntries(map)));
+          await rename(tmp, join(dir, bucket + '.json'));
+        } catch (error) {
+          console.warn('Bop cache:', error.message);
+        }
+      };
+      writes.set(bucket, (writes.get(bucket) ?? Promise.resolve()).then(write));
+    }, 500).unref(),
+  );
+}
+const active = new Map(),
+  breakers = new Map();
+function once(key, work) {
+  if (active.has(key)) return active.get(key);
+  const task = work().finally(() => active.delete(key));
+  active.set(key, task);
+  return task;
+}
+function queue(width, gap) {
+  const pending = [];
+  let used = 0;
+  function start() {
+    while (used < width && pending.length) {
+      const { work, resolve, reject } = pending.shift();
+      used++;
+      Promise.resolve()
+        .then(work)
+        .then(resolve, reject)
+        .finally(async () => {
+          if (gap) await delay(gap);
+          used--;
+          start();
+        });
+    }
+  }
+  return (work) =>
+    new Promise((resolve, reject) => {
+      pending.push({ work, resolve, reject });
+      start();
+    });
+}
+const osmQueue = queue(1, 1100),
+  routeQueue = queue(3, 120);
+function query(address, params) {
+  const url = new URL(address);
+  for (const [key, value] of Object.entries(params))
+    if (value != null) url.searchParams.set(key, String(value));
+  return url;
+}
+async function lookup(url, signal) {
+  signal.throwIfAborted();
+  if (!breakers.has(url.host)) breakers.set(url.host, { count: 0, until: 0 });
+  const breaker = breakers.get(url.host);
+  if (breaker.until > Date.now()) return null;
+  try {
+    const res = await fetch(url, {
+      headers: { 'User-Agent': 'BopTripPlanner/1.0 (group itinerary planner)', 'Accept-Language': 'en' },
       signal: AbortSignal.any([signal, AbortSignal.timeout(3500)]),
     });
-    if (!response.ok) throw new Error('Upstream ' + response.status);
-    const value = await response.json();
-    if (cache.size >= 1500) cache.delete(cache.keys().next().value);
-    cache.set(url.href, { value, until: Date.now() + ttl });
-    return value;
-  } catch (error) {
+    if (res.status === 429) breaker.until = Date.now() + 600_000;
+    if (!res.ok) throw new Error('Upstream ' + res.status);
+    const json = await res.json();
+    breaker.count = 0;
+    breaker.until = 0;
+    return json;
+  } catch {
     signal.throwIfAborted();
-    blockedUntil.set(url.host, Date.now() + 60_000);
+    if (++breaker.count >= 2) {
+      breaker.until = Date.now() + 600_000;
+      breaker.count = 0;
+    }
+    breakers.set(url.host, breaker);
     return null;
   }
 }
-function query(address, params) {
-  const url = new URL(address);
-  for (const [key, value] of Object.entries(params)) url.searchParams.set(key, String(value));
-  return url;
+async function photon(name, signal, center) {
+  const result = await lookup(
+    query('https://photon.komoot.io/api/', { q: name, limit: 5, lat: center?.[0], lon: center?.[1] }),
+    signal,
+  );
+  return (
+    result?.features?.map((f) => ({
+      name: f.properties?.name,
+      cc: f.properties?.countrycode,
+      kind: f.properties?.osm_key,
+      type: f.properties?.osm_value,
+      ll: f.geometry?.coordinates?.slice(0, 2).reverse(),
+    })) ?? null
+  );
 }
-async function photon(name, signal) {
-  const result = await lookup(query('https://photon.komoot.io/api/', { q: name, limit: 5 }), signal);
-  return (result?.features ?? []).map(feature => ({
-    name: feature.properties.name, cc: feature.properties.countrycode,
-    ll: feature.geometry.coordinates.slice(0, 2).reverse(), kind: feature.properties.osm_key,
-  }));
+async function nominatim(name, signal, limit = 5) {
+  const result = await osmQueue(() =>
+    lookup(
+      query('https://nominatim.openstreetmap.org/search', {
+        q: name,
+        limit,
+        format: 'jsonv2',
+        addressdetails: 1,
+        'accept-language': 'en',
+      }),
+      signal,
+    ),
+  );
+  return Array.isArray(result)
+    ? result.map((h) => ({
+        name: h.name || h.display_name?.split(',')[0],
+        cc: h.address?.country_code?.toUpperCase(),
+        ll: [Number(h.lat), Number(h.lon)],
+        kind: h.category ?? h.class,
+        type: h.type,
+      }))
+    : null;
 }
-async function nominatim(name, signal) {
-  const result = await lookup(query('https://nominatim.openstreetmap.org/search', {
-    q: name, limit: 5, format: 'jsonv2', addressdetails: 1,
-  }), signal);
-  return (result ?? []).map(hit => ({
-    name: hit.name, cc: hit.address?.country_code?.toUpperCase(), ll: [+hit.lat, +hit.lon], kind: hit.category,
-  }));
+export async function findCity(name, signal = new AbortController().signal) {
+  await ready;
+  const key = name.trim().toLowerCase();
+  if (!key) return null;
+  if (Object.hasOwn(cities, key)) return { name: key, ...cities[key] };
+  if (data.cities.has(key)) return data.cities.get(key);
+  return once('city:' + key, async () => {
+    const h =
+      (await nominatim(name, signal, 1))?.find((x) => coordinates(x.ll)) ??
+      (await photon(name, signal))?.find((x) => coordinates(x.ll) && ['place', 'boundary'].includes(x.kind));
+    if (!h) return null;
+    const value = { name: h.name || name, cc: h.cc?.toUpperCase() || '', ll: h.ll };
+    save('cities', key, value);
+    return value;
+  });
 }
-export async function findCity(name, signal) {
-  if (Object.hasOwn(cities, name)) return { name, ...cities[name] };
-  for (const search of [nominatim, photon]) {
-    const hit = (await search(name, signal)).find(item => coordinates(item.ll) && !['highway', 'landuse'].includes(item.kind));
-    if (hit) return { name: hit.name || name, cc: hit.cc ?? '', ll: hit.ll };
+const realPoi = (h) =>
+  coordinates(h.ll) &&
+  !['highway', 'place', 'boundary', 'landuse', 'railway', 'power'].includes(h.kind) &&
+  !(h.kind === 'natural' && h.type === 'peak');
+export async function findPlace(name, center, radius = 3, signal = new AbortController().signal, batch) {
+  if (!name?.trim() || !coordinates(center)) return null;
+  await ready;
+  const key = [name.trim().toLowerCase(), center.map((v) => v.toFixed(2)), radius].join('|');
+  if (data.geocode.has(key)) return data.geocode.get(key);
+  return once('poi:' + key, async () => {
+    const acceptable = (h) => realPoi(h) && distance(center, h.ll) <= radius;
+    const primary = await photon(name, signal, center);
+    let hit = primary?.find(acceptable);
+    let secondary = null;
+    if (!hit && (!batch || batch.remaining > 0)) {
+      if (batch) batch.remaining--;
+      secondary = await nominatim(name, signal);
+      hit = secondary?.find(acceptable);
+    }
+    if (hit || (primary && secondary && radius === 3)) save('geocode', key, hit?.ll ?? null);
+    return hit?.ll ?? null;
+  });
+}
+
+function decodeShape(encoded) {
+  let offset = 0,
+    lat = 0,
+    lng = 0;
+  const points = [];
+  function unit() {
+    let bit = 0,
+      value = 0;
+    while (offset < encoded.length && bit < 32) {
+      const byte = encoded.charCodeAt(offset++) - 63;
+      value |= (byte & 31) << bit;
+      bit += 5;
+      if (byte < 32) return value & 1 ? ~(value >> 1) : value >> 1;
+    }
+    throw new Error('Incomplete geometry');
   }
-  return null;
-}
-export async function findPlace(name, center, radius, signal) {
-  for (const search of [photon, nominatim]) {
-    const hit = (await search(name, signal)).find(item => coordinates(item.ll)
-      && !['highway', 'boundary', 'landuse'].includes(item.kind) && distance(center, item.ll) <= radius);
-    if (hit) return hit.ll;
+  try {
+    while (offset < encoded.length) {
+      lat += unit();
+      lng += unit();
+      points.push([lng / 1e6, lat / 1e6]);
+    }
+  } catch {
+    return [];
   }
-  return null;
+  return points;
 }
-export async function route(from, to, mode, signal, offline = false) {
-  const km = distance(from, to);
-  const fallback = { geometry: [from, to], km, min: Math.ceil(km * (mode === 'walk' ? 14 : 3)), real: false };
-  if (offline || km < .02) return fallback;
-  const walk = mode === 'walk';
-  const pair = [from, to].map(ll => [...ll].reverse().join(',')).join(';');
-  const osrm = await lookup(query(
-    'https://routing.openstreetmap.de/routed-' + (walk ? 'foot' : 'car') + '/route/v1/' + (walk ? 'foot' : 'driving') + '/' + pair,
-    { overview: 'full', geometries: 'geojson' },
-  ), signal);
-  const road = osrm?.routes?.[0];
-  if (road) return { geometry: road.geometry.coordinates.map(ll => [...ll].reverse()), km: road.distance / 1000, min: Math.ceil(road.duration / 60), real: true };
-  const valhalla = await lookup(query('https://valhalla1.openstreetmap.de/route', { json: JSON.stringify({
-    locations: [from, to].map(([lat, lon]) => ({ lat, lon })), costing: walk ? 'pedestrian' : 'auto', shape_format: 'geojson',
-  }) }), signal);
-  const trip = valhalla?.trip;
-  const shape = trip?.legs?.[0]?.shape;
-  if (shape?.coordinates) return {
-    geometry: shape.coordinates.map(ll => [...ll].reverse()), km: trip.summary.length,
-    min: Math.ceil(trip.summary.time / 60), real: true,
+function measure(geom, sec, meters, via) {
+  if (
+    !Array.isArray(geom) ||
+    geom.length < 2 ||
+    !geom.every((p) => Array.isArray(p) && p.length >= 2 && p.slice(0, 2).every(Number.isFinite)) ||
+    !Number.isFinite(sec) ||
+    !Number.isFinite(meters) ||
+    sec < 0 ||
+    meters < 0
+  )
+    return null;
+  return {
+    geom: geom.map((pair) => pair.slice(0, 2).map((v) => Number(v.toFixed(5)))),
+    sec: Math.round(sec),
+    meters: Math.round(meters),
+    via,
   };
-  return fallback;
 }
-async function forecast(latitude, longitude, date, today, signal) {
-  const id = latitude + ',' + longitude + '|' + date;
-  const hit = forecastCache.get(id);
-  if (hit?.until > Date.now()) return hit.data;
-  if (pendingWeather.has(id)) return pendingWeather.get(id);
-  if (weatherBlockedUntil > Date.now()) return null;
-  const task = (async () => {
-    const key = process.env.OPEN_METEO_API_KEY;
-    const url = query(key ? 'https://customer-api.open-meteo.com/v1/forecast' : 'https://api.open-meteo.com/v1/forecast',
-      { latitude, longitude, timezone: 'auto', hourly: 'precipitation,precipitation_probability',
-        start_date: date, end_date: date, ...(key ? { apikey: key } : {}) });
-    try {
-      const response = await fetch(url, { signal: AbortSignal.any([signal, AbortSignal.timeout(4500)]) });
-      if (response.status === 429) weatherBlockedUntil = Date.now() + 600_000;
-      if (!response.ok) throw new Error('Unavailable forecast');
-      const data = (await response.json()).hourly;
-      if (!data) throw new Error('Missing hourly data');
-      weatherFailures = 0;
-      if (forecastCache.size >= 1000) forecastCache.delete(forecastCache.keys().next().value);
-      forecastCache.set(id, { data, until: Date.now() + (Date.parse(date) - Date.parse(today) <= 172_800_000 ? 3600000 : 10800000) });
-      return data;
-    } catch {
-      signal.throwIfAborted();
-      if (++weatherFailures >= 2) {
-        weatherBlockedUntil = Date.now() + 600_000;
-        weatherFailures = 0;
-      }
-      return null;
-    }
-  })();
-  pendingWeather.set(id, task);
-  try { return await task; } finally { pendingWeather.delete(id); }
-}
-export async function weather(plan, signal, today = new Date().toISOString().slice(0, 10)) {
-  const alerts = [];
-  const end = new Date(Date.parse(today) + 15 * 86_400_000).toISOString().slice(0, 10);
-  const exposed = (plan.days ?? []).flatMap((day, index) => day.stops.filter(stop =>
-    coordinates(stop.ll) && (['nature', 'view'].includes(stop.kind) || stop.outdoor === true))
-    .map(stop => ({ day, index, stop })));
-  const inRange = exposed.filter(({ day }) => today <= day.date && day.date <= end);
-  let succeeded = 0;
-  await Promise.all(inRange.map(async ({ day, index, stop }) => {
-    const [latitude, longitude] = stop.ll.map(value => value.toFixed(2));
-    const data = await forecast(latitude, longitude, day.date, today, signal);
-    if (!data) return;
-    succeeded++;
-    const hours = data.time.flatMap((time, i) => {
-      const hh = time.slice(11);
-      const nextHour = String(Number(hh.slice(0, 2)) + 1).padStart(2, '0') + ':00';
-      if (!time.startsWith(day.date) || hh >= stop.end || nextHour <= stop.start) return [];
-      const mm = data.precipitation[i];
-      const prob = data.precipitation_probability[i];
-      const heavy = mm >= 2.5 || (mm >= 1 && prob >= 70);
-      return heavy || (prob >= 50 && mm >= .5) ? [{ hh, end: nextHour, mm, prob, heavy }] : [];
-    });
-    if (hours.length) {
-      alerts.push({
-        stopId: stop.id, n: stop.name, day: index, date: day.date,
-        level: hours.some(hour => hour.heavy) ? 'heavy' : 'likely',
-        from: hours[0].hh, to: hours.at(-1).end, mm: Math.max(...hours.map(hour => hour.mm)), prob: Math.max(...hours.map(hour => hour.prob)),
-        trend: Date.parse(day.date) - Date.parse(today) > 3 * 86_400_000, source: 'open-meteo', fetchedAt: new Date().toISOString(),
-      });
-    }
-  }));
-  const reason = inRange.length && !succeeded ? 'unavailable' : exposed.length && !inRange.length ? 'beyond_horizon' : undefined;
-  return { alerts: alerts.sort((a, b) => a.day - b.day || a.from.localeCompare(b.from)), reason, horizon: { from: today, to: end } };
+export async function route(from, to, mode, signal, offline = false, leg = {}) {
+  await ready;
+  const key = legKey(from, to, mode),
+    km = distance(from, to);
+  let measured = data.routes.get(key),
+    via = measured ? 'cache' : null;
+  if (measured?.approx && !offline) measured = null;
+  if (!measured && !offline && km >= 0.001) {
+    measured = await once('route:' + key, () =>
+      routeQueue(async () => {
+        const walk = mode === 'walk',
+          pair = [from, to].map(([lat, lng]) => lng + ',' + lat).join(';');
+        const osrm = await lookup(
+          query(
+            'https://routing.openstreetmap.de/routed-' +
+              (walk ? 'foot' : 'car') +
+              '/route/v1/' +
+              (walk ? 'foot' : 'driving') +
+              '/' +
+              pair,
+            { overview: 'full', geometries: 'geojson' },
+          ),
+          signal,
+        );
+        const first = osrm?.routes?.[0];
+        let answer = measure(first?.geometry?.coordinates, first?.duration, first?.distance, 'OSRM');
+        if (!answer) {
+          const val = await lookup(
+            query('https://valhalla1.openstreetmap.de/route', {
+              json: JSON.stringify({
+                locations: [from, to].map(([lat, lon]) => ({ lat, lon })),
+                costing: walk ? 'pedestrian' : 'auto',
+                units: 'kilometers',
+              }),
+            }),
+            signal,
+          );
+          const trip = val?.trip,
+            shape = trip?.legs?.[0]?.shape;
+          answer = measure(
+            typeof shape === 'string' ? decodeShape(shape) : shape?.coordinates,
+            trip?.summary?.time,
+            trip?.summary?.length * 1000,
+            'Valhalla',
+          );
+        }
+        if (answer) save('routes', key, answer);
+        return answer;
+      }),
+    );
+    via = measured?.via;
+  }
+  return routeResult(from, to, mode, leg, measured, via);
 }

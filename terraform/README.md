@@ -27,7 +27,7 @@ Workload=sea-openai
 ManagedBy=Terraform
 ```
 
-The application stack also manages an on-demand DynamoDB table with deletion protection and 35 days of point-in-time recovery. The current planner keeps its trip data in the browser.
+The application stack also manages an on-demand DynamoDB table with deletion protection and 35 days of point-in-time recovery. The planner keeps editable itineraries in the browser. The API uses this table for LINE group links and ballots, webhook deduplication, quotas, booking idempotency and minimal order records.
 
 ## Prerequisites
 
