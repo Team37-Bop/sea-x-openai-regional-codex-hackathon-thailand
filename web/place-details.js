@@ -492,7 +492,6 @@ export async function openPlaceSheet(context) {
   panel.hidden = false;
   panel.scrollTop = 0;
   close.focus({ preventScroll: true });
-  if (matchMedia('(max-width: 860px)').matches) panel.scrollIntoView({ block: 'start' });
   window.addEventListener(
     'keydown',
     (event) => {

@@ -112,12 +112,12 @@ Switching between the itinerary and bookings SHALL change the contents of the tr
 
 ### Requirement: Docked place cards and persistent map
 
-The desktop workspace SHALL keep the timeline or booking list at the left and the map in the main area. Selecting a stop SHALL open a third adjacent column for place details and leave the map and itinerary interactive. On a narrow screen the map, expanded place card and selected tab content SHALL stack without a modal overlay.
+The desktop workspace SHALL keep the timeline or booking list at the left and the map in the main area. Selecting a stop SHALL open a non-modal place panel anchored inside the left edge of the map. The timeline and map SHALL retain their width. On narrow screens the place panel SHALL attach to the bottom of the viewport, keep the map or itinerary partly visible, and offer a close action.
 
 #### Scenario: Exploring a place while keeping trip context
 
 - **WHEN** the organizer selects an itinerary row or map marker
-- **THEN** the same stop is selected on the map and timeline. The place card opens beside the map or below it at narrow widths. Escape or the close control restores focus to the stop.
+- **THEN** the same stop is selected on the map and timeline. The place card opens along the left edge of the map or at the bottom of a narrow viewport. Escape or the close control restores focus to the stop.
 
 #### Scenario: Open a timeline stop
 

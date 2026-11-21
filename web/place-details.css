@@ -1,52 +1,31 @@
-/* Opening a place creates a third column; the map and timeline retain their own space. */
 #place-panel {
   --reader-ink: var(--ink);
   --reader-border: var(--line);
   --reader-wash: var(--surface-2);
-  min-inline-size: 0;
+  position: absolute;
+  z-index: 4;
+  inset-block: 12px;
+  inset-inline-start: 12px;
+  width: min(370px, 61%);
   container: place / inline-size;
-  border-inline-start: 1px solid var(--line);
   overflow: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--line);
+  border-radius: 12px;
   background: var(--paper);
   color: var(--ink);
+  box-shadow: 0 6px 24px #26322a29;
   scrollbar-gutter: stable;
 }
-@media (min-width: 861px) {
-  .trip-board:has(#place-panel:not([hidden])) {
-    grid-template-columns: minmax(255px, min(29vw, 410px)) minmax(0, 1fr) minmax(262px, min(31vw, 430px));
-  }
-  .trip-board:has(#place-panel:not([hidden])) > #options:not(:empty) {
-    position: static;
-    grid-column: 3;
-    grid-row: 2;
-    width: auto;
-    max-height: 28dvh;
-  }
-  .trip-board:has(#place-panel:not([hidden])):has(#options:not(:empty)) .trip-sidebar,
-  .trip-board:has(#place-panel:not([hidden])):has(#options:not(:empty)) .map-stage {
-    grid-row: span 2;
-  }
-}
-@media (min-width: 861px) and (max-width: 1050px) {
-  .trip-board:has(#place-panel:not([hidden])) .view-tabs {
-    gap: 4px;
-    padding-inline: 6px;
-  }
-  .trip-board:has(#place-panel:not([hidden])) .view-tabs button {
-    gap: 4px;
-    padding-inline: 7px;
-    white-space: nowrap;
-  }
-}
 @media (max-width: 860px) {
-  html:has(#place-panel:not([hidden])) { overflow-anchor: none; }
   #place-panel {
-    order: 2;
-    border-inline-start: 0;
-    border-block: 1px solid var(--edge);
-    scroll-margin-top: 8px;
-    scrollbar-gutter: auto;
-    overflow: visible;
+    position: fixed;
+    z-index: 10;
+    inset: auto 0 0;
+    width: auto;
+    max-height: 68dvh;
+    border-radius: 16px 16px 0 0;
+    padding-bottom: env(safe-area-inset-bottom);
   }
 }
 .place-reader #place-panel-content {
