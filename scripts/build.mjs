@@ -5,6 +5,8 @@ await mkdir('dist/assets', { recursive: true });
 // The release only contains reviewed public files. Reject symlinks at each allowlisted path.
 const publicFiles = [
   'app.js',
+  'assets/anuphan-ofl.txt',
+  'assets/anuphan-variable.woff2',
   'booking-tasks.css',
   'booking-tasks.js',
   'candidate-survey.css',
@@ -24,6 +26,7 @@ const publicFiles = [
   'place-details.js',
   'plan-review.css',
   'plan-review.js',
+  'planner-theme.css',
   'sample-place-details.js',
   'saved-map.js',
   'setup-extras.js',
