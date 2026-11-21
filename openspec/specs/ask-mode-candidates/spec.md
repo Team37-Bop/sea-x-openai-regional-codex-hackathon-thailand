@@ -1,7 +1,8 @@
 # ask-mode-candidates Specification
 
 ## Purpose
-In ask mode (`autonomy: 'ask'`) Bop first proposes candidate restaurants, sights and stay areas with photos, the group answers each one, and `/api/plan` then plans around the answers. Code: `runCandidates` in `server/agent.mjs`, `candidates`/`findPages` in `server/claude.mjs` and `server/cli-llm.mjs`, the ask dialog in `src/main.js`.
+
+Ask mode collects group preferences before itinerary design. The candidate service discovers places, enriches them with coordinates and images, and retains enough metadata to interpret the next request. Reference evidence in prep commit `292ba5f` includes `server/agent.mjs` (`runCandidates`, `normalizeSetup`, `matchesPick`, `pickIssues`), `server/photos.mjs`, `server/openai.mjs`, `src/main.js` (`startAsk`, `normQuestions`, `askAct`), `src/ui/place.js`, and `scripts/test-images.mjs`.
 
 ## Requirements
 
@@ -42,8 +43,44 @@ The UI SHALL show questions one at a time with each option answered สนใจ
 
 #### Scenario: Skip to auto
 - **WHEN** the organizer presses Escape in the ask dialog
-- **THEN** planning starts in auto mode with the answers given so far
+- **THEN** planning starts directly with the original setup and the answers collected so far
 
 #### Scenario: Photo badge
 - **WHEN** an option photo has `match: 'likely'`
 - **THEN** the card shows the badge "รูปจากเว็บ"
+
+### Requirement: Question and option normalization
+
+The candidate handler SHALL validate the setup as for normal planning, omit previous picks from the discovery prompt and localize search using the destination city and country when resolved. It SHALL inspect the first three model questions, drop questions with no named options, and limit the surviving named options to six per question. Unrecognized kinds default to `sight`. The response carries `questions`, elapsed milliseconds and aggregated `usage`.
+
+#### Scenario: Blank question title or repeated option IDs
+- **WHEN** the model supplies a blank title, unnamed options or multiple options with the same slug
+- **THEN** the server uses a Thai fallback title, drops unnamed options and adds trailing underscores until each generated option ID is unique across that response
+
+#### Scenario: Descriptive metadata
+- **WHEN** the model supplies a long name, explanation, price hint and tags
+- **THEN** the name is limited to 120 characters, the explanation to 200, the optional price hint to 60, and at most four nonempty tags of 24 characters each survive. A displayed source requires both a web check and a URL recorded by the search
+
+#### Scenario: Photo metadata and failures
+- **WHEN** an option lacks its own confirmed source but the model supplied a public page as a photo hint
+- **THEN** the collector can inspect the page for a matched image independently of source verification. The option returns a successful photo or omits it. Research-only queries, aliases, page hints and temporary geocoding inputs are removed from the response
+
+### Requirement: Pick continuity and limits
+
+The server SHALL remember each option’s name, query, resolved coordinates and kind in process memory. When normalizing the planning request it SHALL accept up to 15 named must-pick objects and the first 30 avoided entries. Valid coordinates on a submitted must-pick take precedence over remembered coordinates. Must-picks can match by name, query or distance of at most 250 m. Avoided places match by name or remembered query.
+
+#### Scenario: Process restarted between steps
+- **WHEN** the organizer supplies a complete must-pick object but the server no longer has its ID in memory
+- **THEN** the submitted name and valid coordinates can still be used. A bare unknown avoid ID supplies only its string as the fallback name, so durable ID resolution across instances is unavailable
+
+#### Scenario: One option selected twice
+- **WHEN** a user repeats the same answer on a candidate card
+- **THEN** the UI clears that answer. Skipping a question clears all answers on the current question and preserves earlier answers
+
+#### Scenario: Candidate discovery returns no choices
+- **WHEN** the response has no usable questions after normalization
+- **THEN** the browser starts itinerary design directly. For older responses containing a flat `candidates` array it first groups options into questions
+
+#### Scenario: Cancelled or replaced request
+- **WHEN** another planning operation supersedes candidate discovery
+- **THEN** the UI aborts the earlier request and ignores subsequent results from the old request

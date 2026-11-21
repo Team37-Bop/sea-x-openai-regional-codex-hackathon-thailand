@@ -1,7 +1,10 @@
 # constraint-checks Specification
 
 ## Purpose
-`checks(plan, setup)` and `explain(plan, setup)` in `src/plan.js` evaluate every member rule and system rule on a plan. The browser recomputes them on every plan change; the server uses them to decide on a repair and to describe failures to the model. Both run without a network or a model.
+
+Compute member and system checks from a scheduled plan in both the browser and the planner's repair loop. The evaluation uses supplied schedule facts, prices and food labels.
+
+Reference implementation in the prep repository at `292ba5f` includes `src/plan.js` (`dayStats`, `evalRules`, `checks`, `explain`, `stopFromSpec`) and `server/agent.mjs` (`report`, `failingDays`). Executable cases are in `scripts/test-closed.mjs`, `scripts/test-diet.mjs` and `scripts/test-stays.mjs`.
 
 ## Requirements
 
@@ -54,7 +57,7 @@ The rule "เปิดวันที่ไป" SHALL fail when a stop's trip da
 - **THEN** the rule fails with "ปิดวันที่ 2026-12-25 (คริสต์มาส)"
 
 ### Requirement: Meals
-Every day SHALL have a lunch stop starting 11:00-14:00 and a dinner stop ending after 17:30 and starting before 20:30, except lunch on day 1 when arrival is after 13:00, lunch on the last day when departure is before 13:00, and dinner on the last day when departure is before 19:30.
+Every day SHALL have a lunch stop starting 11:00-14:00 and a dinner stop ending at or after 17:30 and starting at or before 20:30, except lunch on day 1 when arrival is after 13:00, lunch on the last day when departure is before 13:00, and dinner on the last day when departure is before 19:30.
 
 #### Scenario: Late arrival
 - **WHEN** the group lands at 14:00 on day 1
@@ -84,3 +87,43 @@ When either direction is `drive`, each day's `own` driving SHALL be at most 8 h,
 #### Scenario: Reason lines
 - **WHEN** a rule fails on two stops
 - **THEN** `explain()` lists both with their ids
+
+### Requirement: Aggregation and units
+
+The evaluator SHALL sum per-person stop and leg costs for every day and then across the trip. It SHALL sum on-site walking and incoming walking legs in kilometres and round each daily sum to one decimal before comparing the largest day with an individual cap. Amounts held only in flight-offer metadata are outside the itinerary total. The display list exposes each rule label and Boolean result, the member name for member rules, and an independent summary for each member ID.
+
+#### Scenario: Shared walking calculation
+- **WHEN** a day includes 1.24 km of on-site walking, a walking leg of 1.10 km and a 14 km car ride
+- **THEN** its reported daily walking distance is 2.3 km and a 2.3 km cap passes
+
+#### Scenario: No corresponding member rule
+- **WHEN** a member has a note about stairs and no positive numeric limit or structured wishes or dietary requirement
+- **THEN** the note remains context for the planner and contributes zero tests to the denominator
+
+#### Scenario: Wish count
+- **WHEN** a member supplies two wishes and only one stop is starred with that member's ID
+- **THEN** the evaluator reports one failed wish rule with the number of qualifying stops. It compares the count of stars with the count of wishes.
+
+#### Scenario: Meal eligibility
+- **WHEN** a meal-bearing market has a vegetarian marker and a member reports a shrimp allergy
+- **THEN** the vegetarian marker alone fails that meal for that member. A truthy `diet` flag satisfies the evaluator for all specified restrictions. This is a planner-supplied indicator and carries no independent ingredient verification.
+
+### Requirement: Rule boundaries and failure explanations
+
+The daily rule evaluator SHALL calculate the weekday in UTC from the setup start date and day index. It SHALL prefer weekday-specific opening hours, evaluate explicit opening-day and closure constraints independently of hours, and report each failed rule with a concrete reason suitable for repair.
+
+#### Scenario: Opening restrictions collide
+- **WHEN** the same visit violates an allow-list of weekdays, a closed weekday, and a dated closure
+- **THEN** the day rule reports the allow-list first, otherwise the closed weekday, otherwise the dated closure. The opening-hours rule can fail separately for the same visit.
+
+#### Scenario: Lunch and dinner thresholds
+- **WHEN** a one-day trip arrives at 13:00 and leaves at 19:30
+- **THEN** both meals are required. A lunch tagged `meal: 'lunch'` starting exactly at 14:00 qualifies. A dinner tagged `meal: 'dinner'` ending exactly at 17:30 qualifies if its start also meets the upper bound.
+
+#### Scenario: Configured own-car limits
+- **WHEN** the return direction is drive, the last incoming own-car leg is at least 50 km and the final stop starts at 22:00
+- **THEN** the home-arrival check passes at the boundary. For a driving arrival or departure, a day with 480 minutes of own-car legs passes and 481 minutes fails.
+
+#### Scenario: Departure rule eligibility
+- **WHEN** a final return time is missing or no final stop is present
+- **THEN** the timed departure-buffer rule is omitted. When present, the calculation uses the final stop's start time and the resolved travel mode.

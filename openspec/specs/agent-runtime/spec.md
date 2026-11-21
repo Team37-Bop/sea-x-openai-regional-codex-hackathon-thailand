@@ -1,95 +1,127 @@
 # agent-runtime Specification
 
 ## Purpose
-The runtime around every agent endpoint: choosing an LLM provider, health reporting, model selection, NDJSON streaming, error codes, branding, secrets and caching. Code: `server/api.mjs`, `server/claude.mjs`, `server/cli-llm.mjs`, `server/fake-llm.mjs`, `server/env.mjs`, `server/index.mjs`, `vite.config.js`, `src/ui/api.js`.
+
+This capability determines which model serves a Bop request, how the app reports readiness and progress, and what reaches the browser when a provider fails. The reference implementation is the prep repository at `292ba5f`. The entry points are `server/api.mjs`, `server/index.mjs`, `server/lambda-handler.mjs` and `vite.config.js`. The adapters are `server/openai.mjs`, `server/claude.mjs`, `server/cli-llm.mjs` and `server/fake-llm.mjs`. The HTTP client is `src/ui/api.js`. Regression evidence includes `scripts/test-openai.mjs`, `scripts/test-runtime.mjs` and `scripts/test-lambda.mjs`.
 
 ## Requirements
 
 ### Requirement: Provider selection
-The server SHALL pick one provider at start: `BOP_PROVIDER` forces `api` or `subscription`; otherwise `ANTHROPIC_API_KEY` selects `api` (Anthropic SDK) and, without a key, a found `claude` CLI selects `subscription`; `BOP_FAKE_LLM=1` selects the deterministic fake model; with none of these the provider is null.
 
-#### Scenario: Key present
-- **WHEN** `.env.local` sets `ANTHROPIC_API_KEY` and `BOP_PROVIDER` is unset
-- **THEN** every model call goes through the SDK
+The server SHALL select one provider when constructing the API handler and lazily reuse its model adapter. `BOP_FAKE_LLM=1` takes first priority. A recognized `BOP_PROVIDER` SHALL force `openai`, `anthropic` (also accepted as `api`) or `subscription`. A missing prerequisite for a forced provider leaves the handler without a provider. Automatic selection, including an unrecognized provider value, SHALL try a nonblank OpenAI service key, then an Anthropic key, then the local Claude executable.
 
-#### Scenario: Forced subscription without CLI
-- **WHEN** `BOP_PROVIDER=subscription` and no `claude` binary is found
-- **THEN** the provider is null
+#### Scenario: Both API credentials present
+- **WHEN** both service keys are configured with automatic selection
+- **THEN** the API uses OpenAI for design, candidates, research and replanning
 
-### Requirement: Subscription CLI isolation
-The subscription provider SHALL run `claude -p` headless with stream-json output, the prompt on stdin, a fresh temp cwd removed afterwards, no session persistence, no setting sources, strict empty MCP config, only the `WebSearch` tool when search is allowed, and a child environment without `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` or `CLAUDECODE`; it SHALL never read Claude Code's stored credentials.
+#### Scenario: Explicit provider lacks credentials
+- **WHEN** OpenAI is forced and its key is absent, even if the Anthropic key exists
+- **THEN** health reports a null provider and a model-dependent request ends with `no_key`
 
-#### Scenario: Login check
-- **WHEN** `/api/health` is called with the subscription provider
-- **THEN** `claude auth status --json` is run (cached 60 s) and only its `loggedIn` boolean is read
+#### Scenario: Fake overrides a forced provider
+- **WHEN** fake mode and a valid OpenAI key are both set
+- **THEN** health identifies the provider as `fake` and model-dependent calls use the fixture adapter
 
-#### Scenario: Per-call timeout
-- **WHEN** a plan design call runs longer than 180 s
-- **THEN** the child is terminated and the error "Bop ใช้เวลานานเกิน 180 วินาที" is returned
+### Requirement: Server-side configuration
 
-### Requirement: Health endpoint
-`GET /api/health` SHALL return `{ claude, provider, model, fastModel, search }` with `claude` and `search` true only when the provider is usable and `provider` null otherwise.
+The production HTTP server SHALL merge `.env` followed by `.env.local`, preserve existing process variables, load runtime secrets when configured, and import the API after initialization. Vite dev and preview SHALL load the mode environment with process variables taking precedence. The Lambda adapter SHALL load runtime secrets before importing and constructing its reusable handler. The canonical OpenAI key name is `OPENAI_API_KEY`, with `OPENAI_APIKEY` used when the canonical value is falsy. Secrets SHALL stay on the server.
+
+#### Scenario: A runtime secret has multiple fields
+- **WHEN** a JSON secret contains allowlisted nonempty string values, an unknown field and a value already set in the environment
+- **THEN** the loader fills missing or empty allowlisted values, ignores the unknown field and preserves the existing nonempty process value
+
+#### Scenario: Both OpenAI key names are configured
+- **WHEN** the canonical and legacy environment names both contain keys
+- **THEN** the adapter uses the canonical key and the health response contains neither value
+
+### Requirement: Health and request readiness
+
+`GET /api/health` SHALL return an uncached JSON response with `ai`, legacy alias `claude`, `provider`, `model`, `fastModel`, `search` and `flights`. The three booleans reflect handler readiness, including fake mode. With an API key, readiness means a configured provider. With a subscription, readiness requires a logged-in CLI. The model names report configured tiers, including the Anthropic defaults when no provider or a fake provider is selected. `flights` is null when Duffel is unavailable, or an object with mode and booking availability.
+
+#### Scenario: Present but invalid service key
+- **WHEN** a nonblank OpenAI key is present
+- **THEN** health identifies the configured OpenAI provider before any upstream model call, and a subsequent upstream authentication failure is reported on the stream
 
 #### Scenario: Logged-out CLI
-- **WHEN** the CLI exists but is logged out
-- **THEN** health returns `claude: false, provider: null`
+- **WHEN** the binary exists but its login status is false
+- **THEN** health reports `ai: false`, `claude: false`, `search: false`, and `provider: null`, and model-dependent routes produce `auth`
+
+#### Scenario: Independent endpoint
+- **WHEN** no model is configured
+- **THEN** weather checks and the flight offer, order and cancellation handlers still run their own validation and service checks
 
 ### Requirement: Model policy
-Plan design, the skeleton, per-day calls, repair and replan SHALL use `claude-opus-5-5`; place info, transport options, photo-page searches and candidates SHALL use the fast model order (`BOP_FAST_MODEL`, `claude-sonnet-5-5`, `claude-haiku-5-5`) at low effort, skipping for the rest of the process a model that is rejected and falling back to Opus last.
 
-#### Scenario: Sonnet rejected
-- **WHEN** the account returns 404 for Sonnet 5.5
-- **THEN** Haiku 5.5 is tried and used for later fast calls
+Design, skeleton, daily design, repair and replan SHALL use the deep tier. Research, transport options, candidates and candidate page discovery SHALL use the provider's fast tier. OpenAI defaults to `gpt-6.2-astra` for deep work and tries `BOP_OPENAI_FAST_MODEL`, `gpt-6.2-sol`, `gpt-6-luna`, then the deep model. `BOP_OPENAI_MODEL` overrides the OpenAI deep model. Anthropic defaults to `claude-opus-5-5` and tries `BOP_FAST_MODEL`, `claude-sonnet-5-5`, `claude-haiku-5-5`, then Opus. The ordered fast lists omit empty and duplicate names.
 
-### Requirement: API provider call behaviour
-The `api` provider SHALL stream every request with adaptive thinking, effort from config, JSON schema structured output, the system prompt as a cached block, `maxRetries: 2` and a 120 s timeout; it SHALL opt into server-side refusal fallbacks and retry once without them on a 400, and SHALL retry once without web search when search plus structured output is rejected.
+#### Scenario: OpenAI rejects a fast model
+- **WHEN** a fast call returns an eligible model-unavailability error such as a model-not-found response
+- **THEN** the adapter tries the next tier and reuses the updated index for subsequent fast calls in the same process
 
-#### Scenario: pause_turn
-- **WHEN** a searching call stops with `pause_turn`
-- **THEN** the turn is re-sent unchanged, up to 4 turns, then "Bop ค้นเว็บนานเกินไป"
+#### Scenario: OpenAI authentication or quota error
+- **WHEN** a fast call returns HTTP 401, 403 or 429
+- **THEN** that request ends with `auth` or `rate_limit` without a fallback to another model
 
-### Requirement: NDJSON streaming
-Agent endpoints SHALL answer `200` with `application/x-ndjson`, no caching and no proxy buffering, one JSON object per line, Thai `step` events, and exactly one terminal `done` or `error`; a closed client connection SHALL abort the work.
+### Requirement: OpenAI Responses API
 
-#### Scenario: Client navigates away
-- **WHEN** the browser closes the stream mid-plan
-- **THEN** the abort signal stops model calls and network lookups
+The OpenAI adapter SHALL stream the Responses API with `store: false`, normalized user/assistant input, a stable system instruction, reasoning effort, an output-token ceiling and low verbosity. Structured tasks use a named JSON Schema format with `strict: false`. The SDK is configured for two retries and a 120-second request timeout. Default plan, repair and place effort is low, and replan effort is medium, with `BOP_EFFORT_PLAN`, `BOP_EFFORT_REPAIR`, `BOP_EFFORT_PLACE` and `BOP_EFFORT_REPLAN` overrides.
 
-#### Scenario: Unknown route
-- **WHEN** `/api/unknown` is requested
-- **THEN** the server answers 404 `{ error: 'not_found' }`
+#### Scenario: Bounded web search
+- **WHEN** a positive search cap is supplied
+- **THEN** the request uses the built-in web search tool with medium context, sets `max_tool_calls` and requests returned source URLs. It uses approximate destination country and city when available, or Chiang Mai as the default. Completed search queries can generate Thai progress events
 
-### Requirement: Error codes
-Errors SHALL map to `no_key` (no provider), `auth` (bad key, no model access, CLI logged out), `rate_limit` (HTTP 429 or the subscription usage limit), `refusal`, `bad_request` (invalid input) or `upstream` (everything else), each with a Thai message that names Bop; `auth` and `rate_limit` SHALL abort a run instead of being absorbed by fallbacks.
+#### Scenario: Repair and output limits
+- **WHEN** the server asks OpenAI to repair an itinerary
+- **THEN** the request passes prior messages and the repair report with no web-search tool. The adapter allows 16,000 output tokens for repair and 32,000 for full-trip design
 
-#### Scenario: Subscription quota used up
-- **WHEN** the CLI reports a usage limit
-- **THEN** the stream ends with `rate_limit` "Bop ใช้โควตาของวันนี้หมดแล้ว ลองใหม่ภายหลัง"
+#### Scenario: Evidence and usage
+- **WHEN** OpenAI returns a completed response with web tool results, annotations and usage
+- **THEN** the adapter collects returned URLs, distinguishes citations, sums input, output and reported cache-token counts, counts web search calls and sets `usage.provider` to `openai`. A URL appearing only in generated JSON does not qualify as a search result
 
-### Requirement: Bop branding
-All user-facing text SHALL say "Bop" and never Claude, Anthropic or an AI model: the system prompts tell the model it is Bop, server messages name Bop, and the UI rewrites /Claude|Anthropic/ to "Bop" in every event string except the keys `url`, `page`, `href`, `model` and `id`.
+#### Scenario: Refusal or incomplete result
+- **WHEN** completed response metadata indicates a content filter or an output part contains a refusal
+- **THEN** the adapter raises `refusal`. An output-token cutoff, missing completion, failed result or unreadable required plan shape produces `upstream`
 
-#### Scenario: Model slips
-- **WHEN** a summary contains "Claude"
-- **THEN** the UI shows "Bop"
+### Requirement: Anthropic API and subscription
 
-### Requirement: Secrets stay server-side
-Keys SHALL be read from `.env.local` / `.env` / the process environment on the server only, never logged and never sent to the browser; the browser SHALL see only `/api/*` responses.
+Anthropic API calls SHALL stream with adaptive thinking, a stable ephemeral-cache system block, effort and appropriate schemas. The adapter SHALL retry an initial bad request with refusal fallbacks disabled, and remember a successful retry. A searching structured turn rejected with the search tool can be retried without search. The subscription adapter SHALL use a headless CLI with a temporary working directory, stdin prompt, stream JSON, empty settings sources, strict MCP configuration, disabled session persistence and an explicit tool list. Only WebSearch is allowed for search-enabled calls. The child environment removes Anthropic API credentials and `CLAUDECODE`.
 
-#### Scenario: Vite build
-- **WHEN** `npm run build` runs
-- **THEN** no non-`VITE_` variable is embedded in `dist/`
+#### Scenario: Paused Anthropic search
+- **WHEN** a search turn returns `pause_turn`
+- **THEN** the adapter continues with the full assistant turn, up to four iterations, then reports `upstream` if it still cannot finish
 
-### Requirement: Prompt caching
-The system prompt SHALL be byte-stable between requests and sent as the cached prefix, and token usage (including cache reads/writes and web search requests) SHALL be summed into `done.usage`.
+#### Scenario: Subscription authentication and timeout
+- **WHEN** subscription readiness is checked
+- **THEN** the CLI checks login status, caches the boolean for 60 seconds and handles its own credentials. A full-plan call exceeding 180 seconds terminates and reports a timeout
 
-#### Scenario: Usage report
-- **WHEN** a plan finishes on the API provider
-- **THEN** `usage` contains input, output, cache creation and cache read tokens and `web_search_requests`
+### Requirement: HTTP and event framing
 
-### Requirement: Fake model for tests
-With `BOP_FAKE_LLM=1` the server SHALL use a deterministic model with the same interface and schemas: Da Nang setups get a fixed N-day plan and fixed candidates, other setups get the Chiang Mai sample with a deliberate miss so the repair round runs, while geocoding, routing, photos and checks stay real.
+Model POST routes SHALL accept JSON objects and stream newline-delimited JSON. For an accepted content type the transport SHALL return HTTP 200, `application/x-ndjson`, `Cache-Control: no-store` and `X-Accel-Buffering: no`. Clients receive Thai `step` events, any endpoint-specific events and one terminal `done` or `error` on a completed connection. Closing a connection before completion signals cancellation. The request body limit is 2 MiB.
 
-#### Scenario: UI development without a model
-- **WHEN** `BOP_FAKE_LLM=1 npm run dev` is used with city ดานัง
-- **THEN** `/api/plan` returns the fixed Da Nang plan
+#### Scenario: Incorrect media type
+- **WHEN** a registered streaming endpoint receives a POST without `application/json`
+- **THEN** it returns HTTP 415 and one NDJSON `bad_request` error. An unknown method/path returns HTTP 404 with a JSON `not_found` response
+
+#### Scenario: Invalid JSON and oversized input
+- **WHEN** the server reads invalid JSON, an array or a scalar
+- **THEN** the stream ends with `bad_request`. A body that exceeds the byte limit is rejected and the server destroys the request, so a disconnected client may receive a transport failure
+
+#### Scenario: Client loses the connection
+- **WHEN** a UTF-8 JSON line crosses network chunk boundaries
+- **THEN** the browser buffers and decodes the entire line before delivery. It ignores malformed lines and reports `cut` if a successful stream ends without a terminal event
+
+### Requirement: Error messages and product name
+
+The model-independent public error vocabulary for agent requests SHALL include `no_key`, `auth`, `rate_limit`, `bad_request`, `refusal` and `upstream`. The browser SHALL scrub Claude and Anthropic product references in user-visible event text and preserve strings under `url`, `page`, `href`, `model` and `id`. Browser transport errors are localized separately.
+
+#### Scenario: Provider reference in a summary
+- **WHEN** a streamed summary and its source URL both contain a provider name
+- **THEN** the summary uses Bop branding and the link target is preserved
+
+### Requirement: Deterministic test provider
+
+The fake adapter SHALL support the same planner operations and produce deterministic Da Nang fixtures or the Chiang Mai sample with a repair exercise. The agent pipeline still performs downstream enrichment and checks.
+
+#### Scenario: Reproducible plan without paid model calls
+- **WHEN** fake mode is enabled and the setup selects Da Nang
+- **THEN** the model stage uses the fixture for the requested trip length and the server can continue with geocoding and scheduling

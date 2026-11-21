@@ -1,4 +1,9 @@
 schema: spec-driven
 context: |
-  Bop is a Thai group-trip planner. This repository implements the
-  competition entry from the requirements in openspec/specs.
+  Bop is a Thai group-trip planner. The competition application is independently implemented.
+  The behavioral reference for specs/ is Team37-Bop/sea-x-openai-regional-codex-hackathon-thailand-prep,
+  revision 292ba5f8a8f73cb17bbabd233978920154df8fd2. Reference source paths in the specs refer to that revision.
+  See README.md in this OpenSpec folder for capability coverage, implementation differences, and proposal status.
+  Use Thai for user-facing interactions and THB per person for plan costs. Describe API contracts with the
+  reference's actual field names. A capability's presence here defines the target behavior for the competition
+  implementation. Verify conformance separately against that application's code and tests.

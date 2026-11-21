@@ -1,7 +1,11 @@
 # trip-setup Specification
 
 ## Purpose
-The onboarding screen collects a `TripSetup` (destination, dates, how the group travels there and back, where it stays, members and their constraints, autonomy) and the server validates and normalises it before any agent work. Code: `src/ui/setup.js`, `normalizeSetup()` in `server/agent.mjs`, `GET /api/city` in `server/api.mjs`.
+
+The organizer enters a destination, dates, travel, stays and the needs of each member. The browser validates the draft before submission. The API normalizes caller-supplied objects, including older saved shapes, before passing them to planning.
+
+Reference implementation in the prep repository at `292ba5f` includes `src/ui/setup.js` (`validate`, `toSetup`, `addStay`, `delStay`), `server/agent.mjs` (`normalizeSetup`), `src/plan.js` (`bookedStays`) and `server/api.mjs` (`readJson` and the city route). Executable examples for old and multiple hotels are in `scripts/test-stays.mjs`.
+
 ## Requirements
 ### Requirement: Destination with any-city lookup
 The UI SHALL offer a fixed list of suggested destinations (Thai and Asian cities with coordinates, ISO country, currency and main airport) and SHALL resolve any other typed city through `GET /api/city?q=`, which returns `{ name, cc, ll }` from Nominatim (then Photon) or HTTP 404 `{ error: 'not_found' }`.
@@ -49,7 +53,7 @@ The setup SHALL describe each direction as `arrive`/`depart` with `by` in flight
 - **THEN** the choice is kept (id, by, carrier, code, from, to, times, THB price, source, `checked`) and is used without a new search
 
 ### Requirement: Stay mode
-The setup SHALL carry `stay` as `{ mode: 'auto' }` or `{ mode: 'booked', stays: [{ name, nights }] }`, defaulting to auto, and SHALL still accept the older `hotelArea` field and the older `{ mode: 'booked', name }` shape, which means one stay for every night. Stays SHALL be in trip order, the first starting on night 1, and their nights SHALL add up to the trip's nights (days - 1).
+The setup SHALL carry `stay` as `{ mode: 'auto' }` or `{ mode: 'booked', stays: [{ name, nights }] }`, defaulting to auto, and SHALL accept the older `{ mode: 'booked', name }` shape as one stay for every night. The independent legacy `hotelArea` string is an area hint. A booked stay requires `stay.mode = booked`. Stays SHALL be in trip order, the first starting on night 1, and their nights SHALL add up to the trip's nights (days - 1).
 
 #### Scenario: Booked hotel
 - **WHEN** the organizer chooses "จองไว้แล้ว" and types one hotel name
@@ -90,11 +94,11 @@ The setup SHALL carry `autonomy` as `auto` (default) or `ask`; `ask` SHALL make 
 - **THEN** it is normalised to `auto`
 
 ### Requirement: Input limits
-The server SHALL trim strings to fixed lengths, reject bodies over 2 MB or invalid JSON with `bad_request`, and pass `pace` (chill, normal, packed), `currency` (ISO 4217), `country` and `extra` through only when valid.
+The server SHALL trim strings to field-specific limits and accept JSON object requests up to 2 MiB. Currency and city-airport codes must match three uppercase letters. Country accepts up to 60 characters, pace accepts `chill`, `normal` or `packed`, and free-form `extra` accepts up to 1,000 characters.
 
 #### Scenario: Oversized body
 - **WHEN** a request body exceeds 2 MB
-- **THEN** the stream ends with `error` code `bad_request` "ข้อมูลใหญ่เกินไป"
+- **THEN** the body reader rejects the request as `bad_request` with "ข้อมูลใหญ่เกินไป" and destroys the request stream. A caller can observe a closed connection.
 
 ### Requirement: Booked stays by night
 In "จองไว้แล้ว" mode the setup screen SHALL show one stay row covering every night by default, SHALL let the organizer add rows with "+ เพิ่มที่พัก" (up to one per night), set the nights of each row, and remove rows, and SHALL show each row's check-in → check-out dates and the running total of nights. The UI SHALL block planning with a Thai message naming the row when a name is missing, a row has fewer than 1 night, or the nights do not add up to the trip's nights. The server SHALL repair sums that still do not add up (the last stay takes the rest, or nights are taken back from the end) and drop blank names.
@@ -114,3 +118,50 @@ In "จองไว้แล้ว" mode the setup screen SHALL show one stay ro
 #### Scenario: Day trip
 - **WHEN** the trip is 1 day (0 nights) and booked is chosen
 - **THEN** no nights field or "+ เพิ่มที่พัก" is shown, the name is optional, and an empty name sends `{ mode: 'auto' }`
+
+### Requirement: Draft validation and server normalization
+
+The browser SHALL block a blank city, missing date, reversed date range, more than seven calendar days, invalid booked-stay allocation, and a group with no named member. The server SHALL normalize direct callers independently. With usable member data, a blank city defaults to Chiang Mai, a missing title to "ทริปของเรา", and a missing numeric day count to three. The server checks the start-date string pattern and uses an inclusive positive end-date span when supplied.
+
+#### Scenario: Eight-day request through different entry points
+- **WHEN** an organizer enters November 20–27 in the form
+- **THEN** the form identifies the end-date field and its seven-day limit
+- **AND** a direct request with those dates normalizes to seven planning days and retains the supplied end-date string
+
+#### Scenario: Named members and organizer
+- **WHEN** the browser converts a draft with one blank member and two named members, neither marked organizer
+- **THEN** it sends the two named members and gives the first one the organizer role
+
+#### Scenario: Duplicate direct-call IDs and text limits
+- **WHEN** a request includes more than 12 members or repeats a sanitized member ID
+- **THEN** only the first 12 entries are normalized and each collision is resolved by appending underscores until the ID is unique
+- **AND** each name is capped at 40 characters, each note at 400, and up to five nonempty wishes at 120 characters each
+
+#### Scenario: Numeric constraints
+- **WHEN** a direct caller sends a numeric budget of 1234.6 and a negative walking cap
+- **THEN** the budget is stored as 1235 and the walking cap is omitted. The browser converts positive numeric form values before posting.
+
+### Requirement: Trusted fields for choices, stays and picks
+
+The server SHALL reconstruct selected transport and accommodation entries from allowed fields. It SHALL take booked-stay coordinates from its own lookup, preserve a live Duffel offer reference only for a matching offer-ID format, and bound group picks before planning.
+
+#### Scenario: Client supplies hotel coordinates
+- **WHEN** a booked stay carries caller-supplied latitude and longitude
+- **THEN** the normalized setup keeps its name and night count. The planner resolves the hotel's position separately.
+
+#### Scenario: Live flight selected before planning
+- **WHEN** a timed flight choice has a carrier, `checked: 'live'` and an `offerId` beginning with `off_` followed by alphanumeric characters
+- **THEN** the normalized choice carries the offer ID, expiry, explicit bookability and test-mode flags
+- **AND** without the valid offer ID a caller's `live` label becomes an estimate
+
+#### Scenario: Bounded group answers
+- **WHEN** more than 15 named must-picks or 30 avoid entries are received
+- **THEN** the server processes at most 15 and 30 respectively. It can use a remembered candidate ID for missing query or coordinates and turns an unknown avoid string into a name for matching.
+
+#### Scenario: Legacy hour formatting
+- **WHEN** an arrival object has `time: "9:05"` and no mode
+- **THEN** the normalized mode is flight and the time is `09:05`. An entirely omitted direction stays absent.
+
+#### Scenario: JSON media type
+- **WHEN** an agent route receives a POST using a media type other than `application/json`
+- **THEN** it returns HTTP 415 with an NDJSON `bad_request` error. An array, scalar or malformed JSON sent under the correct media type also fails body validation.
