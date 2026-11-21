@@ -139,7 +139,10 @@ export function installSetupExtras(form, readSetup) {
     const list = element('div', null, 'transport-options');
     const feedback = element('p', null, 'muted');
     feedback.setAttribute('role', 'status');
-    const leg = { auto, choice: null, ctrl: null, original: null };
+    const place = form.elements[name + 'Place'];
+    const destination = name === 'arrive' ? 'from' : 'to';
+    const directionLabel = dir === 'go' ? 'ขาไป' : 'ขากลับ';
+    const leg = { auto, choice: null, ctrl: null, original: null, placeLL: null };
     legs[name] = leg;
     const signature = () =>
       JSON.stringify([
@@ -147,93 +150,165 @@ export function installSetupExtras(form, readSetup) {
         form.elements.startDate.value,
         form.elements.endDate.value,
         by.value,
-        form.elements[name + 'Place'].value,
+        place.value,
         time.value,
-        form.querySelectorAll('#members .member').length,
+        auto.checked,
+        by.value === 'drive' ? 0 : form.querySelectorAll('#members .member').length,
       ]);
-    const clear = (restore = false, edited = '') => {
+    function updateLabel() {
+      search.textContent = (by.value === 'drive' ? 'คำนวณเวลาขับรถ' : 'ค้นหาตัวเลือก') + directionLabel;
+    }
+    function clear(restore = false, edited = '') {
       leg.ctrl?.abort();
       leg.ctrl = null;
       if (restore && leg.original) {
-        if (edited !== name + 'Time' && time.value === leg.original.appliedTime)
-          time.value = leg.original.time;
-        if (edited !== name + 'By' && by.value === leg.original.appliedBy) by.value = leg.original.by;
+        if (edited !== time.name && time.value === leg.original.appliedTime) time.value = leg.original.time;
+        if (edited !== by.name && by.value === leg.original.appliedBy) by.value = leg.original.by;
       }
       leg.choice = leg.original = null;
       list.replaceChildren();
       feedback.textContent = '';
       search.disabled = false;
-    };
-    const search = button('ค้นหาตัวเลือก' + (dir === 'go' ? 'ขาไป' : 'ขากลับ'), async () => {
+      updateLabel();
+    }
+    function dayOffset(value) {
+      if (!value) return '';
+      return value < 0 ? ' (ก่อนหน้า ' + Math.abs(value) + ' วัน)' : ' (ถัดไป ' + value + ' วัน)';
+    }
+    function showDrive(drive) {
+      if (
+        !drive ||
+        !Number.isFinite(drive.km) ||
+        !Number.isFinite(drive.minutes) ||
+        !drive.dep ||
+        !drive.arr
+      ) {
+        throw Error('ยังไม่ได้รับเวลาเดินทาง ลองคำนวณอีกครั้ง');
+      }
+      feedback.textContent = [
+        'ระยะทาง ' + drive.km.toLocaleString('th-TH', { maximumFractionDigits: 1 }) + ' กม.',
+        drive.minutes + ' นาที',
+        drive.approx ? 'เส้นทางโดยประมาณ' : 'เส้นทางถนนจริง',
+      ].join(' · ');
+      const anchor = dir === 'go' ? drive.arr : drive.dep;
+      const label = dir === 'go' ? 'ใช้เวลาถึง ' : 'ใช้เวลาออก ';
+      const use = button(label + anchor, () => {
+        time.value = anchor;
+        auto.checked = false;
+        use.disabled = true;
+        use.textContent = (dir === 'go' ? 'ตั้งเวลาถึง ' : 'ตั้งเวลาออก ') + anchor + ' แล้ว';
+      });
+      list.append(
+        element(
+          'p',
+          'ออก ' +
+            drive.dep +
+            dayOffset(drive.depDayOffset) +
+            ' → ถึง ' +
+            drive.arr +
+            dayOffset(drive.arrDayOffset),
+        ),
+        element('p', 'ยังไม่รวมเวลาพักและสภาพจราจรปัจจุบัน', 'muted'),
+        use,
+      );
+    }
+    function showOptions(options) {
+      feedback.textContent = options.length
+        ? 'เลือกการเดินทางจาก ' + options.length + ' ตัวเลือก'
+        : 'ไม่พบตัวเลือก ลองเปลี่ยนจุดเดินทางหรือเวลา';
+      if (!options.length) return;
+      const group = element('fieldset');
+      group.append(element('legend', 'เลือก' + directionLabel));
+      const oldTime = time.value,
+        oldBy = by.value;
+      for (const [i, option] of options.entries()) {
+        const input = element('input');
+        input.type = 'radio';
+        input.name = name + 'Choice';
+        input.value = String(i);
+        const row = element('label', null, 'transport-choice');
+        const nameText = [travel[option.by], plain(option.carrier), plain(option.code)]
+          .filter(Boolean)
+          .join(' ');
+        const price =
+          option.price != null && Number.isFinite(Number(option.price))
+            ? '฿' + money.format(option.price) + ' / คน'
+            : 'ไม่มีข้อมูลราคา';
+        const evidence =
+          option.checked === 'live'
+            ? 'ราคาจากสายการบิน'
+            : option.checked === 'web'
+              ? 'ตรวจจากเว็บ'
+              : 'ราคาโดยประมาณ';
+        row.append(
+          input,
+          document.createTextNode(
+            ' ' + nameText + ' · ' + option.dep + '–' + option.arr + (option.recommended ? ' · แนะนำ' : ''),
+          ),
+          element(
+            'small',
+            [price, evidence, option.bag, option.test && 'โหมดทดสอบ'].filter(Boolean).join(' · '),
+          ),
+        );
+        if (option.why) row.append(element('small', plain(option.why)));
+        input.addEventListener('change', () => {
+          if (!input.checked) return;
+          const appliedTime = dir === 'go' ? option.arr : option.dep;
+          leg.original = { time: oldTime, by: oldBy, appliedTime, appliedBy: option.by };
+          leg.choice = option;
+          by.value = option.by;
+          time.value = appliedTime;
+          auto.checked = false;
+          feedback.textContent = 'เลือก ' + nameText + ' · ' + option.dep + '–' + option.arr;
+          updateLabel();
+        });
+        group.append(row);
+        const page = option.src?.checked === 'web' && link(option.src.url, option.src.title || 'แหล่งข้อมูล');
+        if (page) group.append(page);
+      }
+      list.append(
+        group,
+        button('ล้างตัวเลือก', () => clear(true)),
+      );
+    }
+    const search = button('', async () => {
       clear(true);
       const ctrl = new AbortController();
       leg.ctrl = ctrl;
       const started = signature();
-      feedback.textContent = 'กำลังค้นหาตัวเลือกการเดินทาง…';
+      const driving = by.value === 'drive';
+      const onStep = (text) => {
+        if (leg.ctrl === ctrl) feedback.textContent = text;
+      };
+      feedback.textContent = driving ? 'กำลังคำนวณเส้นทางขับรถ…' : 'กำลังค้นหาตัวเลือกการเดินทาง…';
       search.disabled = true;
       try {
         const setup = await readSetup();
         ctrl.signal.throwIfAborted();
-        const result = await post('/api/transport-options', { setup, dir }, ctrl.signal, (text) => {
-          if (leg.ctrl === ctrl) feedback.textContent = text;
-        });
-        if (leg.ctrl !== ctrl || signature() !== started) return;
-        const options = Array.isArray(result.options)
-          ? result.options.filter((o) => o?.carrier && o.dep && o.arr)
-          : [];
-        feedback.textContent = options.length
-          ? 'เลือกการเดินทางจาก ' + options.length + ' ตัวเลือก'
-          : 'ไม่พบตัวเลือก ลองเปลี่ยนจุดเดินทางหรือเวลา';
-        const group = element('fieldset');
-        if (options.length) group.append(element('legend', dir === 'go' ? 'เลือกขาไป' : 'เลือกขากลับ'));
-        const oldTime = time.value,
-          oldBy = by.value;
-        for (const [i, option] of options.entries()) {
-          const input = element('input');
-          input.type = 'radio';
-          input.name = name + 'Choice';
-          input.value = String(i);
-          const row = element('label', null, 'transport-choice');
-          const nameText = [travel[option.by], plain(option.carrier), plain(option.code)]
-            .filter(Boolean)
-            .join(' ');
-          const price =
-            option.price != null && Number.isFinite(Number(option.price))
-              ? '฿' + money.format(option.price) + ' / คน'
-              : 'ไม่มีข้อมูลราคา';
-          const evidence =
-            option.checked === 'live'
-              ? 'ราคาจากสายการบิน'
-              : option.checked === 'web'
-                ? 'ตรวจจากเว็บ'
-                : 'ราคาโดยประมาณ';
-          row.append(
-            input,
-            document.createTextNode(
-              ' ' + nameText + ' · ' + option.dep + '–' + option.arr + (option.recommended ? ' · แนะนำ' : ''),
-            ),
-            element('small', [price, evidence, ...(option.test ? ['โหมดทดสอบ'] : [])].join(' · ')),
+        if (driving) {
+          const result = await post(
+            '/api/drive-preview',
+            {
+              dir,
+              city: setup.city,
+              cityLL: setup.cityLL,
+              place: place.value.trim(),
+              placeLL: setup[name]?.placeLL || leg.placeLL,
+              time: time.value,
+            },
+            ctrl.signal,
+            onStep,
           );
-          input.addEventListener('change', () => {
-            if (!input.checked) return;
-            const appliedTime = dir === 'go' ? option.arr : option.dep;
-            leg.original = { time: oldTime, by: oldBy, appliedTime, appliedBy: option.by };
-            leg.choice = option;
-            by.value = option.by;
-            time.value = appliedTime;
-            auto.checked = false;
-            feedback.textContent = 'เลือก ' + nameText + ' · ' + option.dep + '–' + option.arr;
-          });
-          group.append(row);
-          const page =
-            option.src?.checked === 'web' && link(option.src.url, option.src.title || 'แหล่งข้อมูล');
-          if (page) group.append(page);
-        }
-        if (options.length) {
-          list.append(
-            group,
-            button('ล้างตัวเลือก', () => clear(true)),
-          );
+          if (leg.ctrl === ctrl && signature() === started) showDrive(result.drive);
+        } else {
+          const result = await post('/api/transport-options', { setup, dir }, ctrl.signal, onStep);
+          if (leg.ctrl === ctrl && signature() === started) {
+            showOptions(
+              (Array.isArray(result.options) ? result.options : []).filter(
+                (o) => o?.carrier && o.dep && o.arr,
+              ),
+            );
+          }
         }
       } catch (error) {
         if (!ctrl.signal.aborted) feedback.textContent = plain(error.message) || 'ค้นหาการเดินทางไม่สำเร็จ';
@@ -242,29 +317,55 @@ export function installSetupExtras(form, readSetup) {
       }
     });
     fieldset.append(autoLabel, search, feedback, list);
-    const refresh = () => {
-      const drive = by.value === 'drive';
-      autoLabel.hidden = search.hidden = drive;
-      if (drive) auto.checked = false;
-    };
+    updateLabel();
+    const inputFields = new Set(['city', 'startDate', 'endDate', place.name, by.name, time.name, auto.name]);
     form.addEventListener('input', (event) => {
-      const field = event.target.name || '';
-      if (
-        ['city', 'startDate', 'endDate', name + 'Place', name + 'By', name + 'Time', name + 'Auto'].includes(
-          field,
-        )
-      ) {
-        clear(true, field);
-        refresh();
-      }
+      const field = event.target.name;
+      if (!inputFields.has(field)) return;
+      if (field === place.name) leg.placeLL = null;
+      clear(true, field);
     });
-    new MutationObserver(() => clear(true)).observe(form.querySelector('#members'), { childList: true });
+    let hydrating = false;
+    const members = new MutationObserver(() => {
+      if (!hydrating && by.value !== 'drive') clear(true);
+    });
+    members.observe(form.querySelector('#members'), { childList: true });
     form.closest('dialog')?.addEventListener('close', () => {
       leg.ctrl?.abort();
     });
-    refresh();
+    leg.restore = (saved = {}, plannedRoute) => {
+      // Hydration can replace every traveler synchronously before its observer fires.
+      hydrating = true;
+      members.takeRecords();
+      queueMicrotask(() => {
+        members.takeRecords();
+        hydrating = false;
+      });
+      clear();
+      const picked =
+        saved.choice ||
+        plannedRoute?.options?.find((item) => item.id === plannedRoute.chosen) ||
+        plannedRoute?.chosenOption ||
+        (typeof plannedRoute?.chosen === 'object' && plannedRoute.chosen);
+      const choice = picked?.carrier && picked.dep && picked.arr ? picked : null;
+      by.value = saved.by || choice?.by || 'undecided';
+      time.value = saved.time || (dir === 'go' ? choice?.arr : choice?.dep) || '';
+      place.value = saved[destination] || '';
+      auto.checked = saved.auto === true;
+      leg.placeLL = Array.isArray(saved.placeLL) ? [...saved.placeLL] : null;
+      if (choice && by.value !== 'drive') {
+        leg.choice = structuredClone(choice);
+        feedback.textContent =
+          'เลือกไว้ · ' +
+          [plain(choice.carrier), plain(choice.code), choice.dep + '–' + choice.arr]
+            .filter(Boolean)
+            .join(' ');
+        list.append(button('ล้างตัวเลือก', () => clear()));
+      }
+      updateLabel();
+    };
   }
-  return (setup) => {
+  const augment = (setup) => {
     const decorated = {
       ...setup,
       extra: form.elements.extra.value.trim(),
@@ -277,6 +378,7 @@ export function installSetupExtras(form, readSetup) {
       decorated[name] = {
         ...setup[name],
         auto: leg.auto.checked,
+        ...(leg.placeLL ? { placeLL: leg.placeLL } : {}),
         ...(leg.choice ? { choice: leg.choice } : {}),
       };
     }
@@ -295,6 +397,14 @@ export function installSetupExtras(form, readSetup) {
       decorated.members[0].role = 'organizer';
     return decorated;
   };
+  augment.restore = (setup = {}, flags = {}) => {
+    form.elements.hotelArea.value = setup.hotelArea || '';
+    form.elements.extra.value = setup.extra || '';
+    toggleArea();
+    legs.arrive.restore(setup.arrive, flags.transport?.go);
+    legs.depart.restore(setup.depart, flags.transport?.back);
+  };
+  return augment;
 }
 function presentFacts(content, info, stop) {
   const checked = info.confidence === 'web' || (stop.src?.checked === 'web' && mediaUrl(stop.src.url));
