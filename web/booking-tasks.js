@@ -192,7 +192,7 @@ function addDirection(selected, fallback, plan, setup, dir, { adjust, run }) {
     const routeText = [from || 'ยังไม่ระบุต้นทาง', to || 'ยังไม่ระบุปลายทาง'].join(' → ');
     row.append(el('p', routeText + (leg.time ? ' · ' + (outbound ? 'ถึง ' : 'ออก ') + leg.time : '')));
     if (leg.by !== 'drive') row.append(el('p', 'ยังไม่มีค่าโดยสารที่เลือกไว้', 'muted'));
-    const suggestion = plan.flags?.arrivalSuggested;
+    const suggestion = outbound ? plan.flags?.arrivalSuggested : plan.flags?.departureSuggested;
     if (leg.by === 'undecided' && suggestion?.by && suggestion.by !== 'none')
       row.append(
         el(

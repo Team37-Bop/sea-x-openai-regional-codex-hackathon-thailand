@@ -68,7 +68,7 @@ Every day SHALL have a lunch stop starting 11:00-14:00 and a dinner stop ending 
 - **THEN** "มื้อกลางวัน–เย็นครบ" fails with "วันที่ 2 ไม่มีมื้อเย็น …"
 
 ### Requirement: Departure buffers
-When the last direction has a time, the last stop of the last day SHALL be reached at least 75 min before a flight ("ถึงสนามบินก่อนไฟลต์ N นาที") or 30 min before a bus or train ("ถึงสถานีก่อนรถออก/รถไฟออก N นาที"); an undecided direction SHALL use `plan.flags.arrivalSuggested.by`.
+When the last direction has a time, the last stop of the last day SHALL be reached at least 75 min before a flight ("ถึงสนามบินก่อนไฟลต์ N นาที") or 30 min before a bus or train ("ถึงสถานีก่อนรถออก/รถไฟออก N นาที"); an undecided return direction SHALL use `plan.flags.departureSuggested.by` when available.
 
 #### Scenario: Tight airport buffer
 - **WHEN** the flight leaves 21:15 and the airport stop starts 20:30

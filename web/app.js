@@ -33,7 +33,7 @@ const presets = {
   ไทเป: ['TW', 'TWD', 25.033, 121.5654],
   โซล: ['KR', 'KRW', 37.5665, 126.978],
 };
-const modes = { undecided: 'ยังไม่เลือก', flight: 'เครื่องบิน', drive: 'ขับรถ', bus: 'รถบัส', train: 'รถไฟ' };
+const modes = { undecided: 'ให้ Bop เลือกให้', flight: 'เครื่องบิน', drive: 'ขับรถ', bus: 'รถบัส', train: 'รถไฟ' };
 const travel = { transit: 'ขนส่งสาธารณะ', red: 'รถแดง', walk: 'เดิน', car: 'รถรับจ้าง', own: 'รถส่วนตัว', van: 'รถตู้' };
 const kind = {
   food: 'อาหาร',
@@ -505,13 +505,24 @@ for (const [dir, title, placeName] of [
   ['arrive', 'ขาไป', 'ออกจาก'],
   ['depart', 'ขากลับ', 'กลับไปที่'],
 ]) {
-  const area = node('fieldset');
-  area.append(
-    node('legend', title),
-    selectField('วิธีเดินทาง', dir + 'By', modes, 'undecided'),
+  const area = node('fieldset', null, 'travel-leg');
+  const options = node('div', null, 'travel-modes');
+  for (const [value, label] of Object.entries(modes)) {
+    const option = node('label', null, 'travel-mode');
+    const radio = node('input');
+    radio.type = 'radio';
+    radio.name = dir + 'By';
+    radio.value = value;
+    radio.checked = value === 'undecided';
+    option.append(radio, document.createTextNode(label));
+    options.append(option);
+  }
+  const fields = node('div', null, 'travel-leg-fields');
+  fields.append(
     field(placeName, dir + 'Place', { maxLength: 90 }),
     field(dir === 'arrive' ? 'เวลาถึง' : 'เวลาออก', dir + 'Time', { type: 'time' }),
   );
+  area.append(node('legend', title), options, fields);
   $('#directions').append(area);
   withSuggestions(setupForm.elements[dir + 'Place'], 'transport');
 }

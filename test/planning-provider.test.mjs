@@ -153,7 +153,9 @@ test('a booked choice bypasses search, new transport uses the fitting estimated 
   const result = await planTrip(setup, ctx());
   const { flags } = result.plan;
   assert.equal(flags.transport.go.chosen, 'go-2');
+  assert.equal(flags.transport.go.requestedBy, 'undecided');
   assert.equal(flags.transport.back.chosen, 'back-kept');
+  assert.equal(flags.transport.back.requestedBy, undefined);
   assert.equal(flags.transport.back.options.length, 1);
   assert.equal(flags.arrivalSuggested.by, 'train');
   assert.equal(result.plan.days[0].stops[0].t0, '09:30');
@@ -162,6 +164,32 @@ test('a booked choice bypasses search, new transport uses the fitting estimated 
   assert.equal(requests.find((q) => q.op === 'bop_transport').body.max_tool_calls, 4);
   const only = await transport(setup, 'back', ctx());
   assert.equal(only[0].id, 'back-kept');
+});
+
+test('a return recommendation leaves a blank outbound location unresolved', async (t) => {
+  const requests = [];
+  mockProvider(t, {
+    bop_transport: { options: [{ by: 'train', carrier: 'Rail', dep: '20:30', arr: '22:00' }] },
+    bop_repair: { edits: [] },
+    bop_design: {
+      days: [{ stops: [stop('station', 'สถานี', '19:30', '19:40', { k: 'transit' })] }],
+      arrivalSuggested: { by: 'flight', why: 'outbound suggestion' },
+    },
+  }, requests);
+  const setup = normalize({
+    ...d,
+    arrive: { by: 'undecided', from: '', auto: true },
+    depart: { by: 'undecided', to: 'กรุงเทพฯ', auto: true },
+    picks: { must: [{ name: 'สถานี', ll: point }] },
+  });
+  const { plan } = await planTrip(setup, ctx());
+  assert.equal(requests.filter(({ op }) => op === 'bop_transport').length, 1);
+  assert.equal(plan.setup.arrive.from, '');
+  assert.equal(plan.flags.transport.go, undefined);
+  assert.equal(plan.flags.arrivalSuggested, undefined);
+  assert.equal(plan.flags.departureSuggested.by, 'train');
+  assert.equal(plan.flags.transport.back.requestedBy, 'undecided');
+  assert.equal(plan.setup.depart.time, '20:30');
 });
 
 test('design, daily planning and edit schemas identify units and constrain categories for both providers', async () => {

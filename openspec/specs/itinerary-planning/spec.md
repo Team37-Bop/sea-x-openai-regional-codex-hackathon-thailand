@@ -100,7 +100,7 @@ The server SHALL compare each available stop-level `src` labelled `web` with the
 - **THEN** a step "ตรวจจากเว็บ N จุด · ประมาณการ M จุด" is emitted
 
 ### Requirement: Transport search in parallel with design
-When a direction has `by` flight, bus, train or undecided and either `auto` is set or no time is given (and no `choice`), the plan SHALL search transport options in parallel with the design, design around placeholder times (arrive 10:00, depart 20:30), and afterwards retime a first or last transit stop to the chosen arrival or to departure minus 90 min (flight) or 40 min (bus/train), respectively.
+When a direction has a supplied origin or return destination, `by` flight, bus, train or undecided and either `auto` is set or no time is given (and no `choice`), the plan SHALL search transport options in parallel with the design, design around placeholder times (arrive 10:00, depart 20:30), and afterwards retime a first or last transit stop to the chosen arrival or to departure minus 90 min (flight) or 40 min (bus/train), respectively.
 
 #### Scenario: Recommended flight outside the window
 - **WHEN** the recommended outbound option arrives at 19:00
@@ -114,12 +114,16 @@ When a direction has `by` flight, bus, train or undecided and either `auto` is s
 - **WHEN** the search finds options
 - **THEN** the direction entry in `plan.flags.transport` contains `options` and a `chosen` string matching one option ID
 
-### Requirement: Suggested arrival mode
-When a direction was undecided, the plan SHALL set `plan.flags.arrivalSuggested = { by, why }` from a chosen transport option when available. Otherwise it uses a nonempty model suggestion other than `none` if a direction remains undecided.
+### Requirement: Suggested travel mode per direction
+When a direction was undecided, the plan SHALL store `{ by, why }` from its chosen option in `flags.arrivalSuggested` for outbound travel or `flags.departureSuggested` for return travel. If the outbound direction has a known origin but no chosen service, it can use a nonempty model arrival suggestion other than `none`. The plan SHALL preserve the requested mode alongside an automatically selected service so reopening setup retains the organizer's preference.
 
 #### Scenario: Undecided trip
 - **WHEN** `arrive.by` is undecided and the search recommends a train
 - **THEN** `flags.arrivalSuggested.by` is `train`
+
+#### Scenario: Independent return recommendation
+- **WHEN** a return service is chosen for an undecided return leg
+- **THEN** the plan records the return recommendation in `flags.departureSuggested`. A return without a recommendation SHALL NOT inherit an outbound suggestion from an older plan.
 
 ### Requirement: Stay selection
 The plan SHALL set `plan.flags.stay = { area, why, booked?, examples[] }`; in auto mode the model SHALL pick the area that minimises travel and fits budgets and give 2-3 real example hotels found with at most one web search (`priceNight` THB per room per night, `checked: 'web'` only for a real search URL), and split design SHALL prefer the first example with usable coordinates as the hotel supplied to the per-day designer; in booked mode the server SHALL geocode every booked stay (also trying its first 3 and 2 words, then a 200 km radius around the city for a stay in another town), make no hotel search, and set `flags.stay.stays` to each stay with `nights`, `checkIn` and `checkOut` dates.

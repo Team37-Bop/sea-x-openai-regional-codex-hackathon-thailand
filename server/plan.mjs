@@ -54,6 +54,10 @@ export async function transport(setup, dir, ctx) {
   const leg = transportLeg(setup, dir);
   if (!['go', 'back'].includes(dir) || !leg || leg.by === 'drive') throw bad('เลือกขาไปหรือขากลับที่ต้องการค้นหา');
   if (leg.choice) return [leg.choice];
+  if (!(dir === 'go' ? leg.from : leg.to)) {
+    ctx.step(dir === 'go' ? 'ข้ามการค้นหาขาไปเพราะยังไม่ระบุต้นทาง' : 'ข้ามการค้นหาขากลับเพราะยังไม่ระบุปลายทาง');
+    return [];
+  }
   ctx.step(
     'ค้นการเดินทาง ' + (dir === 'go' ? (leg.from ?? '') + ' → ' + setup.city : setup.city + ' → ' + (leg.to ?? '')),
   );
@@ -75,7 +79,7 @@ export async function transport(setup, dir, ctx) {
       );
       web = (Array.isArray(value.options) ? value.options : [])
         .map((row, i) => transportOption(row, dir + '-' + (i + 1), verified))
-        .filter(Boolean)
+        .filter((row) => row && (leg.by === 'undecided' || row.by === leg.by))
         .slice(0, 5);
     } catch (error) {
       if (!live.length || protectedError(error)) throw error;
@@ -112,10 +116,16 @@ function choose(options, dir) {
 }
 function setTransport(setup, flags, dir, options, chosen) {
   const leg = transportLeg(setup, dir);
-  if (leg.by === 'undecided') flags.arrivalSuggested ??= { by: chosen.by, why: chosen.why || 'เหมาะกับเวลาทริป' };
+  const requestedBy = leg.by;
+  if (leg.by === 'undecided') {
+    flags[dir === 'go' ? 'arrivalSuggested' : 'departureSuggested'] = {
+      by: chosen.by,
+      why: chosen.why || 'เหมาะกับเวลาทริป',
+    };
+  }
   leg.by = chosen.by;
   leg.time = dir === 'go' ? chosen.arr : chosen.dep;
-  flags.transport[dir] = { chosen: chosen.id, chosenOption: chosen, options };
+  flags.transport[dir] = { chosen: chosen.id, chosenOption: chosen, options, ...(!leg.choice && { requestedBy }) };
 }
 function stayExamples(stay, verified) {
   return (Array.isArray(stay?.examples) ? stay.examples : [])
@@ -395,7 +405,7 @@ export async function planTrip(input, ctx, demo = false) {
   timing.transport = elapsed(tTransport);
   if (
     !flags.arrivalSuggested &&
-    [setup.arrive?.by, setup.depart?.by].includes('undecided') &&
+    setup.arrive?.by === 'undecided' && setup.arrive.from &&
     design.arrivalSuggested?.by &&
     design.arrivalSuggested.by !== 'none'
   )

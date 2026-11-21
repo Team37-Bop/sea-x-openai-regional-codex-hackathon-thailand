@@ -109,6 +109,17 @@ test('aggregates walking, meals, stars, weekday, clock and departure rules indep
   assert.match(rule('a/food').problems[0], /market/);
   assert.equal(report.mem.b.txt, 'ไม่มีเงื่อนไขพิเศษ');
 });
+test('return buffers use only a return suggestion for an undecided departure', () => {
+  const setup = normalize({ ...base, depart: { by: 'undecided', time: '20:00' } });
+  const plan = {
+    flags: { arrivalSuggested: { by: 'flight' } },
+    days: [{ date: base.startDate, stops: [stop('station', { t0: '19:15', t1: '19:15' })] }],
+  };
+  assert.ok(!checks(plan, setup).list.some((rule) => rule.id === 'departure'));
+  plan.flags.departureSuggested = { by: 'train' };
+  assert.equal(checks(plan, setup).list.find((rule) => rule.id === 'departure').ok, true);
+});
+
 test('scheduled stops keep dwell, canonical aliases, travel waits, prices and fallback coordinates', async () => {
   const setup = normalize({
     ...base,

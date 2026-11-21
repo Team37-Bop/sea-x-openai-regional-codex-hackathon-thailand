@@ -109,14 +109,17 @@ export function installSetupExtras(form, readSetup) {
     ['arrive', 'go'],
     ['depart', 'back'],
   ]) {
-    const by = form.elements[name + 'By'],
+    const byName = name + 'By';
+    const by = form.elements[byName],
       time = form.elements[name + 'Time'];
-    const fieldset = by.closest('fieldset');
+    const fieldset = time.closest('fieldset');
     const auto = element('input');
     auto.type = 'checkbox';
     auto.name = name + 'Auto';
     const autoLabel = element('label', null, 'checkbox');
-    autoLabel.append(auto, document.createTextNode('ให้ Bop เลือกเวลาให้'));
+    const autoText = document.createTextNode('');
+    autoLabel.append(auto, autoText);
+    const hint = element('p', null, 'muted');
     const list = element('div', null, 'transport-options');
     const feedback = element('p', null, 'muted');
     feedback.setAttribute('role', 'status');
@@ -136,21 +139,44 @@ export function installSetupExtras(form, readSetup) {
         auto.checked,
         by.value === 'drive' ? 0 : form.querySelectorAll('#members .member').length,
       ]);
-    function updateLabel() {
-      search.textContent = (by.value === 'drive' ? 'คำนวณเวลาขับรถ' : 'ค้นหาตัวเลือก') + directionLabel;
+    const outbound = dir === 'go';
+    const labelsByMode = {
+      undecided: [outbound ? 'เมืองต้นทาง' : 'เมืองที่เดินทางกลับ', 'เช่น กรุงเทพฯ'],
+      flight: [outbound ? 'สนามบินต้นทาง' : 'สนามบินปลายทางขากลับ', 'เช่น DMK'],
+      bus: [outbound ? 'ต้นทางรถบัส' : 'ปลายทางรถบัสขากลับ', 'เช่น หมอชิต'],
+      train: [outbound ? 'สถานีรถไฟต้นทาง' : 'สถานีรถไฟปลายทางขากลับ', 'เช่น สถานีกลางกรุงเทพอภิวัฒน์'],
+      drive: [outbound ? 'จุดเริ่มขับรถ' : 'จุดหมายขากลับ', 'เช่น กรุงเทพฯ'],
+    };
+    function updateControls() {
+      const mode = by.value;
+      const service = { flight: 'เที่ยวบิน', bus: 'เที่ยวรถบัส', train: 'เที่ยวรถไฟ' }[mode];
+      const automatic = mode === 'undecided' || (service && auto.checked);
+      const [placeLabel, example] = labelsByMode[mode];
+      place.closest('label').firstChild.textContent = placeLabel;
+      place.setAttribute('aria-label', placeLabel);
+      place.placeholder = example;
+      autoLabel.hidden = auto.disabled = !service;
+      autoText.textContent = service ? 'ให้ Bop ช่วยหา' + service : '';
+      time.closest('label').hidden = time.disabled = Boolean(automatic);
+      search.hidden = mode !== 'drive' && !(service && auto.checked);
+      search.textContent = (mode === 'drive' ? 'คำนวณเวลาขับรถ' : 'ดูตัวเลือก' + (service || '')) + directionLabel;
+      hint.textContent = mode === 'undecided'
+        ? 'ระบุ' + placeLabel + 'เพื่อให้ Bop แนะนำวิธีเดินทาง' + directionLabel
+        : service && auto.checked ? 'เลือก' + service + 'ตอนนี้ หรือให้ Bop เลือกให้ตอนจัดแผน' : '';
+      hint.hidden = !hint.textContent;
     }
     function clear(restore = false, edited = '') {
       leg.ctrl?.abort();
       leg.ctrl = null;
       if (restore && leg.original) {
         if (edited !== time.name && time.value === leg.original.appliedTime) time.value = leg.original.time;
-        if (edited !== by.name && by.value === leg.original.appliedBy) by.value = leg.original.by;
+        if (edited !== byName && by.value === leg.original.appliedBy) by.value = leg.original.by;
       }
       leg.choice = leg.original = null;
       list.replaceChildren();
       feedback.textContent = '';
       search.disabled = false;
-      updateLabel();
+      updateControls();
     }
     function dayOffset(value) {
       if (!value) return '';
@@ -239,9 +265,8 @@ export function installSetupExtras(form, readSetup) {
           leg.choice = option;
           by.value = option.by;
           time.value = appliedTime;
-          auto.checked = false;
           feedback.textContent = 'เลือก ' + nameText + ' · ' + option.dep + '–' + option.arr;
-          updateLabel();
+          updateControls();
         });
         group.append(row);
         const page = option.src?.checked === 'web' && link(option.src.url, option.src.title || 'แหล่งข้อมูล');
@@ -254,6 +279,11 @@ export function installSetupExtras(form, readSetup) {
     }
     const search = button('', async () => {
       clear(true);
+      if (!place.value.trim()) {
+        feedback.textContent = 'ระบุ' + labelsByMode[by.value][0] + 'ก่อนค้นหา';
+        place.focus();
+        return;
+      }
       const ctrl = new AbortController();
       leg.ctrl = ctrl;
       const started = signature();
@@ -297,13 +327,17 @@ export function installSetupExtras(form, readSetup) {
         if (leg.ctrl === ctrl) search.disabled = false;
       }
     });
-    fieldset.append(autoLabel, search, feedback, list);
-    updateLabel();
-    const inputFields = new Set(['city', 'startDate', 'endDate', place.name, by.name, time.name, auto.name]);
+    fieldset.append(autoLabel, hint, search, feedback, list);
+    updateControls();
+    const inputFields = new Set(['city', 'startDate', 'endDate', place.name, byName, time.name, auto.name]);
     form.addEventListener('input', (event) => {
       const field = event.target.name;
       if (!inputFields.has(field)) return;
       if (field === place.name) leg.placeLL = null;
+      if (field === byName) {
+        time.value = '';
+        auto.checked = by.value !== 'drive' && by.value !== 'undecided';
+      }
       clear(true, field);
     });
     let hydrating = false;
@@ -323,16 +357,18 @@ export function installSetupExtras(form, readSetup) {
         hydrating = false;
       });
       clear();
-      const picked =
-        saved.choice ||
-        plannedRoute?.options?.find((item) => item.id === plannedRoute.chosen) ||
-        plannedRoute?.chosenOption ||
-        (typeof plannedRoute?.chosen === 'object' && plannedRoute.chosen);
+      const legacyChoice = plannedRoute && !plannedRoute.requestedBy && !saved.auto && (
+        plannedRoute.options?.find((item) => item.id === plannedRoute.chosen) ||
+        plannedRoute.chosenOption ||
+        (typeof plannedRoute.chosen === 'object' && plannedRoute.chosen)
+      );
+      const picked = saved.choice || legacyChoice;
       const choice = picked?.carrier && picked.dep && picked.arr ? picked : null;
-      by.value = saved.by || choice?.by || 'undecided';
+      const preferred = saved.choice?.by || plannedRoute?.requestedBy || saved.by || choice?.by;
+      by.value = Object.hasOwn(labelsByMode, preferred) ? preferred : saved.time ? 'flight' : 'undecided';
       time.value = saved.time || (dir === 'go' ? choice?.arr : choice?.dep) || '';
       place.value = saved[destination] || '';
-      auto.checked = saved.auto === true;
+      auto.checked = Boolean(choice || saved.auto || plannedRoute?.requestedBy || !time.value);
       leg.placeLL = Array.isArray(saved.placeLL) ? [...saved.placeLL] : null;
       if (choice && by.value !== 'drive') {
         leg.choice = structuredClone(choice);
@@ -343,7 +379,7 @@ export function installSetupExtras(form, readSetup) {
             .join(' ');
         list.append(button('ล้างตัวเลือก', () => clear()));
       }
-      updateLabel();
+      updateControls();
     };
   }
   const augment = (setup) => {
@@ -358,7 +394,8 @@ export function installSetupExtras(form, readSetup) {
       if (!setup[name]) continue;
       decorated[name] = {
         ...setup[name],
-        auto: leg.auto.checked,
+        time: form.elements[name + 'Time'].disabled && !leg.choice ? '' : setup[name].time,
+        auto: setup[name].by === 'undecided' || (!leg.auto.disabled && leg.auto.checked),
         ...(leg.placeLL ? { placeLL: leg.placeLL } : {}),
         ...(leg.choice ? { choice: leg.choice } : {}),
       };
