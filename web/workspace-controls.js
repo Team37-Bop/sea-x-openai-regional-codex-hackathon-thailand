@@ -4,6 +4,8 @@ export function bindWorkspace(form) {
     const note = document.querySelector('#setup-summary'),
       count = document.querySelector('#setup-person-count');
     const days = 1 + (Date.parse(form.endDate.value) - Date.parse(form.startDate.value)) / 86400000;
+    form.querySelector('#start-plan-label').textContent =
+      form.elements.autonomy.value === 'ask' ? 'ดูตัวเลือกจาก Bop' : 'เริ่มวางแผน';
     if (note)
       note.textContent = [form.city.value.trim(), Number.isInteger(days) && days > 0 ? days + ' วัน' : '']
         .filter(Boolean)

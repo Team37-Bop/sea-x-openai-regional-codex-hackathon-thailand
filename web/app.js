@@ -880,6 +880,7 @@ setupForm.addEventListener('submit', (event) => {
           'กลับไปแก้ข้อมูลทริป · ' + Math.floor((Date.now() - start) / 1000) + ' วินาที';
       }, 1000);
       if (input.autonomy === 'ask') {
+        status.textContent = 'Bop กำลังหาร้านและที่เที่ยวมาให้เลือก';
         const found = await api('/api/plan/candidates', { setup: input });
         input.picks = await chooseCandidates({
           dialog: detail,
@@ -889,6 +890,7 @@ setupForm.addEventListener('submit', (event) => {
           signal: activePlanning.signal,
         });
         activePlanning.signal.throwIfAborted();
+        status.textContent = 'Bop กำลังจัดแผนตามที่เลือก';
       }
       const progress = {
         plan: { city: input.city, days: Array(tripLength()).fill(null) },

@@ -1806,6 +1806,10 @@ body:has(#views[hidden]) .trip-bar .trip-heading {
   }
   .trip-bar .trip-heading h1 {
     font-size: 1.1rem;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow: hidden;
   }
   #replan {
     flex-basis: 100%;

@@ -198,7 +198,7 @@ The destination, outbound origin, return destination, booked lodgings and indivi
 
 ### Requirement: Visible pace and place-selection preferences
 
-The organizer SHALL see two separate, keyboard-operable groups for trip pace and place selection. Pace SHALL offer relaxed, balanced and packed in that order. Place selection SHALL explain the choice between letting Bop plan directly and reviewing candidate places first.
+Immediately after the dates, the organizer SHALL see the choices “ไม่ต้องถาม จัดแผนเลย” and “ให้ Bop ถามก่อน”. Both SHALL remain visible alongside their descriptions. The submit action SHALL change to “ดูตัวเลือกจาก Bop” when the organizer asks to review suggestions first. A separate keyboard-operable pace group SHALL offer relaxed, balanced and packed in that order.
 
 #### Scenario: Create and reopen a trip
 

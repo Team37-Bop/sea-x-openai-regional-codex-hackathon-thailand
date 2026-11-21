@@ -292,6 +292,29 @@
                 </div>
               </div>
               <div class="form-group">
+                <fieldset class="trip-preference">
+                  <legend>ให้ Bop วางแผนแบบไหน</legend>
+                  <div class="place-options">
+                    <label class="preference-option">
+                      <input type="radio" name="autonomy" value="auto" checked />
+                      <span>ไม่ต้องถาม จัดแผนเลย<small>ให้ Bop เลือกร้านและที่เที่ยวให้ แก้แผนทีหลังได้</small></span>
+                    </label>
+                    <label class="preference-option">
+                      <input type="radio" name="autonomy" value="ask" />
+                      <span>ให้ Bop ถามก่อน<small>ดูร้านและที่เที่ยวที่ Bop แนะนำ แล้วเลือกที่สนใจก่อนจัดแผน</small></span>
+                    </label>
+                  </div>
+                </fieldset>
+                <fieldset class="trip-preference">
+                  <legend>จังหวะทริป</legend>
+                  <div class="pace-options">
+                    <label class="preference-option"><input type="radio" name="pace" value="chill" />ไปเรื่อย ๆ</label>
+                    <label class="preference-option"><input type="radio" name="pace" value="normal" checked />พอดี ๆ</label>
+                    <label class="preference-option"><input type="radio" name="pace" value="packed" />เที่ยวให้เต็มวัน</label>
+                  </div>
+                </fieldset>
+              </div>
+              <div class="form-group">
                 <fieldset id="stay-mode">
                   <legend>ที่พัก</legend>
                   <div class="stay-options">
@@ -319,28 +342,6 @@
                 </div>
               </details>
               <div class="form-group last-group">
-                <h3>รูปแบบการเที่ยว</h3>
-                <fieldset class="trip-preference">
-                  <legend>จังหวะทริป</legend>
-                  <div class="pace-options">
-                    <label class="preference-option"><input type="radio" name="pace" value="chill" />ไปเรื่อย ๆ</label>
-                    <label class="preference-option"><input type="radio" name="pace" value="normal" checked />พอดี ๆ</label>
-                    <label class="preference-option"><input type="radio" name="pace" value="packed" />เที่ยวให้เต็มวัน</label>
-                  </div>
-                </fieldset>
-                <fieldset class="trip-preference">
-                  <legend>การเลือกสถานที่</legend>
-                  <div class="place-options">
-                    <label class="preference-option">
-                      <input type="radio" name="autonomy" value="auto" checked />
-                      <span>ให้ Bop เลือก<small>จัดร้านอาหารและที่เที่ยวลงแผนให้เลย</small></span>
-                    </label>
-                    <label class="preference-option">
-                      <input type="radio" name="autonomy" value="ask" />
-                      <span>ให้กลุ่มเลือกก่อน<small>ดูตัวเลือกแล้วบอกว่าอยากไปที่ไหนก่อนจัดแผน</small></span>
-                    </label>
-                  </div>
-                </fieldset>
                 <p class="feedback" id="form-error" role="alert"></p>
               </div>
             </section>
@@ -387,7 +388,7 @@
                 <span class="wide-text">เชียงใหม่</span>
               </button>
               <button class="primary start-plan" type="submit">
-                เริ่มวางแผน
+                <span id="start-plan-label">เริ่มวางแผน</span>
                 <svg class="icon" aria-hidden="true">
                   <use href="#i-arrow" />
                 </svg>
