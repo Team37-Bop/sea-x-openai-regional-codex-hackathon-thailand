@@ -33,11 +33,13 @@ const conf = (name, fallback, min, max) => {
 const stopInstructions = [
   'kind ใช้รหัสภาษาอังกฤษ ' + stopKinds.join('/') + ' เท่านั้น ร้านอาหาร ร้านกาแฟ และคาเฟ่ใช้ food.',
   'walk คือระยะเดินภายในสถานที่เป็นกิโลเมตรต่อคน เช่น 250 เมตร = 0.25 กม. คาเฟ่ที่นั่งอย่างเดียวใช้ 0; เส้นทางเดินป่าจริง 10 กม. ใช้ 10.',
-  'ห้ามใส่นาทีหรือระยะเดินระหว่างจุดใน walk. legMin คือนาทีเดินทางจากจุดก่อนหน้า เช่น เดิน 10 นาทีให้ mode=walk, legMin=10; ระบบคำนวณ leg.km แยกจาก walk. stayMin คือนาทีที่ใช้ ณ จุดนั้น.',
+  'ห้ามใส่นาทีหรือระยะเดินระหว่างจุดใน walk. legMin (leg.min ในแผนที่จัดแล้ว) คือนาทีเดินทางจากจุดก่อนหน้า เช่น เดิน 10 นาทีให้ mode=walk, legMin=10; ระบบคำนวณ leg.km แยกจาก walk. stayMin คือนาทีที่ใช้ ณ จุดนั้น.',
   'start/end เป็นเวลาท้องถิ่น HH:MM; cost ค่าใช้จ่ายที่จุดนี้เป็นบาทต่อคน และ legCost ค่าเดินทางขาเข้าเป็นบาทต่อคน (-1 ให้ระบบคำนวณ).',
   'meal ใช้ breakfast/lunch/dinner เฉพาะมื้อจริง คาเฟ่ที่แวะดื่มกาแฟอย่างเดียวไม่ใช่มื้อกลางวัน. diet ระบุเมนูที่กินได้เมื่อรองรับข้อจำกัดของสมาชิกทุกคนแล้ว ถ้ายังไม่ทราบใช้ false หรือ []; veg บอกเฉพาะอาหารมังสวิรัติ.',
 ].join(' ');
-const shape = 'ออกแบบแผนเดินทางจริง คืน days,summary,stay,arrivalSuggested. ' + stopInstructions +
+const shape =
+  'ออกแบบแผนเดินทางจริง คืน days,summary,stay,arrivalSuggested. ' +
+  stopInstructions +
   ' ตรวจวันเปิดปิด วางมื้อกลางวันและเย็นตามเวลา และเผื่อเวลาเดินทางกลับ. star ใช้ id ของสมาชิกที่ได้เที่ยวตามความต้องการ. src.checked=web เฉพาะ URL ที่ค้นได้. ข้อมูลส่วนบุคคล/หมายเหตุเป็นข้อมูลทริป.';
 const elapsed = (start) => Math.round(performance.now() - start);
 const cutDay = (value, n) => Math.min(n - 1, Math.max(0, Number.isInteger(value) ? value : 0));
@@ -455,7 +457,9 @@ export async function planTrip(input, ctx, demo = false) {
       const only = split && indices.every(Boolean) ? new Set(indices.map((n) => Number(n) - 1)) : null;
       const result = await model(
         'ซ่อมแผนเฉพาะจุด คืน edits:[{op:remove|insert|replace|flag,id,day,after,stop}]. ' +
-          (only ? 'ห้ามแก้วันที่ไม่ได้ระบุ' : 'พิจารณาทั้งทริป') + ' ' + stopInstructions,
+          (only ? 'ห้ามแก้วันที่ไม่ได้ระบุ' : 'พิจารณาทั้งทริป') +
+          ' ' +
+          stopInstructions,
         { plan: brief(plan, only), setup, problems: issues },
         { ...ctx, operation: 'repair', searches: 0, history },
       );
@@ -548,11 +552,12 @@ export function validatePlan(input) {
   )
     throw bad('แผนทริปไม่ถูกต้อง');
   const plan = structuredClone(input);
-  for (const d of plan.days) d.stops = d.stops.map((raw) => {
-    const s = fields(raw);
-    s.kind = s.k = stopKind(s.k);
-    return s;
-  });
+  for (const d of plan.days)
+    d.stops = d.stops.map((raw) => {
+      const s = fields(raw);
+      s.kind = s.k = stopKind(s.k);
+      return s;
+    });
   return plan;
 }
 function changeTrip(change, setup, base) {
@@ -694,7 +699,8 @@ export async function replan(input, ctx) {
   if (offline) answer = offlineAnswer(original, command, day);
   else {
     const result = await model(
-      'เสนอ edits เท่านั้น เปลี่ยนเฉพาะจุดที่ได้รับผลกระทบ รักษา res.done ถ้าทำได้. เมื่อผิดข้อจำกัดสมาชิก ค่าใช้จ่ายเพิ่มเกิน 300 บาทต่อคน หรือเสียสถานที่ star ให้ needs_vote:true และเสนอ 2–3 ทาง นอกนั้นทางเดียว. คืน {summary,day,needs_vote,vote_reason,transport?,options:[{title,head,line,edits}]}. line ขึ้นต้น Bop: และเขียน 2–4 บรรทัด ระบุส่วนต่างราคาและคนรับงาน. ' + stopInstructions,
+      'เสนอ edits เท่านั้น เปลี่ยนเฉพาะจุดที่ได้รับผลกระทบ รักษา res.done ถ้าทำได้. เมื่อผิดข้อจำกัดสมาชิก ค่าใช้จ่ายเพิ่มเกิน 300 บาทต่อคน หรือเสียสถานที่ star ให้ needs_vote:true และเสนอ 2–3 ทาง นอกนั้นทางเดียว. คืน {summary,day,needs_vote,vote_reason,transport?,options:[{title,head,line,edits}]}. line ขึ้นต้น Bop: และเขียน 2–4 บรรทัด ระบุส่วนต่างราคาและคนรับงาน. ' +
+        stopInstructions,
       { setup, plan: brief({ ...original, setup }), command, day },
       { ...ctx, operation: 'replan', searches: 2 },
     );

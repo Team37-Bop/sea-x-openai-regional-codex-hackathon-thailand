@@ -58,14 +58,11 @@ test('setup preserves supplied end dates and validates selected supplier capabil
   assert.equal(setup.extra.length, 1000);
   assert.equal(setup.members[1].id, 'a_');
   assert.equal(normalize(base).arrive, undefined);
-  assert.deepEqual(
-    source({ url: 'https://site.example/page#x', title: 'หน้า' }, ['HTTPS://SITE.EXAMPLE/Page/']),
-    {
-      url: 'https://site.example/page#x',
-      title: 'หน้า',
-      checked: 'web',
-    },
-  );
+  assert.deepEqual(source({ url: 'https://site.example/page#x', title: 'หน้า' }, ['HTTPS://SITE.EXAMPLE/Page/']), {
+    url: 'https://site.example/page#x',
+    title: 'หน้า',
+    checked: 'web',
+  });
 });
 test('aggregates walking, meals, stars, weekday, clock and departure rules independently', () => {
   const setup = normalize({
@@ -107,8 +104,7 @@ test('aggregates walking, meals, stars, weekday, clock and departure rules indep
   assert.deepEqual(report.ds, [{ walk: 2.3, cost: 260 }]);
   const rule = (id) => report.list.find((r) => r.id === id);
   for (const id of ['a/walk', 'meals', 'departure']) assert.equal(rule(id).ok, true, id);
-  for (const id of ['a/food', 'a/wishes', 'a/budget', 'hours', 'open-days'])
-    assert.equal(rule(id).ok, false, id);
+  for (const id of ['a/food', 'a/wishes', 'a/budget', 'hours', 'open-days']) assert.equal(rule(id).ok, false, id);
   assert.match(rule('open-days').problems[0], /เสาร์\/อาทิตย์/);
   assert.match(rule('a/food').problems[0], /market/);
   assert.equal(report.mem.b.txt, 'ไม่มีเงื่อนไขพิเศษ');
@@ -158,17 +154,9 @@ test('scheduled stops keep dwell, canonical aliases, travel waits, prices and fa
   assert.equal(fare('car', 10, 5), 80);
   assert.equal(fare('transit', 10, 5), 65);
   assert.equal(fare('own', 10, 5, { parking: 5, tolls: 5 }), 18);
-  const approximate = await schedule(
-    { stops: [{ id: 'x', name: 'ไม่พบ' }] },
-    0,
-    setup,
-    context(),
-    [],
-    new Set(),
-    {
-      offline: true,
-    },
-  );
+  const approximate = await schedule({ stops: [{ id: 'x', name: 'ไม่พบ' }] }, 0, setup, context(), [], new Set(), {
+    offline: true,
+  });
   assert.deepEqual(approximate.day.stops[0].ll, [0.0001, 0.0001]);
   assert.equal(approximate.day.stops[0].place.source, 'model');
 });
@@ -305,19 +293,37 @@ test('forecast refresh supersedes prior results, skips the sample and only notif
 
 test('shared weather lookups detach an aborted caller and replace abandoned requests immediately', async (t) => {
   const requests = [];
-  t.mock.method(globalThis, 'fetch', (_url, { signal }) => new Promise((resolve, reject) => {
-    requests.push({ signal, finish: () => resolve(Response.json({
-      hourly: { time: ['2026-12-01T15:00'], precipitation: [4], precipitation_probability: [80] },
-    })) });
-    signal.addEventListener('abort', () => reject(signal.reason), { once: true });
-  }));
+  t.mock.method(
+    globalThis,
+    'fetch',
+    (_url, { signal }) =>
+      new Promise((resolve, reject) => {
+        requests.push({
+          signal,
+          finish: () =>
+            resolve(
+              Response.json({
+                hourly: { time: ['2026-12-01T15:00'], precipitation: [4], precipitation_probability: [80] },
+              }),
+            ),
+        });
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+      }),
+  );
   function lookup(point, controller) {
-    return weather({ days: [{ date: '2026-12-01', stops: [
-      stop('rain', { k: 'nature', t0: '14:00', t1: '15:00', ll: point }),
-    ] }] }, controller.signal, '2026-11-30');
+    return weather(
+      {
+        days: [
+          { date: '2026-12-01', stops: [stop('rain', { k: 'nature', t0: '14:00', t1: '15:00', ll: point })] },
+        ],
+      },
+      controller.signal,
+      '2026-11-30',
+    );
   }
 
-  const a = new AbortController(), b = new AbortController();
+  const a = new AbortController(),
+    b = new AbortController();
   const results = Promise.allSettled([lookup([14, 104], a), lookup([14, 104], b)]);
   a.abort();
   requests[0].finish();
@@ -338,4 +344,34 @@ test('shared weather lookups detach an aborted caller and replace abandoned requ
   assert.equal(requests.length, 3);
   requests[2].finish();
   for (const result of await Promise.all([replacement, follower])) assert.equal(result.checked, 1);
+});
+
+test('Thai venue descriptions are normalized before food checks and genuine long hikes retain their distance', async () => {
+  const setup = normalize({
+    startDate: '2026-11-20',
+    days: 1,
+    members: [{ id: 'a', name: 'แอน', avoid: 'กุ้ง', maxWalkKm: 6 }],
+  });
+  const stops = [
+    {
+      id: 'meal',
+      name: 'ร้านริมแม่น้ำ',
+      kind: 'คาเฟ่และร้านอาหารท้องถิ่น',
+      ll: [18, 99],
+      start: '12:00',
+      end: '13:00',
+      meal: 'lunch',
+      walk: 0.25,
+    },
+    { id: 'trail', name: 'เส้นทางป่า', kind: 'เดินป่าธรรมชาติ', ll: [18, 99], start: '14:00', end: '17:00', walk: 10 },
+  ];
+  const { day } = await schedule({ stops }, 0, setup, context(), [], new Set(), { offline: true });
+  assert.equal(day.stops[0].kind, 'food');
+  assert.equal(day.stops[0].k, 'food');
+  assert.equal(day.stops[1].k, 'nature');
+  assert.equal(day.stops[1].walk, 10);
+  const report = checks({ days: [day] }, setup);
+  assert.equal(report.maxWalk, 10.3);
+  assert.equal(report.list.find((r) => r.id === 'a/walk').ok, false);
+  assert.match(report.list.find((r) => r.id === 'a/food').problems[0], /ร้านริมแม่น้ำ/);
 });

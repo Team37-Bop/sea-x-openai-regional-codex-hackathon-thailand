@@ -39,10 +39,7 @@ function anchor(rows, index, stays, days) {
     if (!isHotel(rows[0]) || rows[0].name !== start.name) {
       const t = clock(Math.max(360, minutes(normTime(rows[0].start) || '09:00') - 20));
       rows.unshift(
-        pin(
-          fields({ id: 'd' + (index + 1) + '_stay_start', kind: 'hotel', start: t, end: t, cost: 0 }),
-          start,
-        ),
+        pin(fields({ id: 'd' + (index + 1) + '_stay_start', kind: 'hotel', start: t, end: t, cost: 0 }), start),
       );
     }
     if (end && start.name !== end.name) rows[0].note = 'เช็กเอาต์ ขนกระเป๋าไป' + end.name;
@@ -79,12 +76,7 @@ export async function bookedStays(setup, ctx, offline) {
       if (!offline && coordinates(setup.cityLL))
         for (const radius of [40, 200]) {
           for (const name of names) {
-            ll = await findPlace(
-              radius === 40 ? name + ' ' + setup.city : name,
-              setup.cityLL,
-              radius,
-              ctx.signal,
-            );
+            ll = await findPlace(radius === 40 ? name + ' ' + setup.city : name, setup.cityLL, radius, ctx.signal);
             if (ll) break;
           }
           if (ll) break;
@@ -252,9 +244,7 @@ export async function schedule(raw, index, setup, ctx, stays, verified, opts = {
         geometry: road.geometry,
       };
       leg.cost =
-        auto || ['own', 'walk'].includes(mode)
-          ? fare(mode, road.km, setup.members.length, leg)
-          : Number(rawCost);
+        auto || ['own', 'walk'].includes(mode) ? fare(mode, road.km, setup.members.length, leg) : Number(rawCost);
       if (row.legSrc) leg.src = row.legSrc;
       s.leg = leg;
       routes[road.key] = { geom: road.geom, ...(road.real ? {} : { approx: true }) };

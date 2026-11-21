@@ -52,25 +52,61 @@ const weekdays = object(
 const stop = object({
   id: string,
   name: string,
-  kind: { type: 'string', enum: stopKinds, description: 'English category ID. Use food for a restaurant, café, bakery, or food stop; market for a market visit. Use hotel for a booked hotel, transit for an arrival or departure terminal. Use nature or view for an outdoor attraction.' },
+  kind: {
+    type: 'string',
+    enum: stopKinds,
+    description:
+      'English category ID. Use food for a restaurant, café, bakery, or food stop; market for a market visit. Use hotel for a booked hotel, transit for an arrival or departure terminal. Use nature or view for an outdoor attraction.',
+  },
   query: string,
   aliases: strings,
   ll,
-  start: { ...string, description: "Earliest planned local arrival time at this stop, HH:MM." },
-  end: { ...string, description: "Planned local departure time after the visit, HH:MM." },
-  cost: { ...number, description: "On-site spending in THB per person; exclude incoming transport." },
-  mode: { type:'string', enum:['walk','red','car','van','own','transit'], description:'Mode of the incoming leg from the previous stop that day.' },
-  legCost: { ...number, description: "Fare in THB per person for the incoming leg; -1 requests automatic pricing." },
-  legMin: { ...number, description: "Estimated incoming travel duration in minutes, including a walking leg. For example 10 for a ten-minute walk to this stop." },
-  minSrc: { ...string, description: "Use web only if the incoming travel duration in minutes comes from a real web source." },
-  parking: { ...number, description: "Parking cost in THB per person on an own-car leg." },
-  tolls: { ...number, description: "Tolls in THB per person on an own-car leg." },
-  diet: { anyOf: [boolean, strings], description: 'True or a nonempty list of suitable dishes only when every stated food restriction is addressed at this meal. Use false or an empty list if suitability is unknown. A vegetarian dish alone does not establish allergen safety.' },
+  start: { ...string, description: 'Earliest planned local arrival time at this stop, HH:MM.' },
+  end: { ...string, description: 'Planned local departure time after the visit, HH:MM.' },
+  cost: { ...number, description: 'On-site spending in THB per person; exclude incoming transport.' },
+  mode: {
+    type: 'string',
+    enum: ['walk', 'red', 'car', 'van', 'own', 'transit'],
+    description: 'Mode of the incoming leg from the previous stop that day.',
+  },
+  legCost: {
+    ...number,
+    description: 'Fare in THB per person for the incoming leg; -1 requests automatic pricing.',
+  },
+  legMin: {
+    ...number,
+    description:
+      'Estimated incoming travel duration in minutes, including a walking leg. For example 10 for a ten-minute walk to this stop.',
+  },
+  minSrc: {
+    ...string,
+    description: 'Use web only if the incoming travel duration in minutes comes from a real web source.',
+  },
+  parking: { ...number, description: 'Parking cost in THB per person on an own-car leg.' },
+  tolls: { ...number, description: 'Tolls in THB per person on an own-car leg.' },
+  diet: {
+    anyOf: [boolean, strings],
+    description:
+      'True or a nonempty list of suitable dishes only when every stated food restriction is addressed at this meal. Use false or an empty list if suitability is unknown. A vegetarian dish alone does not establish allergen safety.',
+  },
   note: string,
-  meal: { type:'string', enum:['breakfast','lunch','dinner'], description:'Actual meal served here. Assign lunch or dinner to the meal stop at the relevant local time, including a market meal. A coffee break alone is not lunch.' },
-  star: { ...string, description: "ID of the member whose requested wish this visit fulfills." },
-  walk: { ...number, description: 'On-site walking distance in kilometres (km) per person during this visit only. Example: 250 metres inside a venue is 0.25. Never put minutes or distance walked between stops here. Use 0 for a seated café visit unless there is actual on-site walking; a ten-kilometre hike is 10.' },
-  veg: { ...boolean, description: "True when this stop offers a suitable vegetarian meal. It does not verify other dietary requirements." },
+  meal: {
+    type: 'string',
+    enum: ['breakfast', 'lunch', 'dinner'],
+    description:
+      'Actual meal served here. Assign lunch or dinner to the meal stop at the relevant local time, including a market meal. A coffee break alone is not lunch.',
+  },
+  star: { ...string, description: 'ID of the member whose requested wish this visit fulfills.' },
+  walk: {
+    ...number,
+    description:
+      'On-site walking distance in kilometres (km) per person during this visit only. Example: 250 metres inside a venue is 0.25. Never put minutes or distance walked between stops here. Use 0 for a seated café visit unless there is actual on-site walking; a ten-kilometre hike is 10.',
+  },
+  veg: {
+    ...boolean,
+    description:
+      'True when this stop offers a suitable vegetarian meal. It does not verify other dietary requirements.',
+  },
   open: period,
   hours,
   days: object({ hours: weekdays, closed: strings, only: strings }),
@@ -81,7 +117,7 @@ const stop = object({
   legSrc: src,
   catalogId: string,
   res: object({ done: boolean, todo: boolean, phone: string, name: string, note: string }),
-  stayMin: { ...number, description: "Visit duration in minutes at this stop, excluding travel time." },
+  stayMin: { ...number, description: 'Visit duration in minutes at this stop, excluding travel time.' },
 });
 const day = object({ title: string, stops: array(stop) }, ['title', 'stops']);
 const design = object(
@@ -210,7 +246,20 @@ const compactSource = requiredObject(src.properties);
 const example = requiredObject({ name: string, ll, priceNight: number, src: compactSource });
 const hotel = requiredObject({ area: string, why: string, examples: array(example) });
 const optionalStop = {
-  ...select(stop,['name','kind','query','ll','start','end','cost','veg','star','walk','legCost','note']),
+  ...select(stop, [
+    'name',
+    'kind',
+    'query',
+    'll',
+    'start',
+    'end',
+    'cost',
+    'veg',
+    'star',
+    'walk',
+    'legCost',
+    'note',
+  ]),
   mode: { ...stop.properties.mode, enum: ['', ...stop.properties.mode.enum] },
   src: compactSource,
   meal: { ...stop.properties.meal, enum: ['', ...stop.properties.meal.enum] },
@@ -247,10 +296,9 @@ const compactDesign = object(
   },
   ['days', 'summary'],
 );
-const compactEdit = object(
-  { op: string, id: string, day: number, after: string, stop: object(optionalStop) },
-  ['op'],
-);
+const compactEdit = object({ op: string, id: string, day: number, after: string, stop: object(optionalStop) }, [
+  'op',
+]);
 const compactOption = requiredObject({
   title: string,
   head: string,
@@ -273,9 +321,7 @@ export const claudeShapes = {
       needs_vote: boolean,
       vote_reason: string,
       transport: transitChange,
-      options: array(
-        object({ ...compactOption.properties, transport: transitChange }, compactOption.required),
-      ),
+      options: array(object({ ...compactOption.properties, transport: transitChange }, compactOption.required)),
     },
     ['summary', 'day', 'needs_vote', 'options'],
   ),

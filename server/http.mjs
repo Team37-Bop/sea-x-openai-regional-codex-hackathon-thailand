@@ -1,4 +1,4 @@
-import {saveLocalTrip,readLocalTrip} from './local-showcase.mjs';
+import { saveLocalTrip, readLocalTrip } from './local-showcase.mjs';
 import http from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { extname, resolve, sep } from 'node:path';
@@ -137,8 +137,8 @@ export async function handleRequest(request, response) {
     const url = new URL(request.url, 'http://localhost');
     const saved = /^\/api\/local-trips\/([0-9a-f-]{36})$/.exec(url.pathname);
     if (request.method === 'GET' && saved) {
-      const trip = await readLocalTrip(request,saved[1]);
-      return trip ? json(response,trip) : json(response,{error:'not_found'},404);
+      const trip = await readLocalTrip(request, saved[1]);
+      return trip ? json(response, trip) : json(response, { error: 'not_found' }, 404);
     }
     if (await serveIntegrations(request, response, url, abort.signal)) return;
     if (request.method === 'GET' && url.pathname === '/api/health')
@@ -172,9 +172,22 @@ export async function handleRequest(request, response) {
         if (url.pathname !== '/api/weather-check' && !(url.pathname === '/api/replan' && input.demo === true))
           await requireReady();
         const result = await streams.get(url.pathname)(input, ctx);
-        if(url.pathname==='/api/plan') {
-          const tripId=await saveLocalTrip(request,result);
-          if(tripId) return {...result,localTripId:tripId};
+        if (url.pathname === '/api/plan') {
+          const tripId = await saveLocalTrip(request, result);
+          if (tripId) return { ...result, localTripId: tripId };
+        }
+        if (url.pathname === '/api/replan' && !input.demo && Array.isArray(result.options)) {
+          await Promise.all(
+            result.options.map(async (option) => {
+              const id = await saveLocalTrip(request, {
+                plan: option.plan,
+                routes: result.routes,
+                usage: result.usage,
+                summary: option.line || option.title,
+              });
+              if (id) option.localTripId = id;
+            }),
+          );
         }
         return result;
       });

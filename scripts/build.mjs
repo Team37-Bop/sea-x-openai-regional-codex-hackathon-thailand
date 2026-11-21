@@ -49,3 +49,19 @@ await build({
     },
   ],
 });
+
+// Published assets are cached for a year. Give application-generated files content-specific URLs.
+const { createHash } = await import('node:crypto');
+const { readFile } = await import('node:fs/promises');
+for (const [asset, consumer] of [
+  ['sample.json', 'app.js'],
+  ['sample-replan.js', 'app.js'],
+  ['liff.js', 'liff.js'],
+]) {
+  const content = await readFile('dist/assets/' + asset);
+  const digest = createHash('sha256').update(content).digest('hex').slice(0, 12);
+  const versioned = asset.replace(/(\.[^.]+)$/, '-' + digest + '$1');
+  await writeFile('dist/assets/' + versioned, content);
+  const source = await readFile('dist/' + consumer, 'utf8');
+  await writeFile('dist/' + consumer, source.replaceAll('/assets/' + asset, '/assets/' + versioned));
+}

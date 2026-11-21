@@ -163,3 +163,30 @@ test('a booked choice bypasses search, new transport uses the fitting estimated 
   const only = await transport(setup, 'back', ctx());
   assert.equal(only[0].id, 'back-kept');
 });
+
+test('design, daily planning and edit schemas identify units and constrain categories for both providers', async () => {
+  const { openaiShapes, claudeShapes } = await import('../server/model-shapes.mjs');
+  const objectSchema = (s) => (s.properties ? s : s.anyOf.find((v) => v.properties));
+  const stopFor = (shapes, op) => {
+    const root = shapes[op].properties;
+    if (root.days) return root.days.items.properties.stops.items.properties;
+    const edit = (root.edits ?? root.options.items.properties.edits).items.properties;
+    return objectSchema(edit.stop).properties;
+  };
+  for (const schemas of [openaiShapes, claudeShapes])
+    for (const op of ['design', 'daily', 'repair', 'replan']) {
+      const stop = stopFor(schemas, op);
+      assert.match(stop.walk.description, /on-site walking distance in kilometres/i);
+      assert.match(stop.walk.description, /never put minutes/i);
+      assert.match(stop.walk.description, /between stops/i);
+      assert.ok(
+        ['food', 'sight', 'hotel', 'nature', 'view', 'transit', 'market'].every((k) => stop.kind.enum.includes(k)),
+      );
+      assert.match(stop.kind.description, /café/);
+      assert.match(stop.diet.description, /every stated food restriction/);
+      assert.ok(stop.meal.enum.includes('lunch'));
+      assert.match(stop.legCost.description, /THB per person/);
+      if (stop.legMin) assert.match(stop.legMin.description, /travel duration in minutes/);
+    }
+  assert.ok(stopFor(openaiShapes, 'repair').kind.enum.includes(null), 'optional edit kind must accept null');
+});
