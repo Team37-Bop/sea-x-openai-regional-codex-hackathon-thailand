@@ -490,7 +490,16 @@ export function drawMap(days, routes, open, before, focusedStop, draft, tripDays
           });
         }
       });
-      map.addControl(new lib.NavigationControl({ showCompass: false }));
+      map.addControl(new lib.NavigationControl({ showCompass: false }), 'bottom-right');
+      const mapCard = container.closest('.map-card');
+      const attribution = container.querySelector('.maplibregl-ctrl-attrib');
+      const legend = document.querySelector('#leg-label');
+      const controlSizes = new ResizeObserver(() => {
+        mapCard.style.setProperty('--map-credit-space', (attribution?.offsetHeight || 0) + 18 + 'px');
+        mapCard.style.setProperty('--map-legend-height', (legend?.offsetHeight || 0) + 'px');
+      });
+      if (attribution) controlSizes.observe(attribution);
+      if (legend) controlSizes.observe(legend);
       map.on('style.load', () => {
         baseReady = true;
         for (const layer of map.getStyle().layers || []) {

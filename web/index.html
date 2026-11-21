@@ -230,13 +230,13 @@
         </aside>
         <div class="map-stage">
           <section class="map-card panel">
-            <div class="panel-heading">
-              <span class="tile-icon aqua">
-                <svg class="icon" aria-hidden="true"><use href="#i-map" /></svg>
-              </span>
-              <h2 id="map-title">แผนที่ทริป</h2>
-              <button id="whole-map" type="button" class="quiet">ดูแผนที่ทั้งทริป</button>
-              <span id="map-location-status" role="status" hidden></span>
+            <div class="map-toolbar">
+              <h2 id="map-title" class="map-accessible-text">แผนที่ทริป</h2>
+              <div class="map-scope" role="group" aria-label="แสดงสถานที่บนแผนที่">
+                <button id="day-map" type="button" aria-pressed="true">เฉพาะวันที่เลือก</button>
+                <button id="whole-map" type="button" aria-pressed="false">ทั้งทริป</button>
+              </div>
+              <span id="map-location-status" class="map-accessible-text" role="status" hidden></span>
             </div>
             <div class="map-viewport">
               <div id="map" aria-label="แผนที่สถานที่และเส้นทาง">

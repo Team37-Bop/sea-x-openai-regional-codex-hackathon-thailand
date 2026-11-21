@@ -297,7 +297,8 @@ function render() {
   document.querySelector('.command-panel').hidden = !plan;
   $('#plan-tab').setAttribute('aria-selected', String(view === 'plan'));
   $('#book-tab').setAttribute('aria-selected', String(view === 'book'));
-  $('#whole-map').textContent = allDays ? 'ดูแผนที่ของวันที่เลือก' : 'ดูแผนที่ทั้งทริป';
+  $('#day-map').setAttribute('aria-pressed', String(!allDays));
+  $('#whole-map').setAttribute('aria-pressed', String(allDays));
   const dateStrip = $('#tabs');
   const retainDateFocus = dateStrip.contains(document.activeElement);
   const dateScroll = dateStrip.scrollLeft;
@@ -564,11 +565,15 @@ $('#tabs').onkeydown = (event) => {
   $('#tabs').children[next].click();
   $('#tabs').children[next].focus();
 };
-$('#whole-map').onclick = () => {
-  allDays = !allDays;
-  $('#whole-map').textContent = allDays ? 'ดูแผนที่ของวันที่เลือก' : 'ดูแผนที่ทั้งทริป';
-  render();
-};
+for (const [button, showAll] of [[$('#day-map'), false], [$('#whole-map'), true]]) {
+  button.onclick = () => {
+    if (allDays === showAll) return;
+    allDays = showAll;
+    focusedStop = null;
+    closePlaceSheet($('#place-panel'), { restoreFocus: false });
+    render();
+  };
+}
 $('#reset-plan').onclick = () => {
   if (original && !busy) {
     state = structuredClone(original);
