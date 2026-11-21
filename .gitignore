@@ -3,3 +3,10 @@
 dist/
 node_modules/
 .cache/
+
+server/.data/
+build/
+.terraform/
+*.tfstate*
+*.tfplan
+*.tfvars

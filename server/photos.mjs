@@ -1,53 +1,386 @@
+import { isIP } from 'node:net';
+import { publicDispatcher } from './public-fetch.mjs';
+import { setTimeout as delay } from 'node:timers/promises';
 import { coordinates, distance } from './domain.mjs';
+import { boundedStrings, httpsUrl, placeText, rawUrl } from './place-text.mjs';
 
-const cache = new Map();
-let blockedUntil = 0;
-let afterLast = 0;
-let queue = Promise.resolve();
-
-const label = value => String(value ?? '').normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{M}\p{N}]/gu, '');
-function media(value) {
-  try {
-    const url = new URL(value);
-    if (url.protocol === 'https:' && url.hostname === 'upload.wikimedia.org' && !url.username && !url.password) return url.href;
-  } catch { /* No usable media URL. */ }
-}
-export async function wikipediaPhoto(name, ll, lang, signal) {
-  if (!name || !coordinates(ll)) return null;
-  const key = [name, ...ll.map(value => value.toFixed(3)), lang].join('|');
-  if (cache.has(key)) return cache.get(key);
-  const result = queue.then(async () => {
-    signal.throwIfAborted();
-    if (cache.has(key)) return cache.get(key);
-    if (blockedUntil > Date.now()) return null;
-    const wait = Math.max(0, afterLast - Date.now());
-    if (wait) await new Promise(resolve => setTimeout(resolve, wait));
-    signal.throwIfAborted();
-    afterLast = Date.now() + 250;
-    const url = new URL('https://' + (lang === 'th' ? 'th' : 'en') + '.wikipedia.org/w/api.php');
-    for (const [param, value] of Object.entries({ action: 'query', format: 'json', redirects: '1',
-      titles: name, prop: 'coordinates|pageimages|info', inprop: 'url', pithumbsize: '640', pilicense: 'free' })) url.searchParams.set(param, value);
-    let photo = null;
-    try {
-      const response = await fetch(url, { signal: AbortSignal.any([signal, AbortSignal.timeout(2500)]),
-        headers: { 'User-Agent': 'BopTripPlanner/1.0 place photo lookup' } });
-      if (response.status === 429) blockedUntil = Date.now() + 60_000;
-      if (!response.ok) return null;
-      const pages = (await response.json()).query?.pages ?? {};
-      for (const record of Object.values(pages)) {
-        const origin = record.coordinates?.[0];
-        const thumb = media(record.thumbnail?.source);
-        if (!origin || !thumb || label(record.title) !== label(name) || distance(ll, [origin.lat, origin.lon]) > 1.5) continue;
-        if (record.thumbnail.width < 300 || !record.fullurl?.startsWith(url.origin + '/')) continue;
-        photo = { url: thumb, credit: 'Wikimedia Commons · ดูเครดิตและสัญญาอนุญาตที่หน้าต้นทาง',
-          source: 'wikimedia', page: record.fullurl, match: 'exact' };
-        break;
-      }
-    } catch { signal.throwIfAborted(); return null; }
-    if (cache.size >= 200) cache.delete(cache.keys().next().value);
-    cache.set(key, photo);
-    return photo;
+const agent = 'BopTripPlanner/1.0 (group trip planner; place media)';
+const commons = 'https://commons.wikimedia.org/w/api.php';
+const ignored = new Set([
+  'the',
+  'wat',
+  'park',
+  'place',
+  'temple',
+  'restaurant',
+  'market',
+  'hotel',
+  'area',
+  'city',
+  'street',
+  'photo',
+  'cafe',
+  'and',
+  'district',
+  'museum',
+]);
+const names = (stop) => [
+  ...new Set(boundedStrings([stop.n ?? stop.name, stop.query, ...(stop.aliases ?? [])], 10, 120)),
+];
+const simplify = (value) =>
+  String(value ?? '')
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/[_-]/g, ' ')
+    .trim();
+const words = (value) => simplify(value).match(/[\p{L}\p{M}\p{N}]+/gu) ?? [];
+const key = (value) => words(value).join('');
+const decode = (value) =>
+  String(value ?? '').replace(/&(#(?:x[\da-f]+|\d+)|amp|lt|gt|quot|apos|nbsp);/gi, (_, id) => {
+    if (id[0] === '#') {
+      const cp = id[1].toLowerCase() === 'x' ? parseInt(id.slice(2), 16) : Number(id.slice(1));
+      return cp > 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : '';
+    }
+    return { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' }[id.toLowerCase()];
   });
-  queue = result.catch(() => {});
-  return result;
+const strip = (html) =>
+  decode(String(html ?? '').replace(/<[^>]*>/g, ' '))
+    .replace(/\s+/g, ' ')
+    .trim();
+
+export function publicPage(value) {
+  const href = httpsUrl(value);
+  if (!href) return '';
+  const url = new URL(href);
+  const host = url.hostname.toLowerCase().replace(/\.$/, '');
+  if (
+    url.port ||
+    !host.includes('.') ||
+    isIP(host) ||
+    /[:[\]]/.test(host) ||
+    /(?:^|\.)(?:localhost|local|internal|lan|home|localdomain|intranet|test|invalid|onion)$/.test(host) ||
+    host.endsWith('.home.arpa')
+  )
+    return '';
+  return href;
+}
+
+function containsName(text, stop) {
+  const tokens = ' ' + words(text).join(' ') + ' ';
+  return names(stop).some((name) => {
+    const target = words(name).join(' ');
+    if (target.length < 2 || ignored.has(target)) return false;
+    return (
+      tokens.includes(' ' + target + ' ') ||
+      (/[\u0e00-\u0e7f\u3040-\u30ff\u3400-\u9fff]/.test(target) && key(text).includes(key(name)))
+    );
+  });
+}
+function tags(head) {
+  const meta = new Map();
+  for (const tag of head.matchAll(/<meta\b(?:"[^"]*"|'[^']*'|[^>'"])*>/gi)) {
+    const attributes = {};
+    for (const match of tag[0].matchAll(/\s([\w:-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/g)) {
+      attributes[match[1].toLowerCase()] = decode(match[2] ?? match[3] ?? match[4]);
+    }
+    const key = (attributes.property || attributes.name || '').toLowerCase();
+    if (key && !meta.has(key)) meta.set(key, attributes.content || '');
+  }
+  return meta;
+}
+function rasterPreview(value) {
+  return !/\.svg(?:z)?(?:[?#/]|$)|(?:^|[/_.-])(?:logos?|icons?|favicons?|placeholders?|spacer|default[-_]image|no[-_]?image)(?:[./?&_-]|$)/i.test(
+    value,
+  );
+}
+export function previewFromHead(head, page, stop) {
+  page = publicPage(page);
+  if (!page) return null;
+  const meta = tags(head);
+  let path;
+  try {
+    path = decodeURIComponent(new URL(page).pathname);
+  } catch {
+    path = new URL(page).pathname;
+  }
+  const title = strip(head.match(/<title\b[^>]*>([\s\S]*?)<\/title>/i)?.[1]);
+  if (![title, meta.get('og:title'), path].some((value) => containsName(value, stop))) return null;
+  const raw = rawUrl(meta.get('og:image:secure_url') || meta.get('og:image') || '');
+  if (!raw) return null;
+  let url;
+  try {
+    url = publicPage(new URL(raw, page).href);
+  } catch {
+    return null;
+  }
+  if (!url || !rasterPreview(url) || /svg/i.test(meta.get('og:image:type') || '')) return null;
+  if (
+    ['og:image:width', 'og:image:height'].some(
+      (k) => meta.has(k) && Number(meta.get(k)) > 0 && Number(meta.get(k)) < 300,
+    )
+  )
+    return null;
+  return {
+    url,
+    page,
+    credit: placeText(meta.get('og:site_name'), 120) || new URL(page).hostname,
+    source: 'web',
+    match: 'likely',
+  };
+}
+export async function pagePhoto(value, stop, signal) {
+  let page = publicPage(value);
+  if (!page) return null;
+  const timed = AbortSignal.any([signal, AbortSignal.timeout(5000)]);
+  try {
+    for (let redirects = 0; redirects <= 5; redirects++) {
+      const response = await fetch(page, {
+        dispatcher: publicDispatcher,
+        redirect: 'manual',
+        signal: timed,
+        headers: { 'user-agent': agent, accept: 'text/html,application/xhtml+xml' },
+      });
+      const final = publicPage(response.url || page);
+      if (!final) {
+        await response.body?.cancel();
+        return null;
+      }
+      if ([301, 302, 303, 307, 308].includes(response.status)) {
+        await response.body?.cancel();
+        const location = response.headers.get('location');
+        if (!location || !(page = publicPage(new URL(location, final).href))) return null;
+        continue;
+      }
+      const type = response.headers.get('content-type');
+      if (!response.ok || (type && !/html/i.test(type))) {
+        await response.body?.cancel();
+        return null;
+      }
+      if (!response.body) return null;
+      const reader = response.body.getReader(),
+        decoder = new TextDecoder();
+      let head = '';
+      try {
+        while (head.length < 300_000 && !/<\/head\s*>/i.test(head)) {
+          const next = await reader.read();
+          if (next.done) {
+            head += decoder.decode();
+            break;
+          }
+          head += decoder.decode(next.value, { stream: true }).slice(0, 300_000 - head.length);
+        }
+      } finally {
+        await reader.cancel().catch(() => {});
+      }
+      return previewFromHead(head.split(/<\/head\s*>/i)[0], final, stop);
+    }
+  } catch {
+    signal.throwIfAborted();
+  }
+  return null;
+}
+
+let nextStart = 0,
+  active = 0,
+  blockedUntil = 0;
+const waiting = new Set();
+const cache = new Map();
+async function wikiRequest(url, signal) {
+  for (;;) {
+    signal.throwIfAborted();
+    if (Date.now() < blockedUntil) return { status: 0 };
+    if (active >= 2) {
+      await new Promise((resolve, reject) => {
+        const abort = () => {
+          waiting.delete(ready);
+          reject(signal.reason);
+        };
+        const ready = () => {
+          signal.removeEventListener('abort', abort);
+          resolve();
+        };
+        signal.addEventListener('abort', abort, { once: true });
+        waiting.add(ready);
+      });
+      continue;
+    }
+    if (Date.now() < nextStart) {
+      await delay(nextStart - Date.now(), undefined, { signal });
+      continue;
+    }
+    nextStart = Date.now() + 250;
+    active++;
+    try {
+      const res = await fetch(url, {
+        headers: { 'user-agent': agent },
+        signal: AbortSignal.any([signal, AbortSignal.timeout(3500)]),
+      });
+      if (res.ok) return { status: res.status, data: await res.json() };
+      await res.body?.cancel();
+      return { status: res.status };
+    } finally {
+      active--;
+      for (const ready of waiting) ready();
+      waiting.clear();
+    }
+  }
+}
+async function wiki(host, params, signal) {
+  if (Date.now() < blockedUntil) return null;
+  const url = new URL(host);
+  url.search = new URLSearchParams({ format: 'json', formatversion: '2', ...params });
+  if (cache.has(url.href)) return cache.get(url.href);
+  try {
+    let reply = await wikiRequest(url, signal);
+    if (reply.status === 429) {
+      reply = await wikiRequest(url, signal);
+      if (reply.status === 429) blockedUntil = Date.now() + 60_000;
+    }
+    if (reply.data) {
+      if (cache.size >= 512) cache.delete(cache.keys().next().value);
+      cache.set(url.href, reply.data);
+    }
+    return reply.data;
+  } catch {
+    signal.throwIfAborted();
+    return null;
+  }
+}
+const pages = (result) => Object.values(result?.query?.pages ?? {});
+const imageArgs = { prop: 'imageinfo', iiprop: 'url|extmetadata|size|mime', iiurlwidth: '720' };
+const rasterFile = (title) => /\.(?:jpe?g|png|webp|tiff?|gif)$/i.test(title ?? '') && rasterPreview(title);
+function commonsPhoto(page, match) {
+  const info = page?.imageinfo?.[0];
+  if (!info || !rasterFile(page.title) || /svg/i.test(info.mime ?? '')) return null;
+  const url = httpsUrl(info.thumburl || info.url);
+  const filePage = httpsUrl(
+    info.descriptionurl ||
+      'https://commons.wikimedia.org/wiki/' + encodeURIComponent(page.title.replaceAll(' ', '_')),
+  );
+  if (!url || !filePage) return null;
+  const data = info.extmetadata;
+  const artist = strip(data?.Artist?.value).slice(0, 150) || 'ไม่ทราบชื่อช่างภาพ';
+  const licence = strip(data?.LicenseShortName?.value || data?.UsageTerms?.value);
+  return {
+    url,
+    thumb: httpsUrl(info.thumburl) || undefined,
+    page: filePage,
+    source: 'wikimedia',
+    match,
+    credit: [artist, licence, 'Wikimedia Commons'].filter(Boolean).join(' · '),
+  };
+}
+function coordFrom(entity, page) {
+  const coord = page.coordinates?.[0];
+  if (coord) return [coord.lat, coord.lon];
+  const point = entity?.claims?.P625?.[0]?.mainsnak?.datavalue?.value;
+  return point ? [point.latitude, point.longitude] : null;
+}
+export async function exactPhoto(stop, signal) {
+  const aliases = names(stop);
+  if (!coordinates(stop.ll) || !aliases.length) return null;
+  const lang = /[\u0e00-\u0e7f]/.test(aliases.join('')) ? 'th' : 'en';
+  const limit = ['sight', 'nature', 'market', 'area', 'stay'].includes(stop.k) ? 3 : 1.5;
+  const keys = new Set(aliases.map(key));
+  const seen = new Set();
+  for (const code of new Set([lang, 'en'])) {
+    const host = 'https://' + code + '.wikipedia.org/w/api.php';
+    for (const query of [
+      { titles: aliases.join('|') },
+      { generator: 'search', gsrsearch: stop.query || aliases[0], gsrlimit: '4' },
+    ]) {
+      const articles = pages(
+        await wiki(
+          host,
+          { action: 'query', redirects: '1', prop: 'coordinates|pageprops', ...query },
+          signal,
+        ),
+      ).filter(
+        (page) => /^Q\d+$/.test(page.pageprops?.wikibase_item) && !seen.has(page.pageprops.wikibase_item),
+      );
+      if (!articles.length) continue;
+      const ids = [...new Set(articles.map((page) => page.pageprops.wikibase_item))];
+      ids.forEach((id) => seen.add(id));
+      const entities =
+        (
+          await wiki(
+            'https://www.wikidata.org/w/api.php',
+            { action: 'wbgetentities', ids: ids.join('|'), props: 'labels|aliases|claims' },
+            signal,
+          )
+        )?.entities ?? {};
+      for (const article of articles) {
+        const entity = entities[article.pageprops.wikibase_item];
+        const ll = coordFrom(entity, article);
+        if (!coordinates(ll) || distance(stop.ll, ll) > limit) continue;
+        const labels = [
+          article.title,
+          ...Object.values(entity?.labels ?? {}).map((x) => x.value),
+          ...Object.values(entity?.aliases ?? {})
+            .flat()
+            .map((x) => x.value),
+        ];
+        if (!labels.some((s) => keys.has(key(s)))) continue;
+        const file = entity?.claims?.P18?.find((claim) => claim.rank !== 'deprecated')?.mainsnak?.datavalue
+          ?.value;
+        if (typeof file !== 'string' || !rasterFile(file)) continue;
+        const records = pages(
+          await wiki(commons, { action: 'query', titles: 'File:' + file, ...imageArgs }, signal),
+        );
+        const photo = commonsPhoto(records[0], 'exact');
+        if (photo) return photo;
+      }
+    }
+  }
+  return null;
+}
+export async function nearbyPhoto(stop, signal) {
+  if (!coordinates(stop.ll)) return null;
+  const records = pages(
+    await wiki(
+      commons,
+      {
+        action: 'query',
+        generator: 'geosearch',
+        ggscoord: stop.ll.join('|'),
+        ggsradius: '300',
+        ggsnamespace: '6',
+        ggslimit: '15',
+        ...imageArgs,
+      },
+      signal,
+    ),
+  );
+  const distinctive = names(stop).flatMap((name) =>
+    words(name).filter((word) => word.length >= 4 && !ignored.has(word) && !/^\d+$/.test(word)),
+  );
+  for (const record of records) {
+    const title = simplify(record.title);
+    if (
+      !rasterFile(title) ||
+      !distinctive.some(
+        (word) => words(title).includes(word) || (/[^\x00-\x7f]/.test(word) && title.includes(word)),
+      )
+    )
+      continue;
+    const photo = commonsPhoto(record, 'likely');
+    if (photo) return photo;
+  }
+  return null;
+}
+export async function collectPhotos(stop, pages, exact, signal) {
+  const photos = [];
+  const add = (photo) => {
+    if (photo && !photos.some((p) => p.url === photo.url)) photos.push(photo);
+  };
+  add(await exact);
+  for (const page of new Set(pages.map(publicPage).filter(Boolean))) {
+    if (photos.length >= 4) break;
+    add(await pagePhoto(page, stop, signal));
+  }
+  if (!photos.length) add(await nearbyPhoto(stop, signal));
+  return photos;
+}
+export function wikipediaPhoto(name, ll, lang, signal) {
+  return exactPhoto({ n: name, ll, k: 'sight' }, signal);
 }

@@ -1,0 +1,21 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {mkdtemp,readdir,rm} from 'node:fs/promises';
+import {join} from 'node:path';
+import {tmpdir} from 'node:os';
+test('local demo links survive restart and are readable only over loopback',async t=>{
+  const root=await mkdtemp(join(tmpdir(),'bop-showcase-'));
+  const keys=['BOP_CACHE_DIR','BOP_LOCAL_DEMO','AWS_LAMBDA_FUNCTION_NAME'];
+  const old=keys.map(k=>process.env[k]);
+  Object.assign(process.env,{BOP_CACHE_DIR:root,BOP_LOCAL_DEMO:'1'});delete process.env.AWS_LAMBDA_FUNCTION_NAME;
+  t.after(async()=>{keys.forEach((k,i)=>{if(old[i]===undefined)delete process.env[k];else process.env[k]=old[i]});await rm(root,{recursive:true,force:true});});
+  const {saveLocalTrip}=await import('../server/local-showcase.mjs');
+  const req={socket:{remoteAddress:'127.0.0.1'},headers:{host:'localhost:1234'}};
+  const trip={plan:{days:[{stops:[]}]},routes:{}};
+  const ids=await Promise.all(Array.from({length:9},()=>saveLocalTrip(req,trip)));
+  assert.equal((await readdir(join(root,'showcase'))).length,8);
+  const {readLocalTrip}=await import('../server/local-showcase.mjs?restarted');
+  assert.deepEqual(await readLocalTrip(req,ids.at(-1)),trip);
+  assert.equal(await readLocalTrip({...req,headers:{host:'untrusted.example'}},ids.at(-1)),undefined);
+  process.env.AWS_LAMBDA_FUNCTION_NAME='bop-test';assert.equal(await readLocalTrip(req,ids.at(-1)),undefined);
+});
