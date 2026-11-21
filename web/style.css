@@ -1701,11 +1701,38 @@ body:has(.planning-map) { height: 100dvh; overflow: hidden; }
 }
 .map-stage #leg-label {
   position: absolute;
-  bottom: 12px;
-  left: 12px;
+  inset-inline: max(12px, env(safe-area-inset-left)) max(12px, env(safe-area-inset-right));
+  bottom: max(24px, calc(env(safe-area-inset-bottom) + 8px));
+  width: fit-content;
+  margin: 0;
+  padding: 5px 10px;
+  list-style: none;
+  color: var(--ink);
   background: var(--paper);
-  border-radius: 6px;
-  padding: 2px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 2px 8px #24311e14;
+  pointer-events: none;
+}
+.map-stage #leg-label:not([hidden]) {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+#leg-label li {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+#leg-label svg {
+  width: 32px;
+  height: 10px;
+  flex: none;
+}
+@media (min-width: 861px) {
+  .map-stage:has(#place-panel:not([hidden])) #leg-label {
+    inset-inline-start: calc(min(370px, 61%) + 22px);
+  }
 }
 #chat-response {
   position: absolute;

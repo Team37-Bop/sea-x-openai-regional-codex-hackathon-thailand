@@ -395,9 +395,6 @@ function render() {
     for (const problem of item.problems || []) row.append(node('p', problem));
     $('#checks-list').append(row);
   }
-  $('#leg-label').textContent = day?.stops.some((stop) => stop.leg && !stop.leg.real)
-    ? 'เส้นประเป็นเส้นทางประมาณ'
-    : '';
   const todo = renderBookingTasks($('#reservations'), state, {
     run: task,
     rerender: render,
@@ -898,7 +895,8 @@ async function generateTrip(input) {
   const ready = new Map();
   const drafts = new Map();
   const routes = {};
-  let showingDraftMap = !state.plan;
+  const previousCity = state.setup?.city || state.plan?.city || '';
+  let showingDraftMap = !state.plan || input.city.trim().toLowerCase() !== previousCity.trim().toLowerCase();
   const known = lookupCache.get(input.city) || localSuggestions(input.city, { kind: 'city' }).find((hit) => hit.name === input.city);
   input.cityLL ||= known?.ll || presets[input.city]?.slice(2);
   const draftMap = (days, openCandidate, caption = input.city) => {
@@ -951,7 +949,7 @@ async function generateTrip(input) {
         input.country ||= found.cc;
         input.currency ||= found.currency;
         input.cityAirport ||= found.airport;
-        if (!state.plan) draftMap([]);
+        if (showingDraftMap) draftMap([]);
       }
     })]);
     signal.throwIfAborted();
