@@ -2,12 +2,13 @@
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-REPOSITORY=${GITHUB_REPOSITORY:-Team37-Bop/sea-x-openai-regional-codex-hackathon-thailand}
 REGION=${AWS_REGION:-us-east-1}
 EXPECTED_ACCOUNT_ID=${EXPECTED_AWS_ACCOUNT_ID:-${TF_VAR_expected_account_id:-}}
 
 command -v gh >/dev/null || { echo 'GitHub CLI (gh) is required.' >&2; exit 1; }
 gh auth status >/dev/null
+cd "$ROOT"
+REPOSITORY=${GITHUB_REPOSITORY:-$(gh repo view --json nameWithOwner --jq .nameWithOwner)}
 
 if [[ ! "$EXPECTED_ACCOUNT_ID" =~ ^[0-9]{12}$ ]]; then
   echo 'Set EXPECTED_AWS_ACCOUNT_ID (or TF_VAR_expected_account_id) to the intended 12-digit AWS account ID.' >&2

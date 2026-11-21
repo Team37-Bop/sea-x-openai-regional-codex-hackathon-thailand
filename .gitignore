@@ -17,9 +17,9 @@ server/.data
 plan.json
 terraform/**/backend.hcl
 terraform/**/generated/
-terraform/**/terraform.tfvars
-terraform/**/local.auto.tfvars
-terraform/**/*.auto.tfvars.json
+*.tfvars
+*.tfvars.json
+.aws/
 .playwright-mcp/
 /map-live.png
 /map-fixed.png

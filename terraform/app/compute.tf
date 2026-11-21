@@ -23,7 +23,7 @@ resource "aws_lambda_function" "api" {
     variables = {
       NODE_ENV                 = "production"
       BOP_PROVIDER             = "openai"
-      BOP_RUNTIME_SECRET_ID    = aws_secretsmanager_secret.runtime.arn
+      BOP_RUNTIME_SECRET_ID    = local.active_runtime_secret.arn
       BOP_CACHE_DIR            = "/tmp/bop/cache"
       BOP_STATE_TABLE          = aws_dynamodb_table.state.name
       BOP_STATE_RETENTION_DAYS = tostring(var.state_retention_days)

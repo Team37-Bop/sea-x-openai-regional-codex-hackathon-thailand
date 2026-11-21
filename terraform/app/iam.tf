@@ -32,26 +32,30 @@ data "aws_iam_policy_document" "api" {
   }
 
   statement {
-    sid = "ReadRuntimeSecret"
-    actions = [
-      "secretsmanager:DescribeSecret",
-      "secretsmanager:GetSecretValue",
-    ]
-    resources = [aws_secretsmanager_secret.runtime.arn]
+    sid       = "ReadRuntimeSecret"
+    actions   = ["secretsmanager:GetSecretValue"]
+    resources = [for secret in local.runtime_secrets : secret.arn]
   }
 
-  statement {
-    sid = "DecryptRuntimeSecret"
-    actions = [
-      "kms:Decrypt",
-      "kms:DescribeKey",
-    ]
-    resources = [aws_kms_key.secrets.arn]
+  dynamic "statement" {
+    for_each = local.runtime_secrets
+    iterator = secret
+    content {
+      sid       = "DecryptRuntimeSecret${title(secret.key)}"
+      actions   = ["kms:Decrypt"]
+      resources = [secret.value.kms_key_arn]
 
-    condition {
-      test     = "StringEquals"
-      variable = "kms:ViaService"
-      values   = ["secretsmanager.${var.aws_region}.amazonaws.com"]
+      condition {
+        test     = "StringEquals"
+        variable = "kms:ViaService"
+        values   = ["secretsmanager.${var.aws_region}.${data.aws_partition.current.dns_suffix}"]
+      }
+
+      condition {
+        test     = "StringEquals"
+        variable = "kms:EncryptionContext:SecretARN"
+        values   = [secret.value.arn]
+      }
     }
   }
 

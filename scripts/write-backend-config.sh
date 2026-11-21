@@ -5,7 +5,6 @@ ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 BOOTSTRAP_DIR="$ROOT/terraform/bootstrap"
 APP_OUTPUT="$ROOT/terraform/app/backend.hcl"
 BOOTSTRAP_OUTPUT="$BOOTSTRAP_DIR/backend.hcl"
-REPOSITORY=${GITHUB_REPOSITORY:-Team37-Bop/sea-x-openai-regional-codex-hackathon-thailand}
 PROJECT_TAG=${TF_VAR_project_tag:-sea-openai}
 ENVIRONMENT=${TF_VAR_environment:-prod}
 region=${AWS_REGION:-us-east-1}
@@ -17,6 +16,8 @@ if [[ -z "$bucket" && -f "$APP_OUTPUT" ]]; then
   app_key=$(sed -nE 's/^key[[:space:]]*=[[:space:]]*"([^"]+)"/\1/p' "$APP_OUTPUT")
 fi
 if [[ -z "$bucket" ]] && command -v gh >/dev/null && gh auth status >/dev/null 2>&1; then
+  cd "$ROOT"
+  REPOSITORY=${GITHUB_REPOSITORY:-$(gh repo view --json nameWithOwner --jq .nameWithOwner)}
   bucket=$(gh variable get TF_STATE_BUCKET --repo "$REPOSITORY" 2>/dev/null || true)
   app_key=$(gh variable get TF_STATE_KEY --repo "$REPOSITORY" 2>/dev/null || true)
 fi

@@ -18,19 +18,26 @@ variable "aws_region" {
 variable "github_owner" {
   type        = string
   description = "GitHub organization or owner allowed to deploy."
-  default     = "Team37-Bop"
+
+  validation {
+    condition     = can(regex("^[A-Za-z0-9-]+$", var.github_owner))
+    error_message = "github_owner must be the GitHub owner login."
+  }
 }
 
 variable "github_repository" {
   type        = string
   description = "GitHub repository allowed to deploy."
-  default     = "sea-x-openai-regional-codex-hackathon-thailand"
+
+  validation {
+    condition     = can(regex("^[A-Za-z0-9_.-]+$", var.github_repository))
+    error_message = "github_repository must be the repository name without its owner."
+  }
 }
 
 variable "github_owner_id" {
   type        = string
   description = "Immutable GitHub owner ID used in OIDC subjects."
-  default     = "224233918"
 
   validation {
     condition     = can(regex("^[0-9]+$", var.github_owner_id))
@@ -41,7 +48,6 @@ variable "github_owner_id" {
 variable "github_repository_id" {
   type        = string
   description = "Immutable GitHub repository ID used in OIDC subjects."
-  default     = "1466116167"
 
   validation {
     condition     = can(regex("^[0-9]+$", var.github_repository_id))

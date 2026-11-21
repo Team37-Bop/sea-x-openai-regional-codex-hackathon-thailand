@@ -9,10 +9,45 @@ variable "expected_account_id" {
   }
 }
 
+variable "repository" {
+  description = "GitHub owner/name for the Repository resource tag."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[A-Za-z0-9-]+/[A-Za-z0-9_.-]+$", var.repository))
+    error_message = "repository must be a GitHub repository in owner/name format."
+  }
+}
+
 variable "aws_region" {
   description = "Lambda and API Gateway Region. CloudFront and its edge WAF are global."
   type        = string
   default     = "us-east-1"
+}
+
+variable "shared_runtime_secret" {
+  description = "Optional full ARNs for an existing Secrets Manager secret and its KMS key in this account and Region."
+  type = object({
+    arn         = string
+    kms_key_arn = string
+  })
+  default = null
+
+  validation {
+    condition = var.shared_runtime_secret == null ? true : can(regex(
+      "^arn:${data.aws_partition.current.partition}:secretsmanager:${var.aws_region}:${var.expected_account_id}:secret:[a-zA-Z0-9/_+=.@-]+-[a-zA-Z0-9]{6}$",
+      var.shared_runtime_secret.arn
+    ))
+    error_message = "Specify the complete secret ARN, including its six-character suffix, in the expected account and Region."
+  }
+
+  validation {
+    condition = var.shared_runtime_secret == null ? true : can(regex(
+      "^arn:${data.aws_partition.current.partition}:kms:${var.aws_region}:${var.expected_account_id}:key/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|mrk-[0-9a-fA-F]{32})$",
+      var.shared_runtime_secret.kms_key_arn
+    ))
+    error_message = "Specify the full KMS key ARN for the secret in the expected account and Region."
+  }
 }
 
 variable "project_tag" {
