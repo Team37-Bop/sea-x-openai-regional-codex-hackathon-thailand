@@ -44,7 +44,7 @@ flowchart LR
 | --- | --- |
 | OpenAI planning | Live in the deployed planner when configured. Local fixture mode is available without a model key. |
 | Maps, routes and weather | MapLibre GL, OpenFreeMap, and OpenStreetMap-based geocoding/routing (OSRM and Valhalla). Estimated legs are labeled. Open-Meteo supplies forecast context; demo disruption scenarios are not automatic flight or weather alerts. |
-| LINE | Group linking, Thai Flex messages and voting are implemented. Requires Messaging API setup; member identity and summary links also require LIFF and LINE Login. |
+| LINE | Group linking, Thai Flex messages and voting are implemented. Requires Messaging API setup plus LINE Login and LIFF for member identity. Set the registered LIFF Endpoint URL to the deployed `/liff.html` (not the LINE default placeholder), then verify a trip link on a real LINE device. |
 | Flights and other bookings | Duffel test-mode offer, review, order and cancellation paths. No real ticket purchase or customer payment is being demonstrated. Bop does not make hotel or activity reservations. When a suggested hotel has no rate, the displayed total excludes that cost and does not establish that the trip is within budget. |
 
 ## Hackathon work and evidence
