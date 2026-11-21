@@ -7,7 +7,7 @@ The server resolves places and obtains road geometry; the browser draws the acti
 ## Requirements
 
 ### Requirement: Routing chain
-Each leg SHALL be routed by OSRM (routing.openstreetmap.de, `routed-foot` for walk, `routed-car` otherwise), then Valhalla (valhalla1.openstreetmap.de, `pedestrian` or `auto`), and when both fail SHALL get a straight line `{ geom: [[lng,lat],[lng,lat]], approx: true }` that is not cached.
+Each leg using a road or foot profile SHALL be routed by OSRM (routing.openstreetmap.de, `routed-foot` for walk, `routed-car` otherwise), then Valhalla (valhalla1.openstreetmap.de, `pedestrian` or `auto`), and when both fail SHALL get a straight line `{ geom: [[lng,lat],[lng,lat]], approx: true }` that is not cached. Identified scheduled services use the service-specific estimates described below.
 
 #### Scenario: OSRM down
 - **WHEN** OSRM times out for a leg
@@ -75,6 +75,10 @@ The map SHALL use OpenFreeMap tiles (positron light, dark following the OS theme
 
 The planner SHALL route legs between consecutive distinct coordinates within each day when the arriving stop carries a leg. Route keys SHALL encode the routing profile and both endpoints in travel order as `profile|lng1,lat1;lng2,lat2`. Walking has its own profile. Songthaew, car, van, own-car and transit share the car geometry profile. One routing batch SHALL deduplicate keys across all candidate plans.
 
+#### Scenario: Identified rail, metro, ferry or scheduled bus
+- **WHEN** a plan identifies a service for an incoming leg
+- **THEN** its route key uses `rail`, `metro`, `ferry` or `bus` and the planner retains its supplied travel time and fare. With no service geometry provider, the map joins known endpoints with an explicitly estimated segment. Such a leg SHALL NOT use or validate car routing geometry. The itinerary, place sheet and route key show the known service in Thai. An archived leg recorded only as `transit` retains the generic public transport label.
+
 #### Scenario: Two modes use the same road
 - **WHEN** an option changes from ride-hail to own-car for an identical directed leg
 - **THEN** the server can reuse the car route for both options while scheduling a different wait, duration adjustment and fare for each mode. The return direction uses a separate key
@@ -115,9 +119,22 @@ The browser SHALL normalize array, object and comma-separated stop coordinates i
 - **WHEN** only some planned days have arrived
 - **THEN** the browser fits the valid positions of the available days. A marker or line with insufficient usable coordinates is omitted; other itinerary entries remain available in the list
 
+#### Scenario: Route continuity in a committed itinerary
+- **WHEN** one or more stops between two positioned visits in the same day lack usable coordinates
+- **THEN** daily view and overview connect those two known visits using a separate key labelled “ช่วงขาดพิกัด · ลำดับจุดแวะโดยประมาณ”. Consecutive known stops with a missing legacy leg use the same sequence style labelled “ยังไม่มีเส้นทาง · ลำดับจุดแวะโดยประมาณ”. Sequence hints have no distance, fare or service and create no additional pins.
+- **AND** when measured geometry starts or ends at a snapped road point, a separately labelled estimated connector reaches the actual POI pin and the measured line retains its original geometry. All connectors stay within one day, and provisional planning views draw only the returned measured segments.
+
 ### Requirement: Route strokes and map key
 
-The visible map SHALL display a compact bottom-left key for the lines currently drawn. Each entry SHALL pair its Thai label with the line's color and stroke. Confirmed walks use dots, public transit uses long dashes and road vehicles use solid lines. Estimated geometry uses a distinct faded dash-dot pattern and names the estimate explicitly. A removed preview route has its own key. The key SHALL update with the day, preview and incoming routing data and stay hidden when there are no lines.
+The map SHALL display a compact bottom-left key for the modes used across the whole itinerary, including in single-day view and before map tiles or route geometry load. Each entry SHALL pair its Thai label with the mode's color and stroke. Confirmed walks use dots, public transit uses long dashes and road vehicles use solid lines. Estimated geometry uses a distinct faded dash-dot pattern and names the estimate explicitly. A removed preview route has its own key. The key SHALL retain all trip modes, add entries for estimates or removals drawn in the current view and clear when a new request has no known legs.
+
+#### Scenario: A different day contains the only train
+- **WHEN** the first day has a walking leg and another day has a transit leg without coordinates
+- **THEN** daily view and overview show both mode swatches on first render even if the map style is still loading. The map draws no geometry for the unlocated leg.
+
+#### Scenario: Live route updates
+- **WHEN** a fresh request first supplies visits without legs and later sends a day containing a walking leg
+- **THEN** the old legend clears immediately and walking appears as soon as its mode arrives, even if the route is still pending.
 
 #### Scenario: Exact and estimated public transit
 - **WHEN** the visible day includes both confirmed and estimated transit legs
@@ -147,3 +164,12 @@ The map SHALL exclude synthetic city or neighbour coordinates marked as location
 
 - **WHEN** the plan has a localized city name and an address or venue name in its own language
 - **THEN** search uses the original query, with the trip coordinates as its geographic bias, and can retry a shorter venue name or alias. A failed search does not permanently block future lookups. If an endpoint remains unresolved, its itinerary row remains accessible and the planner does not route to its placeholder coordinate.
+
+#### Scenario: Opening a saved day with unconfirmed locations
+- **WHEN** an archived itinerary contains named venues whose geocoding failed
+- **THEN** opening the day retries recorded venue queries within the destination area. A specific address must match the provider's venue identity and street, plus its building number or, when that number is unavailable, its branch-specific website. A venue without a recorded address must match a distinctive name unambiguously. Mapped public squares are eligible while road segments and administrative centroids are excluded. Generic hotels, bag drops, meals and unconfirmed departure points remain unpositioned. Missing locations are visible in itinerary cards, in the map's day or selected-stop status, and in the place detail sheet. A name search is labeled as a search.
+
+#### Scenario: A legacy placeholder inherited an unrelated survey coordinate
+- **WHEN** a saved, unpinned stop claims a survey location shared exactly with a selected venue of a different category and neither name nor ID identifies that venue
+- **THEN** opening the trip invalidates the mistaken point and adjacent routed geometry. Future planning and editing assign selected-venue coordinates only to the matching venue. A fallback point cannot fulfill a wish by proximity.
+- **AND** confirmed positions and newly routed legs can appear without changing the saved visit order, times, or the snapshot on disk. New measured connections require both endpoints and usable route geometry. The separately keyed visit-order and access hints connect known coordinates only. Older placeholder routes cannot reappear.

@@ -256,6 +256,24 @@ test('router rejects unusable geometry, decodes Valhalla and shares the road pro
   assert.equal(b.via, 'cache');
   assert.equal(responses.length, 2);
 });
+test('scheduled public services use their reported mode and time, preserve per-person fares, and never query a car router', async t => {
+  const fetch = t.mock.method(globalThis, 'fetch', () => { throw Error('unexpected external request'); });
+  const setup = normalize(base);
+  const stops = [stop('start'), ...['train', 'subway', 'ferry', 'bus'].map((mode, i) =>
+    stop(mode, { ll: [18.01 + i * .01, 99], mode, legMin: 14 + i, minSrc: 'web', legCost: i === 0 ? 59 : -1 }))];
+  const result = await schedule({ stops }, 0, setup, context(), [], new Set(), { preResolved: true });
+  const modes = ['rail', 'metro', 'ferry', 'bus'];
+  for (const [index, s] of result.day.stops.slice(1).entries()) {
+    assert.equal(s.leg.mode, modes[index]);
+    assert.equal(s.leg.min, 14 + index);
+    assert.equal(s.leg.real, false);
+    assert.match(s.leg.key, new RegExp('^' + modes[index] + '\\|'));
+    assert.equal(result.routes[s.leg.key].approx, true);
+    assert.equal(s.leg.cost, index === 0 ? 59 : fare('transit', s.leg.km, 1));
+  }
+  assert.equal(fetch.mock.callCount(), 0);
+});
+
 test('confirmed removal reports a conflict, subsequent edits still apply and insertion validates target day', () => {
   const original = {
     days: [{ stops: [stop('one', { res: { done: true } }), stop('two')] }, { stops: [stop('three')] }],

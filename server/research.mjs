@@ -1,7 +1,7 @@
 import { bad, cities, coordinates } from './domain.mjs';
 import { model, provider, requireReady } from './model.mjs';
 import { publishedMenu } from './menu-source.mjs';
-import { collectPhotos, exactPhoto } from './photos.mjs';
+import { startPlacePhotos } from './photos.mjs';
 import { boundedStrings, httpsUrl, list, placeText, sourceIdentity } from './place-text.mjs';
 
 const researchPrompt =
@@ -10,7 +10,11 @@ const researchPrompt =
   'ถ้าเป็นเมนูตัวอย่างให้ระบุ ใช้ veg=true เฉพาะจานที่หลักฐานระบุว่ามังสวิรัติ คืนราคาของจานเป็น THB, priceLocal {amount,currency} และ rate จำนวนบาทต่อหนึ่งหน่วยท้องถิ่น ถ้าไม่มีราคาให้เว้นราคาได้ ' +
   'ถ้ามี publishedMenu ให้ถือว่าเป็นรายการที่อ่านจากหน้าเมนูของสาขานี้ ใช้ชื่อตามเมนู อธิบายเมนูและราคาชัดเจน หากไม่มีรายการให้เว้น dishes ไม่ต้องเล่าเรื่องการค้นไม่พบใน summary, highlights หรือ tips ' +
   'แยกที่มาไว้ใน sources พร้อมชื่อหน้าและลิงก์ที่ค้นเจอจริง ไม่แทรกโดเมนหรือลิงก์ในข้อความ บอก confidence web เฉพาะเมื่อยืนยันได้ และระบุ photoPage ของสถานที่นี้โดยเฉพาะ ห้ามเดาข้อมูล';
-const lookups = new Map();
+const inFlight = new Map();
+const completed = new Map();
+const photoTtl = 30 * 60_000;
+const emptyPhotoTtl = 60_000;
+const maxCompleted = 128;
 
 const sourceHost = String.raw`(?:https?:\/\/)?(?:[a-z\d](?:[a-z\d-]*[a-z\d])?\.)+[a-z]{2,}(?:[/?#][^\s(),;]*)?`;
 const parentheticalSource = new RegExp(String.raw`\s*\(\s*${sourceHost}(?:\s*[,;]\s*${sourceHost})*\s*\)`, 'gi');
@@ -121,10 +125,12 @@ export function normalizeInfo(result, stop) {
   return info;
 }
 async function lookup(stop, city, ctx) {
-  await requireReady();
+  ctx.signal.throwIfAborted();
   ctx.step('Bop กำลังค้นรายละเอียดสถานที่');
-  const exact = provider === 'fake' ? Promise.resolve(null) : exactPhoto(stop, ctx.signal);
-  exact.catch(() => {});
+  const finishPhotos = provider === 'fake' ? null : startPlacePhotos(stop, ctx.signal, photos => {
+    ctx.emit({ type: 'photos', photos });
+  });
+  await requireReady();
   let knownMenu;
   if (provider !== 'fake' && stop.k === 'food' && stop.src) {
     ctx.step('กำลังอ่านหน้าเมนูที่เผยแพร่');
@@ -145,7 +151,7 @@ async function lookup(stop, city, ctx) {
     const enrichMenu = stop.k === 'food' && (info.dishes.length < 3 || info.dishes.every(row => row.price == null && !row.priceLocal));
     if (!knownMenu && enrichMenu && info.sources.length) ctx.step('กำลังอ่านหน้าเมนูที่เผยแพร่');
     const [photos, menu] = await Promise.all([
-      collectPhotos(stop, [stop.src?.url, result.value.photoPage, ...info.sources.map((s) => s.url)], exact, ctx.signal),
+      finishPhotos([result.value.photoPage, ...info.sources.map((s) => s.url)]),
       knownMenu || (enrichMenu && info.sources.length ? publishedMenu(stop, info.sources, ctx.signal) : null),
     ]);
     info.photos = photos;
@@ -159,48 +165,74 @@ async function lookup(stop, city, ctx) {
   }
   return info;
 }
+function startLookup(key, stop, city, ctx) {
+  const ctrl = new AbortController();
+  const entry = { ctrl, listeners: new Set(), step: '', photos: [], promise: null };
+  inFlight.set(key, entry);
+  const shared = {
+    ...ctx,
+    signal: ctrl.signal,
+    step(text) {
+      entry.step = text;
+      for (const listener of entry.listeners) listener.step(text);
+    },
+    emit(event) {
+      if (event.type === 'photos') entry.photos = event.photos;
+      for (const listener of entry.listeners) listener.emit?.(event);
+    },
+  };
+  // Attach the first listener before emitting the initial step.
+  entry.promise = Promise.resolve().then(() => lookup(stop, city, shared)).then(info => {
+    if (!ctrl.signal.aborted && inFlight.get(key) === entry) {
+      if (completed.size >= maxCompleted) completed.delete(completed.keys().next().value);
+      completed.set(key, { info, expires: Date.now() + (info.photos.length ? photoTtl : emptyPhotoTtl) });
+    }
+    return info;
+  }).finally(() => {
+    if (inFlight.get(key) === entry) inFlight.delete(key);
+    ctrl.abort();
+  });
+  return entry;
+}
 export async function placeInfo(input, ctx) {
   const start = performance.now();
+  const { signal } = ctx;
+  signal.throwIfAborted();
   const stop = normalizedStop(input?.stop);
-  const key = JSON.stringify([stop.id, stop.n, stop.src?.url, stop.date]);
-  let entry = lookups.get(key);
-  const cached = Boolean(entry);
-  if (cached) ctx.step('ใช้ข้อมูลที่ค้นไว้แล้ว');
-  else {
-    const ctrl = new AbortController();
-    entry = { ctrl, clients: 0, finished: false };
-    entry.promise = lookup(stop, placeText(input.city) || 'เชียงใหม่', { ...ctx, signal: ctrl.signal })
-      .catch((error) => {
-        if (lookups.get(key) === entry) lookups.delete(key);
-        throw error;
-      })
-      .finally(() => {
-        entry.finished = true;
-        ctrl.abort();
-      });
-    lookups.set(key, entry);
+  const city = placeText(input.city) || 'เชียงใหม่';
+  const key = JSON.stringify([city, stop.id, stop.n, stop.k, stop.ll, stop.query, [...stop.aliases].sort(),
+    sourceIdentity(stop.src?.url), stop.date, stop.meal]);
+  const saved = completed.get(key);
+  if (saved) {
+    completed.delete(key);
+    if (saved.expires > Date.now()) {
+      completed.set(key, saved);
+      ctx.step('ใช้ข้อมูลที่ค้นไว้แล้ว');
+      if (saved.info.photos.length) ctx.emit?.({ type: 'photos', photos: saved.info.photos });
+      return { info: saved.info, ms: Math.round(performance.now() - start), cached: true };
+    }
   }
-  entry.clients++;
-  const signal = ctx.signal;
+  let entry = inFlight.get(key);
+  const shared = Boolean(entry);
+  if (!entry) entry = startLookup(key, stop, city, ctx);
+  entry.listeners.add(ctx);
   let onAbort;
   try {
-    signal.throwIfAborted();
+    if (entry.step) ctx.step(entry.step);
+    if (entry.photos.length) ctx.emit?.({ type: 'photos', photos: entry.photos });
     const cancelled = new Promise((_, reject) => {
       onAbort = () => reject(signal.reason);
       signal.addEventListener('abort', onAbort, { once: true });
+      if (signal.aborted) onAbort();
     });
     const info = await Promise.race([entry.promise, cancelled]);
-    return {
-      info,
-      ms: Math.round(performance.now() - start),
-      ...(cached ? { cached: true } : { usage: ctx.usage }),
-    };
+    return { info, ms: Math.round(performance.now() - start), ...(shared ? { cached: true } : { usage: ctx.usage }) };
   } finally {
     if (onAbort) signal.removeEventListener('abort', onAbort);
-    if (--entry.clients === 0 && !entry.finished) {
-      lookups.delete(key);
+    entry.listeners.delete(ctx);
+    if (!entry.listeners.size && inFlight.get(key) === entry) {
+      inFlight.delete(key);
       entry.ctrl.abort();
-      entry.promise.catch(() => {});
     }
   }
 }

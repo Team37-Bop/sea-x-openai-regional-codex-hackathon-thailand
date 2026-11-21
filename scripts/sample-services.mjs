@@ -15,5 +15,6 @@ export function model() {
 export const candidates = model,
   findCity = model,
   findPlace = model,
+  findSavedVenue = model,
   searchFlights = model,
   resolvePicks = model;

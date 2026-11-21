@@ -1,4 +1,5 @@
 import { stopKinds } from './stop-kinds.mjs';
+import { legLabels } from '../web/leg-modes.js';
 const string = { type: 'string' };
 const number = { type: 'number' };
 const boolean = { type: 'boolean' };
@@ -72,8 +73,8 @@ const stop = object({
   cost: { ...number, description: 'On-site spending in THB per person; exclude incoming transport.' },
   mode: {
     type: 'string',
-    enum: ['walk', 'red', 'car', 'van', 'own', 'transit'],
-    description: 'Mode of the incoming leg from the previous stop that day.',
+    enum: Object.keys(legLabels),
+    description: 'Mode of the incoming leg from the previous stop that day. Use rail for a train, metro for urban rail/subway, bus for a city bus and ferry for a passenger boat when the service is identified. Use transit when its type is unknown.',
   },
   legCost: {
     ...number,
@@ -198,6 +199,8 @@ const research = object({
   photoPage: string,
 });
 export const shapes = {
+  lodging: object({ name: string, query: string, ll, priceNight: number, why: string,
+    src: object({ url: string, title: string }, ['url', 'title']) }, ['name', 'query', 'll', 'priceNight', 'why', 'src']),
   design,
   daily: design,
   skeleton: object(

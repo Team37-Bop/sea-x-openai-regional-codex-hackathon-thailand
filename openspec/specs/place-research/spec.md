@@ -56,6 +56,12 @@ The inline meal control and place panel SHALL share one restaurant lookup and sh
 ### Requirement: Photos with match levels
 `photos` SHALL hold 0-4 https images, each `{ url, thumb?, credit, source: 'wikimedia'|'web', page, match: 'exact'|'likely' }`, sorted exact first, from: Wikimedia exact matches, then og:image of the place's own page and of the source pages, then (only if none) Commons files within 300 m whose title names the place.
 
+The place-info stream SHALL start the checked venue page and exact Wikimedia lookup alongside place research. As eligible credited images become available it SHALL emit cumulative `{ type: 'photos', photos: [...] }` snapshots of up to four images. The final snapshot and `done.info.photos` SHALL agree, with exact matches first. A page used for both the venue preview and its menu SHALL be fetched once per request, allowing the image to appear as soon as its HTML head is read.
+
+#### Scenario: A menu or the text model is still loading
+- **WHEN** the venue page already identifies a usable image
+- **THEN** clients receive that image during research. Clients that only read the final result also receive it in `done.info.photos`.
+
 #### Scenario: Wikimedia exact match
 - **WHEN** a Wikipedia article's title or Wikidata label/alias matches the stop name, query or alias and its coordinates are within 1.5 km (3 km for sight, nature, market, area)
 - **THEN** its Wikidata P18 image is used with credit "author · licence · Wikimedia Commons" and `match: 'exact'`
@@ -88,7 +94,7 @@ Server and browser normalization SHALL unwrap direct HTTPS URLs, Markdown images
 - **THEN** it is rejected and no image element is created for it
 
 ### Requirement: Safe page fetching
-Before requesting a page, the collector SHALL require a dotted HTTPS host name and reject credentials, non-443 ports, IP literals and the blocked local suffixes. The HTTP client follows redirects and the collector checks the final response URL before parsing it. This URL check is applied to host-name text. The HTML reader SHALL stop after the head closes or its accumulated decoded text reaches the 300,000-character threshold, with a five-second request timeout.
+Before requesting a page, the collector SHALL require a dotted HTTPS host name and reject credentials, non-443 ports, IP literals and the blocked local suffixes. The HTTP client follows redirects and the collector checks the final response URL before parsing it. This URL check is applied to host-name text. The photo reader SHALL inspect only the HTML head, up to 300,000 decoded characters, with a five-second request timeout. A shared menu request may continue reading its separately bounded body after the photo head is available.
 
 #### Scenario: Model returns an internal URL
 - **WHEN** a source URL is `https://localhost/...` or `https://10.0.0.1/...`
@@ -102,19 +108,19 @@ The server SHALL send at most 2 Wikimedia requests at a time at least 250 ms apa
 - **THEN** photos during the next 60 s are web-only or empty
 
 ### Requirement: Place info cache
-Results SHALL be cached in memory per stop ID, name, available venue-source URL and visit date for the server process (concurrent requests share one lookup), a hit SHALL answer with `cached: true`, and a failed lookup SHALL be evicted.
+A completed lookup SHALL be scoped to city, stop ID, name, kind, usable coordinates, map query and aliases, venue-source URL, visit date and meal. The server SHALL retain up to 128 completed entries, for 30 minutes when photos are available and one minute when no image was found. Cache hits SHALL report `cached: true`. Failed and cancelled work SHALL remain retryable.
 
 #### Scenario: Second open of the sheet
 - **WHEN** the same stop is requested again
-- **THEN** the step "ใช้ข้อมูลที่ค้นไว้แล้ว" is emitted and `done.cached` is true
+- **THEN** a completed, unexpired result emits "ใช้ข้อมูลที่ค้นไว้แล้ว", replays its photo snapshot when available and returns `done.cached`
 
 ### Requirement: Bounded output and cache identity
 
 The server SHALL trim incoming names to 120 characters, kinds to 20, notes to 300 and queries to 120. Explicit stop query takes precedence over the nested place query. Explicit and nested aliases together supply at most eight strings of 80 characters. The response SHALL include a summary of up to 300 characters (default `ยังไม่มีข้อมูล`), a details description of up to 400, up to five highlights and up to five tips. A new successful lookup includes elapsed milliseconds and model usage. A cache hit includes elapsed milliseconds and `cached: true`.
 
 #### Scenario: Same stop reopened while the first lookup is running
-- **WHEN** two requests have the same stop ID, name, venue-source URL and visit date
-- **THEN** the second awaits the first lookup, even if it supplies another city or note. A renamed stop creates a new cache key
+- **WHEN** a second client requests the same place and visit during research
+- **THEN** it shares that lookup, receives the latest research step and photo snapshot immediately, and receives subsequent updates. Closing one client leaves the remaining client connected. Closing the last client cancels the work. A different city, coordinate or query starts a separate lookup.
 
 #### Scenario: Model supplies both a valid fact URL and a photo page
 - **WHEN** a cited result, an unverified model source and a separate `photoPage` appear in research
@@ -141,3 +147,9 @@ The timeline and map SHALL open the same place panel, with the visit date, itine
 
 - **WHEN** a sample stop opens with a live service configured
 - **THEN** its itinerary facts appear immediately while the backend researches the actual place. The offline sample remains readable without a model connection.
+
+#### Scenario: Watching a lookup from an itinerary card
+
+- **WHEN** the traveler opens an uncached place
+- **THEN** the panel immediately shows a loading placeholder and a connected list of actual research steps. The current step has a progress indicator and completed steps have checkmarks. The existing itinerary facts remain readable. Reduced-motion settings disable the animations.
+- **AND** credited photos appear as they arrive and remain readable if detail research fails. Completing, retrying, or switching the selected place clears the previous loading state.

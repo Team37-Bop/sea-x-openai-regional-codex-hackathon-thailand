@@ -211,17 +211,19 @@ test('places confirmed citations first, converts local prices, bounds text and h
   );
   assert.equal(normalizeInfo({ verified, value }, { k: 'sight' }).dishes.length, 0);
 });
-test('concurrent place lookups share the first request, distinguish renamed stops, and evict failures', async (t) => {
+test('matching place lookups share work, distinguish city and search inputs, and evict failures', async (t) => {
   const calls = [];
   let release;
   const hold = new Promise((resolve) => {
     release = resolve;
   });
-  t.mock.method(globalThis, 'fetch', async (_, init) => {
+  t.mock.method(globalThis, 'fetch', async (url, init) => {
+    if (new URL(url).hostname !== 'api.openai.com') return Response.json({ query: { pages: [] } });
     const body = JSON.parse(init.body);
     calls.push(JSON.parse(body.input[0].content.split('ข้อมูล JSON:\n')[1]));
     if (calls.length === 1) await hold;
-    if (calls.length === 3) return Response.json({ error: { code: 'invalid_api_key' } }, { status: 401 });
+    if (calls.at(-1).stop.id === 'retry1' && calls.filter(call => call.stop.id === 'retry1').length === 1)
+      return Response.json({ error: { code: 'invalid_api_key' } }, { status: 401 });
     return reply({});
   });
   const stop = {
@@ -233,7 +235,7 @@ test('concurrent place lookups share the first request, distinguish renamed stop
     place: { query: 'B', aliases: ['Y'] },
   };
   const a = placeInfo({ stop }, context()),
-    b = placeInfo({ stop, city: 'Hanoi' }, context());
+    b = placeInfo({ stop, city: 'เชียงใหม่' }, context());
   release();
   const [first, second] = await Promise.all([a, b]);
   assert.equal(calls.length, 1);
@@ -245,11 +247,143 @@ test('concurrent place lookups share the first request, distinguish renamed stop
   assert.equal(first.usage.provider, 'openai');
   const named = { stop: { ...stop, n: 'renamed' } };
   await placeInfo(named, context());
+  for (const input of [
+    { stop, city: 'Hanoi' }, { stop: { ...stop, query: 'different branch' } },
+    { stop: { ...stop, ll: [51.51,-0.13] } },
+  ]) assert.equal((await placeInfo(input, context())).cached, undefined);
   const fail = { stop: { ...stop, id: 'retry1' } };
   await assert.rejects(placeInfo(fail, context()), { code: 'auth' });
   assert.equal((await placeInfo(fail, context())).cached, undefined);
-  assert.equal(calls.length, 4);
+  assert.equal(calls.length, 7);
   await assert.rejects(placeInfo({ stop: { n: 'no id' } }, context()), { code: 'bad_request' });
+});
+test('streams credited photos before menu/text, replays to a late client and shares the checked page', async (t) => {
+  const one = 'https://harbour.example/menu';
+  const two = 'https://hours.example/harbour-kitchen';
+  const stop = { n: 'Harbour Kitchen', id: 'early-photo', k: 'food', src: { checked: 'web', url: one } };
+  const firstPhoto = 'https://media.example/harbour.jpg';
+  const secondPhoto = 'https://media.example/interior.jpg';
+  const head = url => '<head><title>Harbour Kitchen</title><meta property="og:image" content="' + url + '"></head>';
+  const firstImage = Promise.withResolvers();
+  const modelStarted = Promise.withResolvers();
+  const finishModel = Promise.withResolvers();
+  let finishMenu;
+  const calls = [];
+  t.mock.method(globalThis, 'fetch', async (resource) => {
+    const url = String(resource);
+    calls.push(url);
+    if (url === one) return new Response(new ReadableStream({ start(controller) {
+      const encode = value => controller.enqueue(new TextEncoder().encode(value));
+      encode(head(firstPhoto));
+      finishMenu = () => {
+        encode('<script type="application/ld+json">{"@type":"MenuItem","name":"Curry"}</script>');
+        controller.close();
+      };
+    } }), { headers: { 'content-type': 'text/html' } });
+    if (url === two) return new Response(head(secondPhoto), { headers: { 'content-type': 'text/html' } });
+    assert.equal(new URL(url).hostname, 'api.openai.com');
+    modelStarted.resolve();
+    await finishModel.promise;
+    return reply({ photoPage: two, sources: [{ url: one }, { url: two }], summary: 'Harbour' },
+      [{ id:'search', type:'web_search_call', action:{ sources:[{ url:one }, { url:two }] } }]);
+  });
+  const origin = new AbortController();
+  const earlyEvents = [], lateEvents = [], lateSteps = [];
+  const input = { city:'London', stop };
+  const first = placeInfo(input, { ...context(), signal:origin.signal, emit: e => {
+    earlyEvents.push(e);
+    firstImage.resolve();
+  } });
+  await firstImage.promise;
+  assert.equal(calls.filter(url => url === one).length, 1);
+  assert.ok(!calls.some(url => url.includes('api.openai.com')));
+  const late = placeInfo(input, { ...context(), emit: e => lateEvents.push(e), step: text => lateSteps.push(text) });
+  assert.deepEqual(lateEvents, earlyEvents);
+  assert.equal(lateEvents[0].photos[0].page, one);
+  assert.deepEqual(lateSteps, ['กำลังอ่านหน้าเมนูที่เผยแพร่']);
+  origin.abort();
+  await assert.rejects(first, {name:'AbortError'});
+  finishMenu();
+  await modelStarted.promise;
+  assert.equal(lateEvents.length, 1);
+  finishModel.resolve();
+  const { info, cached } = await late;
+  assert.equal(cached, true);
+  assert.deepEqual(lateEvents.map(e => e.photos.map(p => p.url)), [[firstPhoto], [firstPhoto, secondPhoto]]);
+  assert.deepEqual(info.photos, lateEvents.at(-1).photos);
+  assert.equal(earlyEvents.length, 1);
+  for (const url of [one, two, 'https://api.openai.com/v1/responses']) assert.equal(calls.filter(x => x === url).length, 1);
+  const reopened = [];
+  assert.equal((await placeInfo(input, { ...context(), emit: e => reopened.push(e) })).cached, true);
+  assert.deepEqual(reopened, [lateEvents.at(-1)]);
+});
+test('closing the last subscriber aborts the shared request and permits an immediate retry', async t => {
+  const started = Promise.withResolvers();
+  const cancelled = Promise.withResolvers();
+  let calls = 0;
+  t.mock.method(globalThis, 'fetch', async (_, init) => {
+    if (++calls > 1) return reply({ summary: 'new lookup' });
+    started.resolve();
+    return new Promise((_, reject) => init.signal.addEventListener('abort', () => {
+      cancelled.resolve();
+      reject(init.signal.reason);
+    }, { once: true }));
+  });
+  const input = { city: 'London', stop: { id: 'cancelled-lookup', n: 'Waterfront', k: 'sight' } };
+  const origin = new AbortController();
+  const first = placeInfo(input, { ...context(), signal: origin.signal });
+  await started.promise;
+  origin.abort();
+  await assert.rejects(first, { name: 'AbortError' });
+  const second = placeInfo(input, context());
+  await cancelled.promise;
+  const result = await second;
+  assert.equal(result.cached, undefined);
+  assert.equal(result.info.summary, 'new lookup');
+  assert.equal((await placeInfo(input, context())).cached, true);
+  assert.equal(calls, 2);
+});
+test('a menu page first discovered by the model supplies both its image and dishes from one fetch', async t => {
+  const page = 'https://late-menu.example/menu';
+  const requests = [];
+  t.mock.method(globalThis, 'fetch', async url => {
+    requests.push(String(url));
+    if (new URL(url).hostname === 'api.openai.com')
+      return reply({ photoPage: page, sources: [{ url: page }] }, [
+        { id: 's', type: 'web_search_call', action: { sources: [{ url: page }] } },
+      ]);
+    assert.equal(String(url), page);
+    return new Response('<head><title>River Cafe</title><meta property="og:image" content="https://media.example/river.jpg"></head>' +
+      '<script type="application/ld+json">{"@type":"MenuItem","name":"Soup"}</script>',
+      { headers: { 'content-type': 'text/html' } });
+  });
+  const events = [];
+  const { info } = await placeInfo({ city: 'London', stop: { id: 'menu-after-model', n: 'River Cafe', k: 'food' } },
+    { ...context(), emit: e => events.push(e) });
+  assert.equal(requests.filter(url => url === page).length, 1);
+  assert.equal(info.dishes[0].name, 'Soup');
+  assert.deepEqual(events.at(-1).photos, info.photos);
+  assert.equal(info.photos[0].page, page);
+});
+test('empty photo lookups expire sooner than a successful photo lookup', async t => {
+  let now = Date.now(), calls = 0;
+  t.mock.method(Date, 'now', () => now);
+  t.mock.method(globalThis, 'fetch', async url => {
+    if (new URL(url).hostname === 'api.openai.com') { calls++; return reply({}); }
+    return new Response('<title>Clock</title><meta property="og:image" content="https://media.example/clock.jpg">', { headers:{ 'content-type':'text/html' } });
+  });
+  const empty = { city:'London', stop:{ id:'empty-ttl', n:'No photo', k:'sight' } };
+  const good = { city:'London', stop:{ id:'good-ttl', n:'Clock', k:'sight', src:{ checked:'web', url:'https://clock.example/' } } };
+  await placeInfo(empty, context());
+  await placeInfo(good, context());
+  now += 59_000;
+  assert.equal((await placeInfo(empty, context())).cached, true);
+  now += 2000;
+  assert.equal((await placeInfo(empty, context())).cached, undefined);
+  assert.equal((await placeInfo(good, context())).cached, true);
+  now += 30 * 60_000;
+  assert.equal((await placeInfo(good, context())).cached, undefined);
+  assert.equal(calls, 4);
 });
 test('limits candidate output and keeps research-only inputs internal; must picks survive restart', () => {
   const duplicate = {

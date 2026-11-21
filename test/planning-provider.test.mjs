@@ -384,6 +384,7 @@ test('design, daily planning and edit schemas identify units and constrain categ
         ['food', 'sight', 'hotel', 'nature', 'view', 'transit', 'market'].every((k) => stop.kind.enum.includes(k)),
       );
       assert.match(stop.kind.description, /café/);
+      assert.ok(['rail', 'metro', 'ferry', 'bus', 'transit'].every(mode => stop.mode.enum.includes(mode)));
       assert.match(stop.diet.description, /every stated food restriction/);
       assert.ok(stop.meal.enum.includes('lunch'));
       assert.match(stop.legCost.description, /THB per person/);

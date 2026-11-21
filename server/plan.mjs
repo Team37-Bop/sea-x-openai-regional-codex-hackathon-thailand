@@ -1,5 +1,7 @@
+import { splitStopNote } from '../web/stop-note.js';
 import { stopKinds, stopKind } from './stop-kinds.mjs';
 import { resolveTransportEndpoints, localTransport } from '../web/transport-endpoints.js';
+import { isScheduledService } from '../web/leg-modes.js';
 import {
   bad,
   checks,
@@ -36,6 +38,7 @@ const conf = (name, fallback, min, max) => {
 const stopInstructions = [
   'kind ใช้รหัสภาษาอังกฤษ ' + stopKinds.join('/') + ' เท่านั้น ร้านอาหาร ร้านกาแฟ และคาเฟ่ใช้ food.',
   'walk คือระยะเดินภายในสถานที่เป็นกิโลเมตรต่อคน เช่น 250 เมตร = 0.25 กม. คาเฟ่ที่นั่งอย่างเดียวใช้ 0; เส้นทางเดินป่าจริง 10 กม. ใช้ 10.',
+  'เลือก mode ของช่วงเดินทางตามบริการที่ระบุได้: rail รถไฟ, metro รถไฟฟ้าหรือรถไฟใต้ดิน, ferry เรือโดยสาร, bus รถประจำทาง; ถ้ารู้เพียงว่าขนส่งสาธารณะให้ใช้ transit. ห้ามเดาจากชื่อสถานที่.',
   'ห้ามใส่นาทีหรือระยะเดินระหว่างจุดใน walk. legMin (leg.min ในแผนที่จัดแล้ว) คือนาทีเดินทางจากจุดก่อนหน้า เช่น เดิน 10 นาทีให้ mode=walk, legMin=10; ระบบคำนวณ leg.km แยกจาก walk. stayMin คือนาทีที่ใช้ ณ จุดนั้น.',
   'start/end เป็นเวลาท้องถิ่น HH:MM; cost ค่าใช้จ่ายที่จุดนี้เป็นบาทต่อคน และ legCost ค่าเดินทางขาเข้าเป็นบาทต่อคน (-1 ให้ระบบคำนวณ).',
   'meal ใช้ breakfast/lunch/dinner เฉพาะมื้อจริง คาเฟ่ที่แวะดื่มกาแฟอย่างเดียวไม่ใช่มื้อกลางวัน. diet ระบุเมนูที่กินได้เมื่อรองรับข้อจำกัดของสมาชิกทุกคนแล้ว ถ้ายังไม่ทราบใช้ false หรือ []; veg บอกเฉพาะอาหารมังสวิรัติ.',
@@ -587,7 +590,7 @@ export async function planTrip(input, ctx, demo = false) {
   return {
     plan,
     routes,
-    summary: str(design.summary, 600) || 'แผนทริปพร้อมแล้ว',
+    summary: str(splitStopNote(design.summary).text, 600) || 'แผนทริปพร้อมแล้ว',
     repaired,
     timing,
     ms: elapsed(started),
@@ -616,19 +619,21 @@ async function editPlan(original, edits, setup, ctx, offline = false, retimed = 
       for (const [j, s] of day.stops.entries()) {
         if (!j || !s.leg) continue;
         const prev = day.stops[j - 1];
-        if (prev.place?.fallback || s.place?.fallback) {
-          Object.assign(s.leg, { key: '', real: false, geometry: [], unlocated: true });
+        if (prev.place?.fallback || s.place?.fallback || !coordinates(prev.ll) || !coordinates(s.ll)) {
+          Object.assign(s.leg, { key: '', km: 0, real: false, geometry: [], unlocated: true });
           continue;
         }
-        const k = legKey(prev.ll, s.ll, s.leg.m ?? s.leg.mode);
+        const mode = s.leg.mode ?? s.leg.m;
+        const k = legKey(prev.ll, s.ll, mode);
         s.leg.key = k;
-        if (Array.isArray(s.leg.geometry) && s.leg.geometry.length >= 2) {
+        if (!isScheduledService(mode) && Array.isArray(s.leg.geometry) && s.leg.geometry.length >= 2) {
           routes[k] = {
             geom: s.leg.geometry.map(([lat, lng]) => [lng, lat]),
             ...(s.leg.real ? {} : { approx: true }),
           };
         } else {
-          const road = await route(prev.ll, s.ll, s.leg.m ?? s.leg.mode, ctx.signal, offline, s.leg);
+          const road = await route(prev.ll, s.ll, mode, ctx.signal, offline, s.leg);
+          if (isScheduledService(mode)) Object.assign(s.leg, { real: false, geometry: road.geometry, km: road.km });
           routes[k] = { geom: road.geom, ...(road.real ? {} : { approx: true }) };
         }
       }
@@ -651,7 +656,7 @@ export function validatePlan(input) {
         d.stops.some(
           (s) =>
             typeof s?.id !== 'string' ||
-            !coordinates(s.ll) ||
+            !(coordinates(s.ll) || (s.ll === null && s.place?.fallback === true)) ||
             !validTime(s.t0 ?? s.start) ||
             !validTime(s.t1 ?? s.end),
         ),
@@ -927,7 +932,7 @@ export async function replan(input, ctx) {
   const draft = input.setup ?? original.setup;
   const setup = normalize({ ...draft, title: draft?.title ?? original.setup?.title });
   setup.stayPlan = makeDayHotels(setup, original.flags?.stay?.stays ?? []);
-  setup.cityLL ??= original.days.flatMap((d) => d.stops)[0]?.ll;
+  setup.cityLL ??= original.days.flatMap(d => d.stops).find(s => !s.place?.fallback && coordinates(s.ll))?.ll;
   const day = cutDay(input.day, original.days.length),
     offline = input.demo === true || provider === 'fake';
   const duration = requestedTripDays(command, original.days.length);
@@ -941,7 +946,7 @@ export async function replan(input, ctx) {
   if (offline) answer = offlineAnswer(original, command, day);
   else {
     const result = await model(
-      'เสนอ edits เท่านั้น เปลี่ยนเฉพาะจุดที่ได้รับผลกระทบ รักษา res.done ถ้าทำได้. เมื่อผิดข้อจำกัดสมาชิก ค่าใช้จ่ายเพิ่มเกิน 300 บาทต่อคน หรือเสียสถานที่ star ให้ needs_vote:true และเสนอ 2–3 ทาง นอกนั้นทางเดียว. ถ้าต้องโหวต ให้ summary อธิบายข้อเสนอที่ยังรอเลือก และ vote_reason ระบุสิ่งที่กลุ่มต้องตัดสินใจ. คืน {summary,day,needs_vote,vote_reason,transport?,options:[{title,head,line,edits}]}. line ขึ้นต้น Bop: และเขียน 2–4 บรรทัด ระบุส่วนต่างราคาและคนรับงาน. ' +
+      'เสนอ edits เท่านั้น เปลี่ยนเฉพาะจุดที่ได้รับผลกระทบ รักษา res.done ถ้าทำได้. เมื่อผิดข้อจำกัดสมาชิก ค่าใช้จ่ายเพิ่มเกิน 300 บาทต่อคน หรือเสียสถานที่ star ให้ needs_vote:true และเสนอ 2–3 ทาง นอกนั้นทางเดียว. ถ้าต้องโหวต ให้ summary อธิบายข้อเสนอที่ยังรอเลือก และ vote_reason ระบุสิ่งที่กลุ่มต้องตัดสินใจ. คืน {summary,day,needs_vote,vote_reason,transport?,options:[{title,head,line,edits}]}. line ขึ้นต้น Bop: และเขียน 2–4 บรรทัด ระบุส่วนต่างราคาและคนรับงาน ส่งข้อความธรรมดา เก็บ URL และรายการอ้างอิงไว้ในแหล่งข้อมูลสถานที่. ' +
         stopInstructions,
       { setup, plan: brief({ ...original, setup }), command, day },
       { ...ctx, operation: 'replan', searches: 2 },
@@ -955,12 +960,12 @@ export async function replan(input, ctx) {
   const needs_vote = answer.needs_vote === true && raw.length >= 2;
   if (!needs_vote) raw = raw.slice(0, 1);
   if (!raw.length) throw Error('No options');
-  const titles = raw.map((row, i) => str(row.title) || 'ทางเลือก ' + 'ABC'[i]);
+  const titles = raw.map((row, i) => str(splitStopNote(row.title).text) || 'ทางเลือก ' + 'ABC'[i]);
   let voteReason;
   if (needs_vote) {
     voteReason =
-      str(answer.vote_reason, 400) ||
-      raw.map((row) => str(row.vote_reason, 400)).find(Boolean) ||
+      str(splitStopNote(answer.vote_reason).text, 400) ||
+      raw.map((row) => str(splitStopNote(row.vote_reason).text, 400)).find(Boolean) ||
       str('กลุ่มอยากเลือกแผนไหน ระหว่าง' + titles.map((title) => '“' + title + '”').join(' หรือ '), 400);
   }
   ctx.step('กำลังตรวจเวลา ค่าใช้จ่าย และเงื่อนไขของสมาชิกสำหรับ ' + raw.length + ' ทางเลือก');
@@ -1021,10 +1026,10 @@ export async function replan(input, ctx) {
     }
     const delta = Math.round(updated.plan.report.total - total(original));
     const title = titles[i],
-      head = str(row.head, 200) || title;
+      head = str(splitStopNote(row.head).text, 200) || title;
     const generated =
       'Bop: ' + title + '\nค่าใช้จ่าย ' + (delta >= 0 ? '+' : '−') + '฿' + Math.abs(delta) + '/คน\nผู้จัดทริปตรวจเวลาใหม่';
-    const rawLine = str(row.line, 800);
+    const rawLine = str(splitStopNote(row.line).text, 800);
     const line = rawLine ? str((rawLine.startsWith('Bop: ') ? '' : 'Bop: ') + rawLine, 800) : generated;
     ctx.step(
       'ทางเลือก ' +
@@ -1044,7 +1049,7 @@ export async function replan(input, ctx) {
       head,
       line,
       plan: updated.plan,
-      ...(needs_vote ? { vote_reason: str(row.vote_reason, 400) || voteReason } : {}),
+      ...(needs_vote ? { vote_reason: str(splitStopNote(row.vote_reason).text, 400) || voteReason } : {}),
     });
   }
   return {
@@ -1053,7 +1058,7 @@ export async function replan(input, ctx) {
     ...(needs_vote ? { vote_reason: voteReason } : {}),
     day: cutDay(Number.isInteger(answer.day) ? answer.day : day, original.days.length),
     summary:
-      str(answer.summary, 600) || (needs_vote ? 'มี ' + options.length + ' ทางเลือกให้กลุ่มตัดสินใจ' : titles[0]),
+      str(splitStopNote(answer.summary).text, 600) || (needs_vote ? 'มี ' + options.length + ' ทางเลือกให้กลุ่มตัดสินใจ' : titles[0]),
     routes,
     ...(changedSetup ? { setup: changedSetup } : {}),
     timing,

@@ -128,7 +128,31 @@ export function previewFromHead(head, page, stop) {
     match: 'likely',
   };
 }
-export async function readPublicDocument(value, signal, { headOnly = true, limit = 300_000, json = false } = {}) {
+// A restaurant menu and its preview can consume the same response during one lookup.
+const fullDocuments = new WeakMap();
+export function readPublicDocument(value, signal, options = {}) {
+  if (options.headOnly !== false || options.json) return fetchDocument(value, signal, options);
+  let reads = fullDocuments.get(signal);
+  if (!reads) {
+    reads = new Map();
+    fullDocuments.set(signal, reads);
+  }
+  const key = JSON.stringify([sourceIdentity(value), options.limit]);
+  let read = reads.get(key);
+  if (!read) {
+    const head = Promise.withResolvers();
+    const body = fetchDocument(value, signal, {
+      ...options, onHead: (text, page) => head.resolve({ text, page }),
+    }).finally(() => head.resolve(null));
+    read = { body, head: head.promise };
+    reads.set(key, read);
+  }
+  if (!options.onHead) return read.body;
+  const preview = read.head.then(doc => { if (doc) options.onHead(doc.text, doc.page); });
+  return Promise.all([read.body, preview]).then(([document]) => document);
+}
+
+async function fetchDocument(value, signal, { headOnly = true, limit = 300_000, json = false, onHead } = {}) {
   let page = publicPage(value);
   if (!page) return null;
   const timed = AbortSignal.any([signal, AbortSignal.timeout(5000)]);
@@ -168,10 +192,15 @@ export async function readPublicDocument(value, signal, { headOnly = true, limit
             break;
           }
           head += decoder.decode(next.value, { stream: true }).slice(0, limit - head.length);
+          if (onHead && (/<\/head\s*>/i.test(head) || head.length >= 300_000)) {
+            onHead(head.slice(0, 300_000).split(/<\/head\s*>/i)[0], final);
+            onHead = null;
+          }
         }
       } finally {
         await reader.cancel().catch(() => {});
       }
+      if (onHead) onHead(head.slice(0, 300_000).split(/<\/head\s*>/i)[0], final);
       return { text: headOnly ? head.split(/<\/head\s*>/i)[0] : head, page: final };
     }
   } catch {
@@ -373,20 +402,55 @@ export async function nearbyPhoto(stop, signal) {
   }
   return null;
 }
-export async function collectPhotos(stop, pages, exact, signal) {
-  const photos = [];
-  const add = (photo) => {
-    if (photo && !photos.some((p) => p.url === photo.url)) photos.push(photo);
-  };
-  const urls = [...new Set(pages.map(sourceIdentity).map(publicPage).filter(Boolean))];
-  const initial = await Promise.all([exact, ...urls.slice(0, 2).map((url) => pagePhoto(url, stop, signal))]);
-  initial.forEach(add);
-  for (let i = 2; i < urls.length && photos.length < 4; i += 2) {
-    const pair = await Promise.all(urls.slice(i, i + 2).map((url) => pagePhoto(url, stop, signal)));
-    pair.forEach(add);
+export function startPlacePhotos(stop, signal, onPhotos) {
+  const source = publicPage(sourceIdentity(stop.src?.url));
+  const visited = new Set(source ? [source] : []);
+  const fromPages = [];
+  let exact = null;
+  let exactFinished = false;
+  let visible = [];
+
+  function publish() {
+    if (signal.aborted) return;
+    const ranked = exact ? [exact, ...fromPages.filter(photo => photo.url !== exact.url)] : fromPages;
+    // Keep a slot for an exact match so an already displayed photo never disappears.
+    const next = ranked.slice(0, exactFinished ? 4 : 3);
+    if (next.length === visible.length && next.every((photo, index) => photo === visible[index])) return;
+    visible = next;
+    onPhotos(next);
   }
-  if (!photos.length) add(await nearbyPhoto(stop, signal));
-  return photos.slice(0, 4);
+  function addPage(photo) {
+    if (photo && !fromPages.some(existing => existing.url === photo.url)) {
+      fromPages.push(photo);
+      publish();
+    }
+  }
+  const wiki = exactPhoto(stop, signal).then(photo => { exact = photo; }).finally(() => {
+    exactFinished = true;
+    publish();
+  });
+  function fetchPage(url) {
+    if (stop.k === 'food' && (url === source || /menu|เมนู/i.test(new URL(url).pathname))) {
+      // A published menu also needs the body. Parse one shared response and expose its head early.
+      return readPublicDocument(url, signal, { headOnly: false, limit: 750_000,
+        onHead: (head, page) => addPage(previewFromHead(head, page, stop)),
+      });
+    }
+    return pagePhoto(url, stop, signal).then(addPage);
+  }
+  const venue = source ? fetchPage(source) : null;
+  const early = Promise.allSettled([wiki, venue]);
+  return async function finish(pages) {
+    const urls = [...new Set(pages.map(sourceIdentity).map(publicPage).filter(Boolean))].filter(url => !visited.has(url));
+    for (let i = 0; i < urls.length && fromPages.length < 4; i += 2) {
+      signal.throwIfAborted();
+      await Promise.all(urls.slice(i, i + 2).map(fetchPage));
+    }
+    await early;
+    signal.throwIfAborted();
+    if (!visible.length) addPage(await nearbyPhoto(stop, signal));
+    return visible;
+  };
 }
 export function wikipediaPhoto(name, ll, lang, signal) {
   return exactPhoto({ n: name, ll, k: 'sight' }, signal);

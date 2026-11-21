@@ -205,3 +205,13 @@ The organizer SHALL be able to inspect a proposed plan alongside the committed i
 
 - **WHEN** a change needs a decision and the group has no linked remote vote
 - **THEN** the organizer may select a proposed plan, collect local ballots or discard the preview. A linked LINE vote follows its own result and tie-break rules.
+
+#### Scenario: Editing an archived plan containing unpositioned stops
+
+- **WHEN** an archived itinerary submits a replan with a stop explicitly marked as a fallback and its coordinates set to null
+- **THEN** the planner accepts the edit, retains unresolved visits in the schedule, and omits geometry and measured distance for any leg without both endpoints. An unflagged missing coordinate, a malformed coordinate pair or an invalid visit time still fails plan validation.
+
+#### Scenario: Source citations in a group update
+
+- **WHEN** a generated or saved summary includes a Markdown citation or a raw URL
+- **THEN** the itinerary summary, option preview, and group message contain the readable text and its paragraph breaks. Venue sources remain available in the place details.
