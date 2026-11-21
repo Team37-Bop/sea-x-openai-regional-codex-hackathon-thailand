@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#f6f7ef">
+  <title>Bop — วางแผนทริปกับเพื่อน</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
+  <link rel="stylesheet" href="/style.css">
+  <script defer src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <header class="top"><a class="brand" href="/" aria-label="Bop หน้าแรก"><span class="brand-mark" aria-hidden="true">✳</span>Bop<span class="dot">.</span></a>
+  <nav aria-label="เมนูหลัก"><button class="quiet" id="open-setup" type="button">ตั้งค่าทริป</button><button class="primary" id="demo" type="button">ลองทริปตัวอย่าง ↗</button></nav></header>
+  <main>
+    <section class="hero">
+      <div class="hero-copy"><p class="eyebrow"><span></span> วางแผนทริปกับเพื่อน</p><h1>ไปด้วยกัน<br><em>เที่ยวแบบเรา</em></h1><p>รวมสิ่งที่เพื่อนอยากทำ งบที่แต่ละคนมี และข้อจำกัดของทุกคนไว้ในแผนเดียว</p></div>
+      <div class="hero-card"><p class="eyebrow">ปลายทางของทริป</p><h2 id="city-title">เชียงใหม่</h2><p id="trip-summary">ทริปตัวอย่าง 3 วัน · เพื่อน 4 คน</p><button class="primary" type="button" id="hero-setup">วางแผนทริปของคุณ <span aria-hidden="true">→</span></button></div>
+    </section>
+    <p id="status" class="status" role="status"></p>
+    <section class="workspace" aria-label="แผนทริป">
+      <div class="planner">
+        <div class="section-title"><div><p class="eyebrow">กำหนดการ</p><h2>แผนเที่ยว</h2></div><div id="totals" class="total"></div></div>
+        <div class="tabs" id="tabs" aria-label="วันที่เดินทาง"></div>
+        <div id="itinerary"><p class="empty">กำลังเปิดแผนเชียงใหม่…</p></div>
+      </div>
+      <aside>
+        <section class="map-card"><div class="map-heading"><div><p class="eyebrow">เส้นทาง</p><h2>แผนที่ทริป</h2></div><span id="leg-label"></span></div><div id="map" aria-label="แผนที่สถานที่และเส้นทาง"><p class="empty" id="map-fallback">แผนที่กำลังโหลด</p></div></section>
+        <section class="checks"><div class="section-title"><h2>เงื่อนไขของกลุ่ม</h2><span id="checks-count" class="total"></span></div><div id="checks-list"></div></section>
+      </aside>
+    </section>
+    <section class="actions">
+      <div><p class="eyebrow">ปรับตามสถานการณ์</p><h2>แผนเปลี่ยนได้</h2></div>
+      <form id="replan"><label for="command">อยากปรับอะไรในทริป</label><div class="inline"><input id="command" name="command" placeholder="เช่น ถ้าฝนตกล่ะ" required maxlength="130"><button class="primary">ให้ Bop ปรับแผน</button></div></form>
+      <div class="inline tools"><button type="button" class="quiet" id="weather">ตรวจฝน</button><button type="button" class="quiet" id="undo" disabled>ย้อนกลับ</button></div>
+      <div id="alerts"></div><div id="options"></div><div id="reservations"></div>
+    </section>
+  </main>
+  <dialog id="setup-dialog">
+    <form id="setup-form">
+      <div class="dialog-heading"><div><p class="eyebrow">ทริปใหม่</p><h2>ตั้งค่าทริป</h2></div><button type="button" class="quiet" id="close-setup" aria-label="ปิด">×</button></div>
+      <label>เมืองปลายทาง<input name="city" list="cities" value="เชียงใหม่" required maxlength="120"></label>
+      <datalist id="cities"><option value="เชียงใหม่"><option value="กรุงเทพฯ"><option value="ดานัง"><option value="โตเกียว"><option value="ไทเป"><option value="โซล"></datalist>
+      <p id="city-result" class="muted"></p>
+      <div class="fields"><label>วันเริ่มเดินทาง<input type="date" name="startDate" required></label><label>วันสุดท้าย<input type="date" name="endDate" required></label></div>
+      <div class="fields" id="directions"></div>
+      <label class="checkbox"><input type="checkbox" name="hasCar"> มีรถส่วนตัวระหว่างทริป</label>
+      <label>ที่พัก<select name="stayMode"><option value="auto">ให้ Bop แนะนำ</option><option value="booked">จองไว้แล้ว</option></select></label>
+      <div id="stays" hidden><div id="stay-rows"></div><button class="quiet" id="add-stay" type="button">+ เพิ่มที่พัก</button><p id="stay-total" class="muted"></p></div>
+      <div class="section-title"><h3>เพื่อนร่วมทริป</h3><button class="quiet" type="button" id="add-member">+ เพิ่มสมาชิก</button></div>
+      <div id="members"></div>
+      <div class="fields"><label>จังหวะทริป<select name="pace"><option value="normal">พอดี ๆ</option><option value="chill">ไปเรื่อย ๆ</option><option value="packed">เที่ยวให้เต็มวัน</option></select></label><label>การเลือกสถานที่<select name="autonomy"><option value="auto">ให้ Bop เลือก</option><option value="ask">ให้กลุ่มเลือกก่อน</option></select></label></div>
+      <p class="feedback" id="form-error" role="alert"></p>
+      <button class="primary full" type="submit">เริ่มวางแผน →</button>
+    </form>
+  </dialog>
+  <dialog id="detail"><div id="detail-content"></div><button class="quiet" id="detail-close" type="button">ปิด</button></dialog>
+</body>
+</html>

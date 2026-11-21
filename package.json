@@ -1,0 +1,13 @@
+{
+  "name": "bop-trip-planner",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "dev": "node --watch --env-file-if-exists=.env.local server/index.mjs",
+    "start": "node --env-file-if-exists=.env.local server/index.mjs",
+    "build": "node scripts/build.mjs",
+    "test": "node --test"
+  }
+}
