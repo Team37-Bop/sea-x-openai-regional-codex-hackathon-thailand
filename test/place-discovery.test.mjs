@@ -104,6 +104,29 @@ test('reads Sunday dishes with listed prices from a branch’s public embedded m
   assert.equal(await publishedMenu({ ...stop, n: 'Other venue' }, [], signal()), null);
   assert.ok(requests.every(url => url.startsWith(base + '/')));
 });
+test('gives the researcher the verified menu before it describes the meal', async (t) => {
+  const url = 'https://venue.example/menu';
+  const structured = { '@type': 'MenuItem', name: 'Seasonal curry', offers: { price: '12.95', priceCurrency: 'GBP' } };
+  const html = '<head><title>River Kitchen</title></head><script type="application/ld+json">' + JSON.stringify(structured) + '</script>';
+  let prompt;
+  t.mock.method(globalThis, 'fetch', async (resource, init) => {
+    if (new URL(resource).hostname === 'api.openai.com') {
+      prompt = JSON.parse(JSON.parse(init.body).input[0].content.split('ข้อมูล JSON:\n')[1]);
+      return reply({ summary: 'ร้านครัวริมน้ำ', rate: 43, currency: 'GBP' });
+    }
+    assert.equal(String(resource), url);
+    return new Response(html, { headers: { 'content-type': 'text/html' } });
+  });
+  const { info } = await placeInfo({ city: 'London', stop: {
+    id: 'weekday-meal', n: 'River Kitchen — มื้อเย็น', k: 'food', ll: [51.5, -0.1],
+    place: { fallback: true }, src: { url, checked: 'web' }, date: '2026-11-22',
+  } }, context());
+  assert.equal(prompt.stop.ll, undefined);
+  assert.equal(prompt.publishedMenu.dishes[0].name, 'Seasonal curry');
+  assert.equal(info.menuSource, url);
+  assert.equal(info.dishes[0].price, 557);
+  assert.equal(info.dishes[0].priceLocal.amount, 12.95);
+});
 test('places confirmed citations first, converts local prices, bounds text and hides photo hints', () => {
   const verified = new Set(['https://one.example/', 'https://two.example/']);
   const value = {

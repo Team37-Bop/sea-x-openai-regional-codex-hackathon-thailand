@@ -147,7 +147,7 @@ export async function schedule(raw, index, setup, ctx, stays, verified, opts = {
   const placed = await concurrent(rows, 4, async (row, i) => {
     const cat = catalogPlace(setup.city, row);
     const name = str(row.name || cat?.name);
-    const hint = coordinates(row.ll) ? row.ll : undefined;
+    const hint = !row.place?.fallback && coordinates(row.ll) ? row.ll : undefined;
     const pick = setup.picks?.must?.find((p) => coordinates(p.ll) && matchesPick({ ...row, name }, p, true));
     let ll, location;
     if (cat && !row.pinned && !pick) {
@@ -163,13 +163,14 @@ export async function schedule(raw, index, setup, ctx, stays, verified, opts = {
       ll = hint;
       location = row.place.source;
     } else if (!offline && !opts.preResolved) {
-      ll = await findPlace(
-        (str(row.query) || name) + ' ' + setup.city,
-        hint ?? setup.cityLL,
-        hint ? 3 : 40,
-        ctx.signal,
-        batch,
-      );
+      const shortName = name.split(/\s+[—–]\s+/u)[0];
+      const terms = [...new Set([str(row.query), shortName, ...(Array.isArray(row.aliases) ? row.aliases : [])]
+        .map((term) => str(term)).filter(Boolean))].slice(0, 3);
+      for (const term of terms) {
+        // The coordinate bias already identifies the city, including when its UI name is in Thai.
+        ll = await findPlace(term, hint ?? setup.cityLL, hint ? 3 : 40, ctx.signal, batch);
+        if (ll) break;
+      }
       if (ll) location = 'geocoded';
     }
     const k = stopKind(row.kind, cat?.kind);
@@ -185,6 +186,7 @@ export async function schedule(raw, index, setup, ctx, stays, verified, opts = {
       cost: Math.max(0, Number(row.cost ?? cat?.cost) || 0),
       walk: Math.max(0, Number(row.walk ?? row.walkKm) || 0),
     };
+    if (location === 'geocoded' || location === 'catalog' || location === 'pick') delete stop.place.fallback;
     if (row.src && !keep)
       stop.src =
         row.src.checked === 'web' ? source(row.src, verified) : { url: '', title: '', checked: 'estimate' };
@@ -217,7 +219,10 @@ export async function schedule(raw, index, setup, ctx, stays, verified, opts = {
     const incoming = moved
       ? {}
       : { ...row.leg, min: row.legMin ?? row.leg?.min, minSrc: row.minSrc ?? row.leg?.minSrc };
-    const road = await route(prev.ll, s.ll, mode, ctx.signal, offline, incoming);
+    const unlocated = s.place.fallback || prev.place.fallback;
+    const road = unlocated
+      ? { key: '', geom: [], geometry: [], real: false, km: 0, min: Math.max(0, Number(incoming.min) || 0), via: 'unlocated' }
+      : await route(prev.ll, s.ll, mode, ctx.signal, offline, incoming);
     if (opts.onMap && pins[i - 1] && pins[i]) {
       // Bound repeated snapshot sizes. The completed day retains the original route geometry.
       const points = road.geom;
@@ -276,12 +281,23 @@ export async function schedule(raw, index, setup, ctx, stays, verified, opts = {
       };
       leg.cost =
         auto || ['own', 'walk'].includes(mode) ? fare(mode, road.km, setup.members.length, leg) : Number(rawCost);
+      if (moved) {
+        delete leg.why;
+        delete leg.rest;
+        delete leg.breaks;
+      }
+      if (row.legWhy) leg.why = row.legWhy;
+      if (row.restStops?.length) leg.rest = row.restStops;
       if (row.legSrc) leg.src = row.legSrc;
+      if (road.via === 'unlocated') leg.unlocated = true;
+      else delete leg.unlocated;
       s.leg = leg;
-      routes[road.key] = { geom: road.geom, ...(road.real ? {} : { approx: true }) };
+      if (road.key) routes[road.key] = { geom: road.geom, ...(road.real ? {} : { approx: true }) };
       stats[road.via] = (stats[road.via] ?? 0) + 1;
       start = Math.max(planned, minutes(prev.end) + road.min);
     } else delete s.leg;
+    delete s.legWhy;
+    delete s.restStops;
     s.t0 = s.start = clock(start);
     s.t1 = s.end = clock(start + dwell);
   }

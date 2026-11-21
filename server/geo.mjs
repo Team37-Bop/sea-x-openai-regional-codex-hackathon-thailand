@@ -47,10 +47,19 @@ function save(bucket, key, value) {
 }
 const active = new Map(),
   breakers = new Map();
-function once(key, work) {
-  if (active.has(key)) return active.get(key);
-  const task = work().finally(() => active.delete(key));
-  active.set(key, task);
+function once(key, signal, work) {
+  const running = active.get(key);
+  if (running && !running.signal.aborted) {
+    return running.task.catch((error) => {
+      if (running.signal.aborted && !signal.aborted) return once(key, signal, work);
+      throw error;
+    });
+  }
+  signal.throwIfAborted();
+  const task = work().finally(() => {
+    if (active.get(key)?.task === task) active.delete(key);
+  });
+  active.set(key, { signal, task });
   return task;
 }
 function queue(width, gap) {
@@ -125,13 +134,22 @@ async function photon(name, signal, center) {
     })) ?? null
   );
 }
-async function nominatim(name, signal, limit = 5) {
+async function nominatim(name, signal, limit = 5, center, radius) {
+  let viewbox;
+  if (center) {
+    const [lat, lon] = center;
+    const dy = radius / 110;
+    const dx = dy / Math.max(0.01, Math.cos(lat * Math.PI / 180));
+    if (lon - dx >= -180 && lon + dx <= 180)
+      viewbox = [lon - dx, Math.min(90, lat + dy), lon + dx, Math.max(-90, lat - dy)].join(',');
+  }
   const result = await osmQueue(() =>
     lookup(
       query('https://nominatim.openstreetmap.org/search', {
         q: name,
         limit,
         format: 'jsonv2',
+        ...(viewbox ? { viewbox, bounded: 1 } : {}),
         addressdetails: 1,
         'accept-language': 'en',
       }),
@@ -154,7 +172,7 @@ export async function findCity(name, signal = new AbortController().signal) {
   if (!key) return null;
   if (Object.hasOwn(cities, key)) return { name: key, ...cities[key] };
   if (data.cities.has(key)) return data.cities.get(key);
-  return once('city:' + key, async () => {
+  return once('city:' + key, signal, async () => {
     const h =
       (await nominatim(name, signal, 1))?.find((x) => coordinates(x.ll)) ??
       (await photon(name, signal))?.find((x) => coordinates(x.ll) && ['place', 'boundary'].includes(x.kind));
@@ -172,18 +190,19 @@ export async function findPlace(name, center, radius = 3, signal = new AbortCont
   if (!name?.trim() || !coordinates(center)) return null;
   await ready;
   const key = [name.trim().toLowerCase(), center.map((v) => v.toFixed(2)), radius].join('|');
-  if (data.geocode.has(key)) return data.geocode.get(key);
-  return once('poi:' + key, async () => {
+  const cached = data.geocode.get(key);
+  if (coordinates(cached)) return cached;
+  return once('poi:' + key, signal, async () => {
     const acceptable = (h) => realPoi(h) && distance(center, h.ll) <= radius;
     const primary = await photon(name, signal, center);
     let hit = primary?.find(acceptable);
     let secondary = null;
     if (!hit && (!batch || batch.remaining > 0)) {
       if (batch) batch.remaining--;
-      secondary = await nominatim(name, signal);
+      secondary = await nominatim(name, signal, 5, center, radius);
       hit = secondary?.find(acceptable);
     }
-    if (hit || (primary && secondary && radius === 3)) save('geocode', key, hit?.ll ?? null);
+    if (hit) save('geocode', key, hit.ll);
     return hit?.ll ?? null;
   });
 }
@@ -241,7 +260,7 @@ export async function route(from, to, mode, signal, offline = false, leg = {}) {
     via = measured ? 'cache' : null;
   if (measured?.approx && !offline) measured = null;
   if (!measured && !offline && km >= 0.001) {
-    measured = await once('route:' + key, () =>
+    measured = await once('route:' + key, signal, () =>
       routeQueue(async () => {
         const walk = mode === 'walk',
           pair = [from, to].map(([lat, lng]) => lng + ',' + lat).join(';');

@@ -594,8 +594,12 @@ async function editPlan(original, edits, setup, ctx, offline = false, retimed = 
     } else {
       for (const [j, s] of day.stops.entries()) {
         if (!j || !s.leg) continue;
-        const prev = day.stops[j - 1],
-          k = legKey(prev.ll, s.ll, s.leg.m ?? s.leg.mode);
+        const prev = day.stops[j - 1];
+        if (prev.place?.fallback || s.place?.fallback) {
+          Object.assign(s.leg, { key: '', real: false, geometry: [], unlocated: true });
+          continue;
+        }
+        const k = legKey(prev.ll, s.ll, s.leg.m ?? s.leg.mode);
         s.leg.key = k;
         if (Array.isArray(s.leg.geometry) && s.leg.geometry.length >= 2) {
           routes[k] = {

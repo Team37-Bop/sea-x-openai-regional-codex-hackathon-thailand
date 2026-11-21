@@ -91,7 +91,14 @@ test('plans from candidate picks, streams days, and anchors both booked stays', 
   assert.equal(last.plan.days[3].stops[0].name, 'Hotel B');
   for (const stop of last.plan.days.flatMap((day) => day.stops)) {
     assert.ok(stop.ll.every(Number.isFinite));
-    if (stop.leg) assert.ok(last.routes[stop.leg.key].geom.length >= 2);
+    if (!stop.leg) continue;
+    if (stop.leg.unlocated) {
+      assert.equal(stop.leg.real, false);
+      assert.deepEqual(stop.leg.geometry, []);
+      assert.equal(last.routes[stop.leg.key], undefined);
+    } else {
+      assert.ok(last.routes[stop.leg.key].geom.length >= 2);
+    }
   }
 });
 test('removes an offline stop without altering unrelated days and rejects empty commands', async () => {
