@@ -1952,18 +1952,10 @@ body:has(#views[hidden]) .trip-bar .trip-heading {
   gap: 6px;
   min-width: 0;
 }
-.wish-header,
 .wish-entry {
   display: flex;
   align-items: center;
   gap: 8px;
-}
-.wish-header {
-  justify-content: space-between;
-}
-.wish-header small {
-  color: var(--muted);
-  font-variant-numeric: tabular-nums;
 }
 .wish-entry .location-picker {
   flex: 1;

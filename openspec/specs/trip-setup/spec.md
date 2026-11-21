@@ -91,7 +91,7 @@ The setup SHALL have 1-12 members, each with a unique slug id, a name and option
 
 #### Scenario: Adding and removing member wishes
 - **WHEN** the organizer chooses a place suggestion, or types an activity and presses Enter or “เพิ่ม”
-- **THEN** the member's wish appears as an individually removable item. Each member can have up to five items.
+- **THEN** the member's wish appears as an individually removable item. The field shows a limit notice only when all five places are filled. Removing an item restores entry.
 - **AND** planning and transport searches include a nonempty draft wish even before it is added. Pasted comma-separated wishes are also accepted, and saved wishes reopen as individual items in their original order.
 
 #### Scenario: Note is not an instruction

@@ -542,9 +542,10 @@ let editingSetup;
 const memberWishReaders = new WeakMap();
 function addWishEditor(row, savedWishes) {
   const editor = node('div', null, 'wish-editor');
-  const header = node('div', null, 'wish-header');
   const label = node('label', 'อยากไปหรืออยากทำ');
-  const count = node('small');
+  const limitNotice = node('small', null, 'muted');
+  limitNotice.setAttribute('role', 'status');
+  limitNotice.hidden = true;
   const list = node('ul', null, 'wish-list');
   list.setAttribute('aria-label', 'รายการที่อยากไปหรืออยากทำ');
   const entry = node('div', null, 'wish-entry');
@@ -553,13 +554,9 @@ function addWishEditor(row, savedWishes) {
   input.name = 'wants';
   input.id = row.dataset.id + '-wish';
   label.htmlFor = input.id;
-  count.id = input.id + '-count';
-  count.setAttribute('role', 'status');
-  input.setAttribute('aria-describedby', count.id);
   const add = button('เพิ่ม', () => commit(pending()));
-  header.append(label, count);
   entry.append(input, add);
-  editor.append(header, list, entry);
+  editor.append(label, list, entry, limitNotice);
 
   const limit = 5;
   const pending = () => input.value.split(/[,，]/).map((wish) => wish.trim()).filter(Boolean);
@@ -575,10 +572,11 @@ function addWishEditor(row, savedWishes) {
     const wishes = pending();
     const full = size === limit;
     input.disabled = full;
-    input.placeholder = full ? 'ครบ 5 รายการแล้ว' : 'เช่น เดินตลาดเช้า';
+    input.placeholder = 'เช่น เดินตลาดเช้า';
     add.disabled = full || !wishes.length;
-    const countText = size + '/' + limit + ' รายการ';
-    if (count.textContent !== countText) count.textContent = countText;
+    entry.hidden = full;
+    limitNotice.hidden = !full;
+    limitNotice.textContent = full ? 'ครบ 5 รายการแล้ว ลบรายการเดิมเพื่อเพิ่มรายการใหม่' : '';
     list.hidden = !size;
     validate(wishes);
   }
