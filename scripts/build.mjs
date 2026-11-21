@@ -21,6 +21,8 @@ const publicFiles = [
   'itinerary-facts.js',
   'leg-modes.js',
   'liff.html',
+  'liff-summary.css',
+  'liff-summary.js',
   'liff.js',
   'location-suggest.css',
   'location-suggest.js',

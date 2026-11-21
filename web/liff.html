@@ -5,14 +5,15 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Bop · โหวตแผนกับเพื่อน</title>
   <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/liff-summary.css">
   <script type="module" src="/liff.js"></script>
 </head>
 <body>
   <header class="top"><a class="brand" href="/">Bop.</a></header>
-  <main><section class="actions"><h1 id="title">โหวตแผนกับเพื่อน</h1><p id="status" role="status">กำลังเชื่อมต่อ LINE</p><div id="participant"></div>
+  <main><section class="actions"><h1 id="title">โหวตแผนกับเพื่อน</h1><p id="status" role="status">กำลังเชื่อมต่อ LINE</p><a id="trip-summary-link" href="#trip-summary" hidden>ข้ามไปดูสรุปแผนทริป ↓</a><div id="participant"></div>
     <details id="trip-summary" class="liff-trip-summary" hidden>
       <summary>สรุปแผนทริป</summary>
-      <p id="trip-summary-text"></p>
+      <div id="trip-summary-content"></div>
     </details>
   </section></main>
 </body>

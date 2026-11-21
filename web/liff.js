@@ -1,10 +1,31 @@
 import liff from '/assets/liff.js';
 import { el, action, tripRequest } from './integration-ui.js';
+import { createTripSummaryRenderer } from './liff-summary.js';
 
 const status = document.querySelector('#status');
 const panel = document.querySelector('#participant');
-const summaryDetails = document.querySelector('#trip-summary');
-const summaryText = document.querySelector('#trip-summary-text');
+const summary = document.querySelector('#trip-summary');
+const summaryHeading = summary.querySelector('summary');
+const summaryLink = document.querySelector('#trip-summary-link');
+const renderSummary = createTripSummaryRenderer(
+  summary,
+  document.querySelector('#trip-summary-content'),
+);
+function updateSummary(text, activeVote) {
+  renderSummary(text, { activeVote });
+  summaryLink.hidden = !activeVote || summary.hidden;
+}
+summaryLink.addEventListener('click', (event) => {
+  event.preventDefault();
+  summary.open = true;
+  summaryHeading.focus();
+  summaryHeading.scrollIntoView({ block: 'start' });
+});
+function keyedAction(key, ...args) {
+  const button = action(...args);
+  button.dataset.focusKey = key;
+  return button;
+}
 const params = new URLSearchParams(location.search);
 const tripId =
   params.get('tripId') ||
@@ -34,16 +55,15 @@ async function run(actionWork, memberId) {
     const trip = await post('/identity', memberId ? { memberId } : {});
     document.querySelector('#title').textContent = trip.title;
     status.textContent = 'สวัสดี ' + trip.identity.displayName;
+    const focusKey = panel.contains(document.activeElement) ? document.activeElement.dataset.focusKey : null;
     panel.replaceChildren();
-    const summary = trip.identity.memberId && typeof trip.summary === 'string' ? trip.summary.trim() : '';
-    summaryDetails.hidden = !summary;
-    summaryText.textContent = summary;
+    updateSummary(trip.identity.memberId ? trip.summary : '', trip.vote?.status === 'OPEN');
     if (!trip.identity.memberId) {
       panel.append(el('h2', 'เลือกชื่อของคุณในทริป'));
       const available = trip.members.filter((m) => !m.linked);
       if (!available.length)
         panel.append(el('p', 'ชื่อในทริปเชื่อมกับบัญชี LINE แล้ว กรุณาติดต่อผู้จัดทริป'));
-      for (const member of available) panel.append(action(member.name, () => run(null, member.id)));
+      for (const member of available) panel.append(keyedAction('member:' + member.id, member.name, () => run(null, member.id)));
     } else {
       panel.append(
         el(
@@ -68,7 +88,8 @@ async function run(actionWork, memberId) {
           if (vote.status === 'OPEN') {
             const voted = vote.ballots[trip.identity.memberId]?.option === option.key;
             row.append(
-              action(
+              keyedAction(
+                'vote:' + vote.id + ':' + option.key,
                 voted ? 'คุณเลือกตัวเลือกนี้แล้ว' : 'เลือกตัวเลือกนี้',
                 () => run(() => post('/vote/ballot', { voteId: vote.id, option: option.key })),
                 voted ? 'quiet' : 'primary',
@@ -89,9 +110,12 @@ async function run(actionWork, memberId) {
       }
       schedule();
     }
+    if (focusKey) {
+      const replacement = [...panel.querySelectorAll('[data-focus-key]')].find((button) => button.dataset.focusKey === focusKey);
+      if (replacement) replacement.focus({ preventScroll: true });
+    }
   } catch (error) {
-    summaryDetails.hidden = true;
-    summaryText.textContent = '';
+    updateSummary('', false);
     status.textContent = error.message;
     schedule();
   } finally {
