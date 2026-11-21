@@ -142,22 +142,25 @@
         </div>
       </section>
       <div class="trip-board">
-        <section id="chat-response" aria-labelledby="chat-state" hidden>
-          <div class="chat-request-line">
-            <p>คำขอของคุณ <strong id="chat-command"></strong></p>
-            <button type="button" id="chat-cancel" class="quiet">ยกเลิกคำขอ</button>
-            <button type="button" id="chat-dismiss" class="quiet" hidden>ปิดผลการปรับแผน</button>
-          </div>
-          <h2 id="chat-state" tabindex="-1" aria-live="polite"></h2>
-          <p id="chat-description" hidden></p>
-          <ol id="chat-steps" class="operation-trace" role="list" aria-label="ขั้นตอนการปรับแผน" aria-live="polite" aria-relevant="additions"></ol>
-          <button type="button" id="chat-retry" class="quiet" hidden>ลองอีกครั้ง</button>
-          <div id="options" aria-label="ทางเลือกในการปรับแผน"></div>
-          <details id="chat-result" hidden>
-            <summary>ดูสิ่งที่เปลี่ยนในแผน</summary>
-            <div id="chat-review"></div>
-          </details>
-          <div id="chat-line"></div>
+        <button id="itinerary-toggle" class="panel-toggle" type="button" aria-controls="trip-sidebar" aria-expanded="true" aria-label="ย่อแผนเที่ยว" title="ย่อแผนเที่ยว"><span>ย่อแผนเที่ยว</span></button>
+        <section id="chat-response" aria-label="คำตอบจาก Bop" hidden>
+          <button id="chat-toggle" class="panel-toggle" type="button" aria-controls="chat-content" aria-expanded="true" aria-label="ย่อแผงคุยกับ Bop" title="ย่อแผงคุยกับ Bop"><span aria-live="polite">ย่อแผง</span></button>
+          <div id="chat-content">
+            <div class="chat-request-line">
+              <p>คำขอของคุณ <strong id="chat-command"></strong></p>
+              <button type="button" id="chat-cancel" class="quiet">ยกเลิกคำขอ</button>
+              <button type="button" id="chat-dismiss" class="quiet" hidden>ปิดผลการปรับแผน</button>
+            </div>
+            <h2 id="chat-state" tabindex="-1" aria-live="polite"></h2>
+            <p id="chat-description" hidden></p>
+            <ol id="chat-steps" class="operation-trace" role="list" aria-label="ขั้นตอนการปรับแผน" aria-live="polite" aria-relevant="additions"></ol>
+            <button type="button" id="chat-retry" class="quiet" hidden>ลองอีกครั้ง</button>
+            <div id="options" aria-label="ทางเลือกในการปรับแผน"></div>
+            <details id="chat-result" hidden>
+              <summary>ดูสิ่งที่เปลี่ยนในแผน</summary>
+              <div id="chat-review"></div>
+            </details>
+            <div id="chat-line"></div>
           </div>
         </section>
         <aside id="planning-progress" aria-labelledby="planning-phase" hidden>
@@ -180,7 +183,7 @@
             <button class="quiet" id="planning-edit" type="button" hidden>แก้ข้อมูลทริป</button>
           </div>
         </aside>
-        <aside class="trip-sidebar" aria-label="รายละเอียดแผนการเดินทาง">
+        <aside id="trip-sidebar" class="trip-sidebar" aria-label="รายละเอียดแผนการเดินทาง">
           <div class="tabs view-tabs" role="tablist" id="views" aria-label="มุมมองทริป" hidden>
             <button type="button" role="tab" id="plan-tab" aria-controls="plan-panel" aria-selected="true">
               <svg class="icon" aria-hidden="true"><use href="#i-route" /></svg>

@@ -32,7 +32,7 @@ On valid setup submission the interactive map SHALL appear immediately, centered
 #### Scenario: Days arrive out of order
 
 - **WHEN** day two arrives before day one and day two is later updated
-- **THEN** the progress view shows day one before day two with two distinct days ready. Intermediate map snapshots update pins without counting a completed day. Preview routes require resolved geometry, and synthetic fallback locations are excluded. An existing trip keeps its map until new geographic results arrive. Canceling restores the committed map and draft form.
+- **THEN** the progress view shows day one before day two with two distinct days ready. Intermediate map snapshots update pins without counting a completed day. Preview routes require resolved geometry, and synthetic fallback locations are excluded. Every generation starts with a clear destination map. Canceling restores the committed map and draft form.
 
 #### Scenario: Organizer edits during generation
 
@@ -72,6 +72,15 @@ The planner SHALL present itinerary and bookings tabs. The itinerary view SHALL 
 
 - **WHEN** a tab has focus and the organizer presses a horizontal arrow
 - **THEN** focus and selection move between tabs, wrapping at either end. Enter or Space on a focused timeline stop opens it. Escape closes an open place sheet.
+
+### Requirement: Reversible workspace panels
+
+The organizer SHALL be able to collapse and reopen each side of the map independently without losing the current task.
+
+#### Scenario: Collapsing workspace panels
+
+- **WHEN** the organizer collapses the left itinerary or the active Bop response
+- **THEN** that panel's keyboard-operable toggle remains available and exposes its expanded state. The desktop map grows when the itinerary is collapsed. Mobile keeps the controls in their respective sections below the map. Reopening restores the selected day or booking tab, pending decisions and votes, and all progress received while collapsed. A new chat request opens its response.
 
 ### Requirement: Preview, reset and separate trip state
 

@@ -125,7 +125,11 @@ The visible map SHALL display a compact bottom-left key for the lines currently 
 
 ### Requirement: Framing the active destination and map overlays
 
-Changing destination in an existing trip SHALL immediately clear the old stops from the draft map and show the new city as soon as its coordinates are available. Returning to the saved trip SHALL restore its markers and bounds. Focusing a stop and fitting visible routes SHALL use map space clear of the open place sheet and chat dock, including when both overlap the map.
+Each setup submission or retry SHALL begin with an empty itinerary overlay, even when the destination is unchanged. The camera SHALL show the requested city as soon as its coordinates are available. The draft SHALL display only places and routes received for the current request. Returning to the saved trip SHALL restore its markers, routes and bounds. Focusing a stop and fitting visible routes SHALL use map space clear of the open place sheet and chat dock, including when both overlap the map.
+
+#### Scenario: Rebuilding a trip in the same city
+- **WHEN** the organizer regenerates an existing trip without changing its destination
+- **THEN** previous pins, route lines, popups and legend entries clear before discovery. Canceling restores the committed itinerary and ignores delayed events. Completing the request replaces the provisional layer with its final itinerary.
 
 #### Scenario: Inspecting a stop with the response dock open
 - **WHEN** the user selects a stop and its sheet opens alongside a visible Bop response

@@ -82,6 +82,7 @@ function segment(a, b, record, mode, ghost = false, estimated = false) {
       color: ghost ? '#a84646' : colors[mode] || '#426353',
       approx: approximate || ghost,
       stroke,
+      revision: overlayRevision,
     },
   };
 }
@@ -90,12 +91,15 @@ let map,
   library,
   pending,
   markers = [],
+  routePopup,
+  overlayRevision = 0,
   previousCamera,
   cameraTarget,
   cameraFrame;
 
 const pinSpacing = 35;
 const detailZoom = 17.5;
+const lineFilter = stroke => ['all', ['==', ['get', 'stroke'], stroke], ['==', ['get', 'revision'], overlayRevision]];
 
 // Split the map around the visible docks. On small workspaces there can be more
 // room below the chat than between the chat and the place sheet.
@@ -121,6 +125,7 @@ function scheduleCamera() {
   if (cameraFrame || !cameraTarget) return;
   cameraFrame = requestAnimationFrame(() => {
     cameraFrame = undefined;
+    if (!cameraTarget) return;
     const box = map.getContainer().getBoundingClientRect();
     if (box.width < 2 || box.height < 2) return;
     map.resize();
@@ -279,7 +284,7 @@ function paint() {
         id,
         type: 'line',
         source: 'trip',
-        filter: ['==', ['get', 'stroke'], stroke],
+        filter: lineFilter(stroke),
         layout: { 'line-cap': style.cap, 'line-join': 'round' },
         paint: {
           'line-color': ['get', 'color'],
@@ -288,13 +293,14 @@ function paint() {
           ...(style.dash && { 'line-dasharray': style.dash }),
         },
       });
-      map.on('click', id, (event) =>
-        new library.Popup()
+      map.on('click', id, (event) => {
+        routePopup?.remove();
+        routePopup = new library.Popup()
           .setLngLat(event.lngLat)
           .setText(routeLabel(event.features[0].properties) +
             (stroke === 'estimate' || stroke === 'removed' ? '' : ' · ตามถนนจริง'))
-          .addTo(map),
-      );
+          .addTo(map);
+      });
     }
   }
   renderLegend(features);
@@ -304,8 +310,25 @@ function paint() {
   scheduleCamera();
 }
 export function drawMap(days, routes, open, before, focusedStop, draft) {
-  pending = { days, routes, open, before, focusedStop, drafting: Boolean(draft), center: coordinates(draft?.cityLL) };
-  if (!days.some(day => day?.stops?.length)) renderLegend([]);
+  const drafting = Boolean(draft), center = coordinates(draft?.cityLL);
+  if (draft?.restart || pending?.drafting !== drafting || (!drafting && pending?.days[0] !== days[0])) {
+    // MapLibre's worker can still be painting the preceding GeoJSON tiles.
+    // Hide that revision immediately while the new source data is being indexed.
+    overlayRevision++;
+    for (const stroke of Object.keys(strokes)) {
+      const id = 'trip-' + stroke;
+      if (map?.getLayer(id)) map.setFilter(id, lineFilter(stroke));
+    }
+    for (const { marker } of markers) marker.remove();
+    markers = [];
+    routePopup?.remove();
+    map?.stop();
+    previousCamera = undefined;
+    cameraTarget = drafting ? { drafting, center } : null;
+    if (map) scheduleCamera();
+    renderLegend([]);
+  }
+  pending = { days, routes, open, before, focusedStop, drafting, center };
   if (map) {
     paint();
     return;
