@@ -5,7 +5,6 @@ const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const compact = (value, max) => (typeof value === 'string' ? value.trim().slice(0, max) : '');
 const epoch = () => Math.floor(Date.now() / 1000);
 const hash = (value) => createHash('sha256').update(value).digest('hex');
-const text = (value) => ({ type: 'text', text: String(value).slice(0, 5000) });
 const equal = (left, right) => left.length === right.length && timingSafeEqual(left, right);
 const deny = () => failure('auth', 'ไม่พบสิทธิ์จัดการทริปนี้');
 const invalid = (message) => failure('bad_request', message);
@@ -127,93 +126,120 @@ function finalize(trip) {
   vote.status = winner ? 'CLOSED' : 'TIE';
   return trip;
 }
-function linkConfirmation(trip) {
-  const title = trip.title.replace(/\s+/g, ' ');
-  const confirmation = 'เชื่อมกลุ่มกับทริป ' + title + ' แล้ว';
+const style = {
+  paper: '#FBFAF7', ink: '#17181C', muted: '#5B5D66', orange: '#FF5A1F',
+  blue: '#1D5FD1', tint: '#E3EDFF', good: '#0F7442', warn: '#9A5A00', error: '#C8262D',
+};
+const excerpt = (value, limit) => {
+  const chars = Array.from(value);
+  return chars.length <= limit ? value : chars.slice(0, limit - 1).join('') + '…';
+};
+const oneLine = (value) => String(value ?? '').trim().replace(/\s+/g, ' ');
+function tripAction(trip, label) {
   const { liffId } = lineConfig();
   const loginChannel = process.env.LINE_LOGIN_CHANNEL_ID || process.env.LINE_CHANNEL_ID;
-  if (!liffId || liffId !== liffId.trim() || !loginChannel?.trim()) return text(confirmation);
+  if (!trip?.tripId || !liffId || liffId !== liffId.trim() || !loginChannel?.trim()) return null;
   const uri = liffUri(trip.tripId);
-  const hasSummary = Boolean(trip.summary);
-  const label = hasSummary ? 'ดูสรุปทริป' : 'เปิดหน้าทริปใน LINE';
-  const ink = '#17181C';
+  if (uri.length > 1000) return null;
+  return { type: 'uri', label: label || (trip.summary ? 'ดูสรุปทริป' : 'เปิดหน้าทริปใน LINE'), uri };
+}
+function flexAction(action, secondary) {
+  return {
+    type: 'box',
+    layout: 'vertical',
+    justifyContent: 'center',
+    height: '48px',
+    cornerRadius: '12px',
+    backgroundColor: secondary ? style.tint : style.orange,
+    action,
+    contents: [
+      { type: 'text', text: action.label, color: secondary ? style.blue : style.ink, size: 'md', weight: 'bold', align: 'center' },
+    ],
+  };
+}
+function bubble({ status, tone = 'blue', title, detail, actions = [] }) {
+  const contents = [
+    { type: 'text', text: status, color: style[tone], size: 'sm', weight: 'bold', wrap: true },
+  ];
+  if (title) contents.push({ type: 'text', text: title, color: style.ink, size: 'xl', weight: 'bold', wrap: true, maxLines: 2 });
+  if (detail) {
+    const chars = Array.from(detail);
+    const lines = [];
+    for (let i = 0; i < chars.length; i += 900) {
+      const text = chars.slice(i, i + 900).join('');
+      lines.push({ type: 'text', text, color: style.ink, size: 'sm', wrap: true });
+    }
+    if (lines.length === 1) contents.push(lines[0]);
+    else contents.push({ type: 'box', layout: 'vertical', contents: lines });
+  }
+  const buttons = actions.filter(Boolean).map((action, i) => flexAction(action, i > 0));
+  return {
+    type: 'bubble',
+    styles: { body: { backgroundColor: style.paper }, footer: { backgroundColor: style.paper } },
+    body: { type: 'box', layout: 'vertical', spacing: 'sm', contents },
+    ...(buttons.length ? { footer: { type: 'box', layout: 'vertical', spacing: 'sm', contents: buttons } } : {}),
+  };
+}
+function notice(card, altText) {
+  let contents = bubble(card);
+  // Respect LINE's 30KB single-bubble limit even for escape-heavy organizer text.
+  // A second Flex bubble preserves the message and keeps its only CTA on the last card.
+  if (Buffer.byteLength(JSON.stringify(contents)) > 29_000 && card.detail) {
+    const chars = Array.from(card.detail);
+    const midpoint = Math.ceil(chars.length / 2);
+    contents = {
+      type: 'carousel',
+      contents: [
+        bubble({ ...card, detail: chars.slice(0, midpoint).join(''), actions: [] }),
+        bubble({ ...card, title: null, detail: chars.slice(midpoint).join('') }),
+      ],
+    };
+  }
   return {
     type: 'flex',
-    altText: confirmation,
-    contents: {
-      type: 'bubble',
-      styles: { body: { backgroundColor: '#FBFAF7' }, footer: { backgroundColor: '#FBFAF7' } },
-      body: {
-        type: 'box',
-        layout: 'vertical',
-        spacing: 'sm',
-        contents: [
-          { type: 'text', text: 'เชื่อมกลุ่ม LINE แล้ว', color: '#0F7442', size: 'sm', weight: 'bold' },
-          { type: 'text', text: title, color: ink, size: 'xl', weight: 'bold', wrap: true, maxLines: 2 },
-          ...(hasSummary ? [{
-            type: 'text',
-            text: 'เลือกชื่อของคุณในทริปเพื่อดูสรุปแผน',
-            color: '#5B5D66',
-            size: 'sm',
-            wrap: true,
-          }] : []),
-        ],
-      },
-      footer: {
-        type: 'box',
-        layout: 'vertical',
-        contents: [{
-          type: 'box',
-          layout: 'vertical',
-          justifyContent: 'center',
-          height: '48px',
-          cornerRadius: '12px',
-          backgroundColor: '#FF5A1F',
-          action: { type: 'uri', label, uri },
-          contents: [
-            { type: 'text', text: label, color: ink, size: 'md', weight: 'bold', align: 'center' },
-          ],
-        }],
-      },
-    },
+    altText: excerpt(oneLine(altText || [card.status, card.title || card.detail].filter(Boolean).join(' · ')), 220),
+    contents,
   };
+}
+function linkConfirmation(trip) {
+  const title = oneLine(trip.title);
+  const action = tripAction(trip);
+  return notice({
+    status: 'เชื่อมกลุ่ม LINE แล้ว',
+    title,
+    tone: 'good',
+    detail: action && trip.summary ? 'เลือกชื่อของคุณในทริปเพื่อดูสรุปแผน' : null,
+    actions: [action],
+  }, 'เชื่อมกลุ่มกับทริป ' + title + ' แล้ว');
+}
+function planNotice(trip) {
+  const action = tripAction(trip);
+  return notice({
+    status: 'สรุปทริปล่าสุด',
+    title: oneLine(trip.title),
+    detail: action ? 'เลือกชื่อของคุณในทริปเพื่อดูสรุปล่าสุด' : trip.summary,
+    actions: [action],
+  });
 }
 function voteFlex(trip) {
   const vote = trip.vote;
-  const uri = liffUri(trip.tripId);
-  const bubbles = vote.options.map((option) => {
-    const buttons = [
-      {
-        type: 'button',
-        style: 'primary',
-        action: {
-          type: 'postback',
-          label: 'โหวต ' + option.key,
-          data: new URLSearchParams({ voteId: vote.id, option: option.key }).toString(),
-        },
-      },
-    ];
-    if (uri) buttons.push({ type: 'button', action: { type: 'uri', label: 'เลือกชื่อของฉัน', uri } });
-    const lines = [option.key + ' · ' + option.title, option.head].filter(Boolean);
-    return {
-      type: 'bubble',
-      body: {
-        type: 'box',
-        layout: 'vertical',
-        contents: lines.map((line, i) => ({
-          type: 'text',
-          text: line,
-          wrap: true,
-          weight: i ? 'regular' : 'bold',
-        })),
-      },
-      footer: { type: 'box', layout: 'vertical', contents: buttons },
-    };
-  });
+  const openTrip = tripAction(trip, 'เลือกชื่อของฉัน');
   return {
     type: 'flex',
-    altText: 'โหวตแผนทริป ' + trip.title,
-    contents: { type: 'carousel', contents: bubbles },
+    altText: excerpt('โหวตแผนทริป ' + oneLine(trip.title), 220),
+    contents: {
+      type: 'carousel',
+      contents: vote.options.map((option) => bubble({
+        status: 'โหวตแผนทริป',
+        title: option.key + ' · ' + option.title,
+        detail: option.head,
+        actions: [{
+          type: 'postback',
+          label: excerpt('โหวต ' + option.key, 20),
+          data: new URLSearchParams({ voteId: vote.id, option: option.key }).toString(),
+        }, openTrip],
+      })),
+    },
   };
 }
 const resultText = (vote) =>
@@ -222,6 +248,15 @@ const resultText = (vote) =>
     : vote.status === 'TIE'
       ? 'คะแนนเสมอ ให้ผู้จัดทริปเลือกแผนสุดท้าย'
       : 'บันทึกคะแนนโหวตแล้ว ขอบคุณค่ะ';
+
+function voteNotice(trip, vote) {
+  return notice({
+    status: vote.status === 'OPEN' ? 'บันทึกคะแนนโหวตแล้ว' : 'ผลโหวตของกลุ่ม',
+    detail: resultText(vote),
+    tone: vote.status === 'TIE' ? 'warn' : 'good',
+    actions: [tripAction(trip)],
+  });
+}
 
 export function createLineService(store = operationalStore, request = (...args) => fetch(...args)) {
   async function lineApi(path, options = {}, auth = true) {
@@ -307,19 +342,21 @@ export function createLineService(store = operationalStore, request = (...args) 
         summary: compact(input.summary, 2000),
       }));
       if (!next) throw deny();
-      return { ...view(next), ...(next.summary ? await push(next, text(next.summary)) : { posted: false }) };
+      return { ...view(next), ...(next.summary ? await push(next, planNotice(next)) : { posted: false }) };
     }
     if (!trip.groupId) throw invalid('เชื่อมต่อกลุ่ม LINE ก่อน');
     if (action === 'post') {
       const message = compact(input.text, 5000);
       if (!message) throw invalid('กรุณาใส่ข้อความ');
-      const outgoing = text('Bop: ' + message.replace(/^(?:Bop:\s*)+/i, ''));
+      // Preserve the old normalized text in retry keys across the presentation change.
+      const normalized = ('Bop: ' + message.replace(/^(?:Bop:\s*)+/i, '')).slice(0, 5000);
+      const outgoing = notice({ status: 'ข้อความจาก Bop', detail: normalized, actions: [tripAction(trip)] }, 'ข้อความใหม่จาก Bop');
       let retryKey;
       if (input.retryKey != null) {
         if (!/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(input.retryKey))
           throw invalid('รหัสส่งข้อความไม่ถูกต้อง');
         // Scope supplier retries to this linked group and this exact text.
-        const hex = hash(JSON.stringify([trip.tripId, trip.groupId, outgoing.text, input.retryKey])).slice(0, 32);
+        const hex = hash(JSON.stringify([trip.tripId, trip.groupId, normalized, input.retryKey])).slice(0, 32);
         retryKey = hex.replace(/^(........)(....)(....)(....)(............)$/, '$1-$2-$3-$4-$5');
       }
       return push(trip, outgoing, retryKey);
@@ -369,7 +406,7 @@ export function createLineService(store = operationalStore, request = (...args) 
       });
       if (!next) throw deny();
       if (!closedHere) return { vote: voteView(next.vote), posted: false };
-      return { vote: voteView(next.vote), ...(await push(next, text(resultText(next.vote)))) };
+      return { vote: voteView(next.vote), ...(await push(next, voteNotice(next, next.vote))) };
     }
     throw invalid('คำขอไม่ถูกต้อง');
   }
@@ -443,19 +480,26 @@ export function createLineService(store = operationalStore, request = (...args) 
     const groupId = event?.source?.groupId;
     if (!groupId || event.source.type !== 'group') return;
     if (event.type === 'join')
-      return reply(event, text('สวัสดีจาก Bop ส่งรหัสเชื่อมทริป 6 ตัวที่ได้จากผู้จัดทริปในกลุ่มนี้'));
+      return reply(event, notice({ status: 'สวัสดีจาก Bop', title: 'เชื่อมกลุ่มกับทริป', detail: 'ส่งรหัสเชื่อมทริป 6 ตัวที่ได้จากผู้จัดทริปในกลุ่มนี้' }));
     if (event.type === 'message' && event.message?.type === 'text') {
       const code = event.message.text.trim().toUpperCase();
       if (code.length !== 6 || ![...code].every((c) => alphabet.includes(c))) return;
       const trip = await store.linkGroup(code, groupId);
       if (trip) return reply(event, linkConfirmation(trip));
-      return reply(event, text('รหัสนี้หมดอายุหรือถูกใช้แล้ว'));
+      return reply(event, notice({ status: 'เชื่อมทริปไม่สำเร็จ', tone: 'warn', detail: 'รหัสนี้หมดอายุหรือถูกใช้แล้ว ขอรหัสใหม่จากผู้จัดทริป' }));
     }
     const trip = await store.groupTrip(groupId);
     if (!trip) return;
     if (event.type === 'leave') return store.unlinkGroup(trip.tripId, groupId);
-    if (event.type === 'memberJoined' && liffUri(trip.tripId))
-      return reply(event, text('เลือกชื่อของคุณเพื่อโหวตแผนทริป ' + liffUri(trip.tripId)));
+    if (event.type === 'memberJoined') {
+      const action = tripAction(trip, 'เลือกชื่อของฉัน');
+      if (action) return reply(event, notice({
+        status: 'ยินดีต้อนรับสู่ทริป',
+        title: oneLine(trip.title),
+        detail: trip.summary ? 'เลือกชื่อของคุณเพื่อดูสรุปทริปและโหวตเมื่อเปิดให้โหวต' : 'เลือกชื่อของคุณเพื่อโหวตเมื่อเปิดให้โหวต',
+        actions: [action],
+      }));
+    }
     if (event.type !== 'postback' || !event.source.userId) return;
     const data = new URLSearchParams(event.postback?.data);
     if (!data.has('voteId') || !data.has('option')) return;
@@ -475,7 +519,7 @@ export function createLineService(store = operationalStore, request = (...args) 
       /* Anonymous group profiles may be unavailable. */
     }
     const vote = await ballot(trip.tripId, { userId, displayName }, data.get('voteId'), data.get('option'));
-    await reply(event, text(resultText(vote)));
+    await reply(event, voteNotice(trip, vote));
   }
   async function webhook(bytes, signature) {
     required();
@@ -496,7 +540,7 @@ export function createLineService(store = operationalStore, request = (...args) 
         await eventHandler(event);
       } catch {
         await store.releaseEvent(id).catch(() => {});
-        await reply(event, text('Bop ทำรายการไม่สำเร็จ กรุณาลองอีกครั้ง')).catch(() => {});
+        await reply(event, notice({ status: 'Bop ทำรายการไม่สำเร็จ', tone: 'error', detail: 'กรุณาลองอีกครั้ง' })).catch(() => {});
       }
     }
     return { ok: true };

@@ -104,7 +104,9 @@ test('an applied-plan post uses the exact summary, safely retries an accepted re
   await assert.rejects(send(), /connection closed/);
   assert.deepEqual(await Promise.all([send(), send()]), [{ posted: true }, { posted: true }]);
   assert.deepEqual(attempts[0], attempts[1]);
-  assert.deepEqual(attempts[0].messages, [{ type: 'text', text }]);
+  assert.equal(attempts[0].messages.length, 1);
+  assert.equal(attempts[0].messages[0].type, 'flex');
+  assert.ok(attempts[0].messages[0].contents.body.contents.some((row) => row.text === text));
   assert.equal(attempts[0].to, 'group1');
   assert.match(attempts[0].key, /^[a-f\d-]{36}$/);
   const capped = { posted: false, quotaReached: true };
@@ -119,6 +121,51 @@ test('an applied-plan post uses the exact summary, safely retries an accepted re
   delete process.env.LINE_CHANNEL_SECRET;
   await assert.rejects(send(), { code: 'no_key' });
   assert.equal(attempts.length, 3);
+});
+
+test('Flex shares preserve explicitly posted text and safely bound long card payloads', async (t) => {
+  hooks(t, {
+    LINE_CHANNEL_ACCESS_TOKEN: 'test-token',
+    LINE_CHANNEL_SECRET: 'test-secret',
+    LINE_LIFF_ID: undefined,
+    LIFF_ID: undefined,
+    LINE_LOGIN_CHANNEL_ID: undefined,
+    LINE_CHANNEL_ID: undefined,
+  });
+  const trip = {
+    tripId: 'fixture-trip',
+    groupId: 'fixture-group',
+    title: 'ทริปตัวอย่าง',
+    expires_at: 1800000000,
+    members: [],
+    organizerHash: createHash('sha256').update('organizer').digest('hex'),
+  };
+  const delivered = [];
+  const service = createLineService({
+    getTrip: async () => trip,
+    mutateTrip: async (id, update) => Object.assign(trip, update(trip)),
+    consumePush: async () => true,
+  }, async (url, init) => {
+    assert.equal(url, 'https://api.line.me/v2/bot/message/push');
+    delivered.push(JSON.parse(init.body).messages[0]);
+    return Response.json({});
+  });
+  const summary = 'ตารางทริป\n' + 'รายละเอียด '.repeat(155).trimEnd();
+  assert.equal((await service.organizer(trip.tripId, 'organizer', 'plan', { summary })).posted, true);
+  const details = (bubble, index) => {
+    const row = bubble.body.contents[index];
+    return row.type === 'text' ? row.text : row.contents.map((child) => child.text).join('');
+  };
+  assert.equal(details(delivered[0].contents, 2), summary);
+  assert.equal(delivered[0].contents.footer, undefined);
+  const long = 'A' + '\u0001'.repeat(4992) + 'Z';
+  assert.equal((await service.organizer(trip.tripId, 'organizer', 'post', { text: long })).posted, true);
+  const sent = delivered[1];
+  assert.equal(sent.type, 'flex');
+  assert.equal(sent.altText, 'ข้อความใหม่จาก Bop');
+  assert.equal(sent.contents.type, 'carousel');
+  assert.ok(sent.contents.contents.every((part) => Buffer.byteLength(JSON.stringify(part)) < 30_000));
+  assert.equal(sent.contents.contents.map((part) => details(part, 1)).join(''), 'Bop: ' + long);
 });
 
 test('DynamoDB reserves a keyed push and its quota atomically across concurrent retries and month boundaries', async (t) => {
@@ -270,6 +317,8 @@ test('signed group linking, public views, LIFF identity, cross-channel ballots, 
   assert.equal(cta.action.uri, 'https://liff.line.me/test-liff?tripId=' + created.tripId);
   for (const privateValue of ['แผนแรก', token, created.linkCode, 'group-private', 'line-private'])
     assert.ok(!JSON.stringify(confirmation).includes(privateValue));
+  await webhook([ev('member-joined', { type: 'memberJoined' })]);
+  assert.equal(sent.at(-1)[1].messages[0].contents.footer.contents[0].action.label, 'เลือกชื่อของฉัน');
   const { data: view } = await organizer('GET', '');
   assert.equal(view.title, title);
   assert.equal(view.linked, true);
@@ -286,17 +335,22 @@ test('signed group linking, public views, LIFF identity, cross-channel ballots, 
   await webhook([ev('retry', { type: 'join' })]);
   await webhook([ev('retry', { type: 'join' })]);
   assert.equal(
-    sent.filter(([kind, msg]) => kind === 'reply' && msg.messages[0].text?.includes('สวัสดีจาก')).length,
+    sent.filter(([kind, msg]) => kind === 'reply' && msg.messages[0].altText.includes('สวัสดีจาก')).length,
     2,
   );
   const post = await organizer('POST', '/post', { text: 'Bop: Bop: แตะเพื่อดู' });
   assert.equal(post.data.posted, true);
-  assert.equal(sent.at(-1)[1].messages[0].text, 'Bop: แตะเพื่อดู');
+  assert.ok(sent.at(-1)[1].messages[0].contents.body.contents.some((row) => row.text === 'Bop: แตะเพื่อดู'));
   const { data: started } = await organizer('POST', '/vote', { options, minutes: 1, reason: 'แผนไหนดี' });
   assert.equal(started.vote.status, 'OPEN');
   assert.equal(started.posted, true);
   assert.equal(Date.parse(started.vote.deadline) - Date.parse(started.vote.createdAt) <= 300000, true);
-  const buttonData = sent.at(-1)[1].messages[0].contents.contents[1].footer.contents[0].action.data;
+  const optionCard = sent.at(-1)[1].messages[0].contents.contents[1];
+  const buttonData = optionCard.footer.contents[0].action.data;
+  assert.equal(optionCard.footer.contents[0].backgroundColor, '#FF5A1F');
+  assert.equal(optionCard.footer.contents[1].backgroundColor, '#E3EDFF');
+  assert.equal(new URLSearchParams(buttonData).get('voteId'), started.vote.id);
+  assert.equal(new URLSearchParams(buttonData).get('option'), 'B');
   assert.match(
     sent.at(-1)[1].messages[0].contents.contents[1].footer.contents[1].action.uri,
     /liff\.line\.me\/test-liff/,
@@ -371,7 +425,13 @@ test('signed group linking, public views, LIFF identity, cross-channel ballots, 
     source: { ...event.source, groupId: 'no-liff' },
     message: { type: 'text', text: fallbackTrip.linkCode },
   })]);
-  assert.deepEqual(sent.at(-1)[1].messages, [{ type: 'text', text: 'เชื่อมกลุ่มกับทริป ' + title + ' แล้ว' }]);
+  const [fallback] = sent.at(-1)[1].messages;
+  assert.equal(fallback.type, 'flex');
+  assert.equal(fallback.altText, 'เชื่อมกลุ่มกับทริป ' + title + ' แล้ว');
+  assert.equal(fallback.contents.footer, undefined);
+  assert.doesNotMatch(JSON.stringify(fallback), /ข้อความสรุปที่ไม่ส่งในแชต/);
+  assert.ok(sent.every(([, payload]) => payload.messages.every((msg) => msg.type === 'flex')));
+
 });
 
 test('missing configuration and disabled persistence isolate the LINE file from flight state', async (t) => {
