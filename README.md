@@ -22,4 +22,8 @@ The browser uses Leaflet and OpenStreetMap tiles. Routing tries OSRM, then Valha
 
 ## Implementation status
 
-The local app covers trip setup, planning, route display, textual place research, constraint checks, candidate selection, replanning, simulated voting, undo, and rain checks. The tests exercise fixture and mock flows. AWS deployment, the full photo discovery pipeline, and the additional provider integrations in the prep repository's change proposals are outside this PR. Live provider behavior requires verification with the relevant credentials.
+The local app covers trip setup, planning, route display, textual place research, constraint checks, candidate selection, replanning, simulated voting, undo, and rain checks. The tests exercise fixture and mock flows. The full photo discovery pipeline and the additional provider integrations in the prep repository’s change proposals are outside this implementation. Live provider behavior requires verification with the relevant credentials.
+
+## AWS deployment
+
+GitHub Actions validates pull requests and deploys `main` to CloudFront, private S3, API Gateway, and Lambda using GitHub OIDC. See the [Terraform runbook](terraform/README.md) for setup, runtime credentials, and verification.

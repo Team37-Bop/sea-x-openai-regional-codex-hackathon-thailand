@@ -8,6 +8,13 @@
     "dev": "node --watch --env-file-if-exists=.env.local server/index.mjs",
     "start": "node --env-file-if-exists=.env.local server/index.mjs",
     "build": "node scripts/build.mjs",
-    "test": "node --test"
+    "test": "node --test test/*.test.mjs",
+    "package:lambda": "bash scripts/package-lambda.sh"
+  },
+  "dependencies": {
+    "@aws-sdk/client-secrets-manager": "3.1173.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
   }
 }

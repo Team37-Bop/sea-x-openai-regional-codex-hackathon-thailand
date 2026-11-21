@@ -1,0 +1,15 @@
+# Supply the real account ID through TF_VAR_expected_account_id or a gitignored tfvars file.
+expected_account_id = "000000000000"
+aws_region           = "us-east-1"
+project_tag          = "sea-openai"
+environment          = "prod"
+
+# Start in count mode. Promote to block only after checking WAF logs for false positives.
+waf_mode = "count"
+
+# Optional. Setting this sends an AWS subscription-confirmation email.
+# alarm_email = "owner@example.com"
+
+# Optional custom domain. Pass the matching us-east-1 certificate ARN through
+# a gitignored tfvars file or TF_VAR_cloudfront_acm_certificate_arn.
+# custom_domain_name = "bop.example.com"
