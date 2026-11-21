@@ -6,19 +6,19 @@ Describe the Thai organizer's journey across setup, plan generation, itinerary a
 
 ## Requirements
 
-### Requirement: Entry, readiness and sample selection
+### Requirement: Trip entry and readiness
 
-The normal entry point SHALL show trip setup, check model readiness and fetch public LINE configuration independently. The agent indicator SHALL distinguish checking, ready and sample mode. An explicit demo query SHALL load the built-in Chiang Mai trip.
+The web app SHALL open the organizer's trip setup and check model readiness and public LINE configuration independently. The header and setup SHALL offer no sample trip launcher.
 
-#### Scenario: Offline organizer
+#### Scenario: Opening a trip link
 
-- **WHEN** the health request times out after ten seconds, fails, or returns HTML
-- **THEN** the client treats the agent as unreachable and offers the sample from setup. A reachable server reporting no usable model shows the configuration-specific explanation.
+- **WHEN** the organizer opens the planner with a saved local trip identifier
+- **THEN** the app opens that trip. A bare URL or a legacy demo query with no saved trip opens setup.
 
-#### Scenario: Direct demo entry
+#### Scenario: Service unavailable
 
-- **WHEN** the organizer opens the planner with the `demo` query parameter
-- **THEN** the sample opens with the first day selected and offline free-text replanning available. A regular successful generated plan opens with the whole-trip map selected.
+- **WHEN** the health request fails or the configured server has no usable model
+- **THEN** the readiness indicator describes the connection or configuration problem, and the draft remains available for retry.
 
 ### Requirement: Planning progress and recovery
 

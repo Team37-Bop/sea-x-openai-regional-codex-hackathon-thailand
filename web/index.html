@@ -90,10 +90,7 @@
           <p id="trip-summary"></p>
         </div>
         <div id="poc-people" aria-label="ผู้ร่วมทริป"></div>
-        <nav aria-label="เมนูหลัก">
-          <small id="usage-note"></small>
-          <button class="quiet sample-link" id="demo" type="button">ทริปตัวอย่าง</button>
-        </nav>
+        <small id="usage-note" hidden></small>
       </div>
     </header>
     <main class="trip-page shell">
@@ -397,13 +394,6 @@
               </div>
             </div>
             <div class="setup-buttons">
-              <button id="setup-demo" type="button" class="quiet sample-link">
-                <svg class="icon" aria-hidden="true">
-                  <use href="#i-route" />
-                </svg>
-                ลองทริปตัวอย่าง
-                <span class="wide-text">เชียงใหม่</span>
-              </button>
               <button class="primary start-plan" type="submit">
                 <span id="start-plan-label">เริ่มวางแผน</span>
                 <svg class="icon" aria-hidden="true">

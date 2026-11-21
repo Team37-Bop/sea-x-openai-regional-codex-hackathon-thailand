@@ -121,10 +121,10 @@ async function checkHealth() {
     readiness = await reply.json();
     $('#readiness').textContent = readiness.ai
       ? 'Bop พร้อมวางแผน'
-      : 'ยังไม่ได้ตั้งค่าบริการ AI บนเซิร์ฟเวอร์ คุณลองทริปตัวอย่างได้';
+      : 'ยังไม่ได้ตั้งค่าบริการ AI บนเซิร์ฟเวอร์';
   } catch {
     readiness = null;
-    $('#readiness').textContent = 'ติดต่อ Bop ไม่ได้ คุณลองทริปตัวอย่างได้';
+    $('#readiness').textContent = 'ติดต่อ Bop ไม่ได้';
   }
   return readiness;
 }
@@ -206,7 +206,7 @@ async function api(path, payload, onDay, { signal = activePlanning?.signal, onSt
 }
 function setBusy(value) {
   busy = value;
-  for (const selector of ['#demo', '#open-setup', '#hero-setup', '#replan button'])
+  for (const selector of ['#open-setup', '#hero-setup', '#replan button'])
     $(selector).disabled = value;
   $('#undo').disabled = value || !history.length;
   $('#reset-plan').disabled = value || !original;
@@ -264,7 +264,7 @@ function render() {
   renderPeople(state.setup, plan);
   const usageNote = $('#usage-note');
   if (usageNote) {
-    usageNote.textContent = state.sample ? 'ทริปตัวอย่าง' : state.usage?.provider === 'fake' ? 'ข้อมูลทดสอบ' : '';
+    usageNote.textContent = state.usage?.provider === 'fake' ? 'ข้อมูลทดสอบ' : '';
     usageNote.hidden = !usageNote.textContent;
   }
   const tripTitle = state.setup.title || plan.city;
@@ -480,37 +480,6 @@ function place(stop) {
     liveResearch: hasLiveService(),
   });
 }
-async function demo() {
-  let result;
-  try {
-    result = await api('/api/demo');
-  } catch {
-    const reply = await fetch('/assets/sample.json');
-    if (!reply.ok) throw new Error('เปิดทริปตัวอย่างไม่ได้');
-    result = await reply.json();
-  }
-  setupDialog.close();
-  if (location.hash.startsWith('#trip=')) window.history.replaceState(null, '', location.pathname + '?demo');
-  history.length = 0;
-  pendingVotes = null;
-  $('#options').replaceChildren();
-  $('#alerts').replaceChildren();
-  state = {
-    plan: result.plan,
-    routes: result.routes,
-    setup: result.plan.setup,
-    selected: 0,
-    demo: true,
-    sample: true,
-    bookings: {},
-    cancellations: [],
-  };
-  newTrip();
-  status.textContent = 'กำลังดูทริปตัวอย่างเชียงใหม่';
-  render();
-}
-$('#setup-demo').onclick = () => task(demo);
-$('#demo').addEventListener('click', () => task(demo));
 for (const selector of ['#open-setup', '#hero-setup'])
   $(selector).addEventListener('click', () => {
     if (state.plan && editingSetup !== state.setup) restoreForm(state.setup, state.plan.flags);
@@ -1058,15 +1027,7 @@ async function adjust(command, day = state.selected) {
   const pinnedPlan = structuredClone(state.plan);
   for (const stop of pinnedPlan.days.flatMap((d) => d.stops))
     if (state.bookings[stop.id]?.state === 'done') stop.res = { ...stop.res, done: true };
-  const offlineSample = state.sample && !hasLiveService();
-  const input = { plan: pinnedPlan, setup: state.setup, command, day, demo: Boolean(offlineSample) };
-  if (
-    offlineSample &&
-    !/ฝน|น้ำตก|ร้าน.*(?:เต็ม|ปิด)|(?:เต็ม|ปิด).*ร้าน|ดีเลย์|เที่ยวบิน.*(?:ช้า|เลื่อน)/.test(command)
-  ) {
-    chatState('help', 'คำขอนี้ยังใช้กับทริปตัวอย่างไม่ได้', 'ลองพิมพ์ ฝนตก ร้านปิด ร้านเต็ม เที่ยวบินดีเลย์ หรือตัดน้ำตกออก');
-    return;
-  }
+  const input = { plan: pinnedPlan, setup: state.setup, command, day };
   const ctrl = new AbortController();
   activeReplan = ctrl;
   const onStep = (text) => {
@@ -1074,11 +1035,7 @@ async function adjust(command, day = state.selected) {
   };
   let result;
   try {
-    result = offlineSample
-      ? await (await import('/assets/sample-replan.js')).replan(input, {
-          signal: ctrl.signal, step: onStep, usage: {}, emit() {},
-        })
-      : await api('/api/replan', input, undefined, { signal: ctrl.signal, onStep });
+    result = await api('/api/replan', input, undefined, { signal: ctrl.signal, onStep });
     ctrl.signal.throwIfAborted();
     if (!Array.isArray(result.options) || !result.options.length ||
         !result.options.every((option) => option?.plan?.days?.length && option.plan.days.every((d) => Array.isArray(d?.stops)))) {
@@ -1220,7 +1177,7 @@ if (localTrip)
     const response = await fetch('/api/local-trips/' + localTrip[1]);
     if (!response.ok) {
       setupDialog.showModal();
-      throw Error('ลิงก์เดโม่หมดอายุแล้ว เริ่มสร้างทริปใหม่ได้');
+      throw Error('ไม่พบลิงก์ทริปนี้แล้ว เริ่มสร้างทริปใหม่ได้');
     }
     const saved = await response.json();
     state = {
@@ -1239,5 +1196,4 @@ if (localTrip)
     render();
     forecast.refresh();
   });
-else if (new URLSearchParams(location.search).has('demo')) task(demo);
 else setupDialog.showModal();

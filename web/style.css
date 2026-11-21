@@ -213,12 +213,6 @@ h3 {
   color: var(--accent);
   border-color: #9faadf;
 }
-.sample-link {
-  gap: 5px;
-}
-.sample-link .wide-text {
-  margin-left: -5px;
-}
 .tile-icon {
   display: inline-grid;
   place-items: center;
@@ -1382,9 +1376,6 @@ body > .top > .brand {
   .app-context {
     display: none;
   }
-  .wide-text {
-    display: none;
-  }
   .panel-heading {
     gap: 9px;
   }
@@ -1888,9 +1879,6 @@ body:has(#views[hidden]) .trip-bar .trip-heading {
   }
   #setup-summary {
     font-size: 0.75rem;
-  }
-  .setup-footer .wide-text {
-    display: none;
   }
 }
 
