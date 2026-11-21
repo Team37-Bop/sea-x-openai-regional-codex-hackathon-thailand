@@ -121,12 +121,12 @@ The browser SHALL normalize array, object and comma-separated stop coordinates i
 
 #### Scenario: Route continuity in a committed itinerary
 - **WHEN** one or more stops between two positioned visits in the same day lack usable coordinates
-- **THEN** the daily view connects those two known visits using a separate key labelled “ช่วงขาดพิกัด · ลำดับจุดแวะโดยประมาณ”. Consecutive known stops with a missing legacy leg use the same sequence style labelled “ยังไม่มีเส้นทาง · ลำดับจุดแวะโดยประมาณ”. Sequence hints have no distance, fare or service and create no additional pins.
-- **AND** when measured geometry starts or ends at a snapped road point, a separately labelled estimated connector reaches the actual POI pin and the measured line retains its original geometry. All connectors stay within one day, and provisional planning views draw only the returned measured segments.
+- **THEN** the itinerary retains every visit and its original number. The map leaves a gap across missing coordinates and missing travel legs. A known leg between successive located stops can show the recorded mode and a clearly labeled estimate.
+- **AND** a measured route can meet a nearby entrance within 50 metres using its own stroke. A road snapped farther away ends at its recorded position. Only actual visits create pins.
 
 ### Requirement: Route strokes and map key
 
-Opening a completed or saved trip SHALL show the selected day's route. The whole-trip view SHALL show places and visit groups across dates. Selecting a visit from this overview opens the matching date and its route. The daily toolbar above the map SHALL offer a keyboard-accessible key with swatches for the visible strokes and their Thai meanings. Confirmed walks use dots, road vehicles use solid lines, and estimated geometry has a distinct faded pattern. The key distinguishes estimated travel from visit-order hints, short links to a road and removed segments. Each daily route popup identifies the date, origin, destination and mode or connection type.
+Opening a completed or saved trip SHALL show the selected day's route. The whole-trip view SHALL show places and visit groups across dates. Selecting a visit from this overview opens the matching date and its route. The daily toolbar above the map SHALL offer a keyboard-accessible key with swatches for the visible strokes and their Thai meanings. Confirmed walks use dots, road vehicles use solid lines, and estimated geometry has a distinct faded pattern. The key names each drawn mode, identifies estimated travel and marks removed segments during a replan preview. Each daily route popup identifies the date, origin, destination and mode or connection type.
 
 #### Scenario: A different day contains the only train
 - **WHEN** the traveler switches from a walking day to the whole trip
@@ -172,7 +172,7 @@ The map SHALL exclude synthetic city or neighbour coordinates marked as location
 #### Scenario: A legacy placeholder inherited an unrelated survey coordinate
 - **WHEN** a saved, unpinned stop claims a survey location shared exactly with a selected venue of a different category and neither name nor ID identifies that venue
 - **THEN** opening the trip invalidates the mistaken point and adjacent routed geometry. Future planning and editing assign selected-venue coordinates only to the matching venue. A fallback point cannot fulfill a wish by proximity.
-- **AND** confirmed positions and newly routed legs can appear without changing the saved visit order, times, or the snapshot on disk. New measured connections require both endpoints and usable route geometry. The separately keyed visit-order and access hints connect known coordinates only. Older placeholder routes cannot reappear.
+- **AND** confirmed positions and newly routed legs can appear without changing the saved visit order, times, or the snapshot on disk. New measured connections require both endpoints and usable route geometry. Each recovered leg connects consecutive stops on the same day. Older placeholder routes cannot reappear.
 
 #### Scenario: Changing map scope with a Bop response open
 

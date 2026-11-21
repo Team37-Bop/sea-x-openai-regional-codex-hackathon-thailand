@@ -16,14 +16,10 @@ const strokes = {
   walk: { width: 3, cap: 'round', dash: [0.1, 2.6] },
   transit: { width: 4, cap: 'butt', dash: [3, 1.5] },
   estimate: { width: 3, cap: 'butt', dash: [3, 1.4, 0.7, 1.4], opacity: 0.76 },
-  sequence: { width: 3, cap: 'round', dash: [0.2, 1.5, 1.8, 1.5], opacity: 0.85 },
-  access: { width: 2.5, cap: 'round', dash: [0.25, 1.5], opacity: 0.85 },
   removed: { width: 3, cap: 'butt', dash: [1.2, 1.3], opacity: 0.83 },
 };
-function routeLabel({ mode, stroke, gap }) {
+function routeLabel({ mode, stroke }) {
   if (stroke === 'removed') return 'เส้นทางที่นำออก';
-  if (stroke === 'sequence') return (gap ? 'ช่วงขาดพิกัด' : 'ยังไม่มีเส้นทาง') + ' · ลำดับจุดแวะโดยประมาณ';
-  if (stroke === 'access') return 'ช่วงเชื่อมหมุดกับเส้นทาง · โดยประมาณ';
   return (labels[mode] || mode || 'การเดินทาง') + (stroke === 'estimate' ? ' · เส้นทางโดยประมาณ' : '');
 }
 const modeStroke = mode => mode === 'walk' ? 'walk' : mode === 'transit' || isScheduledService(mode) ? 'transit' : 'road';
@@ -117,15 +113,14 @@ function segment(a, b, record, mode, ghost = false, estimated = false) {
     },
   };
 }
-function connector(from, to, stroke, gap = false) {
-  return {
-    type: 'Feature',
-    geometry: { type: 'LineString', coordinates: [from, to] },
-    properties: { stroke, gap, color: '#675767', approx: true, revision: overlayRevision },
-  };
+// A short entrance offset can meet the POI on the same line. A distant road snap stays at the road.
+function nearEntrance(pin, road) {
+  const metresPerDegree = 111320;
+  const east = (pin[0] - road[0]) * Math.cos(pin[1] * Math.PI / 180);
+  const metres = Math.hypot(east, pin[1] - road[1]) * metresPerDegree;
+  return metres > 0 && metres <= 50;
 }
 
-// Sequence and access connectors are display-only. They never enter routing, time or fare totals.
 export function dayRouteFeatures(day, routes, drafting = false) {
   const features = [], longPoints = [];
   let previous;
@@ -138,16 +133,9 @@ export function dayRouteFeatures(day, routes, drafting = false) {
     const leg = stop.leg;
     const gap = prior.index !== i - 1 || (Number.isInteger(prior.ordinal) &&
       Number.isInteger(stop.ordinal) && stop.ordinal !== prior.ordinal + 1);
+    if (gap || !leg || leg.unlocated) continue;
     const stops = { from: prior.stop.name || prior.stop.n || 'จุดที่ ' + (prior.index + 1),
       to: stop.name || stop.n || 'จุดที่ ' + (i + 1), date: day.date || '' };
-    if (gap || !leg || leg.unlocated) {
-      if (!drafting) {
-        const hint = connector(prior.point, point, 'sequence', gap);
-        Object.assign(hint.properties, stops);
-        features.push(hint);
-      }
-      continue;
-    }
     const recorded = leg.mode || leg.m;
     const mode = legMode(recorded) || recorded;
     const service = isScheduledService(mode);
@@ -159,14 +147,10 @@ export function dayRouteFeatures(day, routes, drafting = false) {
     features.push(line);
     const geometry = line.geometry.coordinates;
     if (leg.km >= 100) longPoints.push(...geometry);
-    if (!drafting && !line.properties.approx) {
-      // Routers snap their endpoints to the street. Keep the measured polyline intact.
-      for (const [a, b] of [[prior.point, geometry[0]], [geometry.at(-1), point]]) {
-        if (distance(a, b) <= 1e-12) continue;
-        const access = connector(a, b, 'access');
-        Object.assign(access.properties, stops);
-        features.push(access);
-      }
+    if (!line.properties.approx) {
+      const first = nearEntrance(prior.point, geometry[0]) ? [prior.point] : [];
+      const last = nearEntrance(point, geometry.at(-1)) ? [point] : [];
+      if (first.length || last.length) line.geometry.coordinates = [...first, ...geometry, ...last];
     }
   }
   return { features, longPoints };
