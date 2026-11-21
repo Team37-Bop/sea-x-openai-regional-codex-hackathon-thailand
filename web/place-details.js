@@ -340,7 +340,7 @@ function header(container, context, visit) {
     ['คนที่อยากไป', visit.wish],
   ]);
   if (fields) plan.append(fields);
-  const note = renderStopNote(context.stop.note, 'pd-note');
+  const note = renderStopNote(context.stop.note, 'pd-note', context.stop.src);
   if (note) plan.append(note);
   if (visit.closure) plan.append(el('p', visit.closure, 'pd-warning'));
   const map = link('เปิดตำแหน่งใน Google Maps ↗', mapLink(context.stop, context.city));

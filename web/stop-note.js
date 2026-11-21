@@ -28,9 +28,10 @@ export function splitStopNote(value) {
   return { text, sources: [...sources] };
 }
 
-export function renderStopNote(value, className) {
+export function renderStopNote(value, className, source) {
   const { text, sources } = splitStopNote(value);
   if (!text && !sources.length) return null;
+  const verifiedPage = source?.checked === 'web' ? mediaUrl(source.url).split('#')[0] : '';
   const note = document.createElement('p');
   note.className = className;
   if (text) note.append(text);
@@ -39,7 +40,8 @@ export function renderStopNote(value, className) {
     anchor.href = href;
     anchor.target = '_blank';
     anchor.rel = 'noopener noreferrer';
-    anchor.textContent = sources.length === 1 ? 'แหล่งข้อมูล' : 'แหล่งข้อมูล ' + (index + 1);
+    const label = href.split('#')[0] === verifiedPage ? 'แหล่งข้อมูล' : 'ลิงก์ในหมายเหตุ';
+    anchor.textContent = sources.length === 1 ? label : label + ' ' + (index + 1);
     anchor.setAttribute('aria-label', anchor.textContent + ' ' + new URL(href).hostname);
     note.append(' ', anchor);
   }
