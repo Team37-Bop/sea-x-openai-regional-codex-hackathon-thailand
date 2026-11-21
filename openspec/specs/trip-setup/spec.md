@@ -82,6 +82,10 @@ The setup SHALL carry `stay` as `{ mode: 'auto' }` or `{ mode: 'booked', stays: 
 The setup SHALL have 1-12 members, each with a unique slug id, a name and optional `avoid` (free text ≤120 chars: allergies / foods they do not eat, entered in the field "แพ้/ไม่ทาน"; replaces the vegetarian toggle), `maxWalkKm` (per day), `budget` (THB per person for the trip, excluding flights), up to 5 `wants` and a free-text `note` that is context only.
 
 #### Scenario: No members
+- **WHEN** a traveler opens a new trip
+- **THEN** its first member has the editable name “ผู้จัดทริป”, allowing immediate planning with the default settings.
+
+#### Scenario: Empty group from an API caller
 - **WHEN** `members` is empty
 - **THEN** the endpoint ends with `bad_request` "ต้องมีสมาชิกอย่างน้อย 1 คน"
 

@@ -651,7 +651,7 @@ function addMember(name = '', wants = []) {
   return row;
 }
 $('#add-member').addEventListener('click', () => addMember());
-addMember();
+addMember('ผู้จัดทริป');
 function addStay(nights) {
   const row = node('div', null, 'stay-row');
   const fields = node('div', null, 'fields');
