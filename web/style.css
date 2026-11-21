@@ -1447,6 +1447,7 @@ body:has(.trip-board) {
 }
 .trip-bar h1 {
   font-size: clamp(1.15rem, 2vw, 1.48rem);
+  overflow-wrap: anywhere;
 }
 .trip-bar #trip-summary {
   font-weight: 500;

@@ -52,7 +52,7 @@ function project(setup, summary) {
     if (members.length === 20) break;
   }
   return {
-    title: compact(setup.title || setup.city, 200) || 'ทริปของเรา',
+    title: compact(setup.title, 200) || compact(setup.city, 200) || 'ทริปของเรา',
     summary: compact(summary, 2000),
     startDate: setup.startDate,
     endDate,

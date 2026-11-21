@@ -127,7 +127,14 @@ test('signed group linking, public views, LIFF identity, cross-channel ballots, 
     'invalid_json',
   );
   assert.deepEqual((await webhook([])).data, { ok: true });
-  const { data: created } = await call('POST', '/api/trips', { setup, summary: 'แผนแรก' });
+  const { data: untitled } = await call('POST', '/api/trips', { setup: { ...setup, title: '   ' } });
+  assert.equal(untitled.title, setup.city);
+  const title = 'วันหยุดกับเพื่อน';
+  const { data: created } = await call('POST', '/api/trips', {
+    setup: { ...setup, title },
+    summary: 'แผนแรก',
+  });
+  assert.equal(created.title, title);
   const base = '/api/trips/' + created.tripId,
     token = created.organizerToken;
   const organizer = (method, suffix, body) => call(method, base + suffix, body, token);
@@ -147,7 +154,9 @@ test('signed group linking, public views, LIFF identity, cross-channel ballots, 
   });
   await webhook([link, link]);
   assert.equal(sent.length, 1);
+  assert.ok(sent[0][1].messages[0].text.includes(title));
   const { data: view } = await organizer('GET', '');
+  assert.equal(view.title, title);
   assert.equal(view.linked, true);
   assert.equal(view.expiresAt, '2026-12-22T23:59:59.000Z');
   assert.doesNotMatch(JSON.stringify(view), /group-private|organizerHash|linkCode|private/);

@@ -7,6 +7,13 @@ The organizer enters a destination, dates, travel, stays and the needs of each m
 Reference implementation in the prep repository at `292ba5f` includes `src/ui/setup.js` (`validate`, `toSetup`, `addStay`, `delStay`), `server/agent.mjs` (`normalizeSetup`), `src/plan.js` (`bookedStays`) and `server/api.mjs` (`readJson` and the city route). Executable examples for old and multiple hotels are in `scripts/test-stays.mjs`.
 
 ## Requirements
+### Requirement: Name a trip
+The organizer SHALL be able to name a trip in the first field of trip details, above the destination. Trip names SHALL accept up to 200 characters. Submitting the form SHALL send the trimmed name in `setup.title` and use the destination as the name when the field is blank.
+
+#### Scenario: Open and edit a named trip
+- **WHEN** a traveler opens a saved trip with a custom title
+- **THEN** the itinerary heading shows that name with the destination in the summary, and reopening trip settings shows the saved name in an editable field.
+
 ### Requirement: Destination with any-city lookup
 The UI SHALL offer a fixed list of suggested destinations (Thai and Asian cities with coordinates, ISO country, currency and main airport) and SHALL resolve any other typed city through `GET /api/city?q=`, which returns `{ name, cc, ll }` from Nominatim (then Photon) or HTTP 404 `{ error: 'not_found' }`.
 

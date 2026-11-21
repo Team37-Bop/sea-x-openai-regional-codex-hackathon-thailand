@@ -699,7 +699,8 @@ export async function replan(input, ctx) {
   const original = validatePlan(input.plan);
   const command = str(input.command, 1000);
   if (!command) throw bad('ไม่มีคำสั่ง');
-  const setup = normalize(input.setup ?? original.setup);
+  const draft = input.setup ?? original.setup;
+  const setup = normalize({ ...draft, title: draft?.title ?? original.setup?.title });
   setup.stayPlan = makeDayHotels(setup, original.flags?.stay?.stays ?? []);
   setup.cityLL ??= original.days.flatMap((d) => d.stops)[0]?.ll;
   const day = cutDay(input.day, original.days.length),

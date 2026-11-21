@@ -22,12 +22,14 @@ function remember(session) {
 }
 function keyFor(state) {
   const data = state.setup || {};
-  return JSON.stringify([
+  const identity = [
     data.city,
     data.startDate,
     data.endDate,
     (data.members || []).map((m) => [m.id, m.name]),
-  ]);
+  ];
+  if (data.title && data.title !== data.city && data.title !== 'ทริปของเรา') identity.push(data.title);
+  return JSON.stringify(identity);
 }
 function summary(state) {
   const plan = state.plan;

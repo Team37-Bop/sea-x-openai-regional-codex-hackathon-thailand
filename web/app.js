@@ -182,7 +182,7 @@ function clean(value, key = '') {
       : value.replace(/Claude|Anthropic/gi, 'Bop');
   if (Array.isArray(value)) return value.map((item) => clean(item, key));
   if (value && typeof value === 'object')
-    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, clean(v, k)]));
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, key === 'setup' && k === 'title' ? v : clean(v, k)]));
   return value;
 }
 async function api(path, payload, onDay) {
@@ -246,9 +246,13 @@ function render() {
     usageNote.textContent = state.sample ? 'ทริปตัวอย่าง' : state.usage?.provider === 'fake' ? 'ข้อมูลทดสอบ' : '';
     usageNote.hidden = !usageNote.textContent;
   }
-  $('#city-title').textContent = plan.city;
-  $('#trip-summary').textContent =
-    plan.days.length + ' วัน · เพื่อน ' + (state.setup.members?.length ?? 0) + ' คน';
+  const tripTitle = state.setup.title || plan.city;
+  $('#city-title').textContent = tripTitle;
+  $('#trip-summary').textContent = [
+    tripTitle !== plan.city ? plan.city : '',
+    plan.days.length + ' วัน',
+    'เพื่อน ' + (state.setup.members?.length ?? 0) + ' คน',
+  ].filter(Boolean).join(' · ');
   if (preview) $('#itinerary').append(node('p', 'กำลังดูตัวอย่างแผน · รอผลโหวต', 'preview-note'));
   const stops = plan.days.flatMap((row) => row?.stops ?? []);
   const total = stops.reduce((sum, stop) => sum + Number(stop.cost || 0) + Number(stop.leg?.cost || 0), 0);
@@ -745,6 +749,7 @@ setupForm.city.addEventListener('change', async () => {
 });
 function restoreForm(setup, flags) {
   editingSetup = setup;
+  setupForm.elements.tripTitle.value = setup.title || '';
   for (const name of ['city', 'startDate', 'endDate']) {
     if (setup[name]) setupForm.elements[name].value = setup[name];
   }
@@ -830,6 +835,7 @@ function setupInput(found, transportOnly = false) {
   if (transportOnly) members.forEach((m, i) => { m.name ||= 'สมาชิก ' + (i + 1); });
   if (!members.some((m) => m.name)) throw Error('ต้องมีสมาชิกที่ระบุชื่ออย่างน้อย 1 คน');
   return augmentSetup({
+    title: setupForm.elements.tripTitle.value.trim() || setupForm.city.value.trim(),
     city: setupForm.city.value.trim(),
     cityLL: found?.ll,
     cityAirport: found?.airport,

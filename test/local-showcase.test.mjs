@@ -18,7 +18,7 @@ test('local demo links survive restart and are readable only over loopback', asy
   });
   const { saveLocalTrip } = await import('../server/local-showcase.mjs');
   const req = { socket: { remoteAddress: '127.0.0.1' }, headers: { host: 'localhost:1234' } };
-  const trip = { plan: { days: [{ stops: [] }] }, routes: {} };
+  const trip = { plan: { setup: { title: 'วันหยุดกับเพื่อน' }, days: [{ stops: [] }] }, routes: {} };
   const ids = await Promise.all(Array.from({ length: 9 }, () => saveLocalTrip(req, trip)));
   assert.equal((await readdir(join(root, 'showcase'))).length, 8);
   const { readLocalTrip } = await import('../server/local-showcase.mjs?restarted');
