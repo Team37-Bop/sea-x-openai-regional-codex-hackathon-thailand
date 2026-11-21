@@ -34,7 +34,7 @@ const presets = {
   โซล: ['KR', 'KRW', 37.5665, 126.978],
 };
 const modes = { undecided: 'ยังไม่เลือก', flight: 'เครื่องบิน', drive: 'ขับรถ', bus: 'รถบัส', train: 'รถไฟ' };
-const travel = { red: 'รถแดง', walk: 'เดิน', car: 'รถรับจ้าง', own: 'รถส่วนตัว', van: 'รถตู้' };
+const travel = { transit: 'ขนส่งสาธารณะ', red: 'รถแดง', walk: 'เดิน', car: 'รถรับจ้าง', own: 'รถส่วนตัว', van: 'รถตู้' };
 const kind = {
   food: 'อาหาร',
   hotel: 'ที่พัก',
@@ -42,6 +42,9 @@ const kind = {
   view: 'จุดชมวิว',
   sight: 'สถานที่เที่ยว',
   terminal: 'จุดเดินทางกลับ',
+  transit: 'จุดเดินทาง',
+  stay: 'ที่พัก',
+  market: 'ตลาด',
 };
 const dayMs = 86_400_000;
 const ymd = (time) => new Date(time).toISOString().slice(0, 10);
@@ -311,7 +314,7 @@ function render() {
         }
       });
       const time = node('time', stop.start);
-      time.append(node('small', stop.end));
+      if (stop.end && stop.end !== stop.start) time.append(node('small', stop.end));
       const content = node('div');
       const meta = node('div', null, 'stop-meta');
       const chip = (text, style = '') => meta.append(node('span', text, 'stop-chip ' + style));
