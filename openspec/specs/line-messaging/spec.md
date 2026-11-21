@@ -87,6 +87,16 @@ The applied replan card SHALL display the selected option's exact group-facing t
 - **WHEN** a signed group postback provides the group's active vote ID, a valid option and a LINE user ID
 - **THEN** Bop resolves the group-to-trip mapping, attempts a display name lookup and records the ballot. If profile lookup fails it uses a generic LINE member label. It replies with a Thai acknowledgement or final result.
 
+#### Scenario: The planner asks the linked group to decide
+
+- **WHEN** a replan returns choices requiring a decision for a linked trip
+- **THEN** the planner starts one LINE vote for that decision, shows accepted delivery, the names and choices of recorded voters, and the roster members still pending. The organizer may close an open or tied ballot by choosing an option. An unconfirmed or quota-limited card leaves local choice and local ballots available.
+
+#### Scenario: The organizer sends pending reservation work
+
+- **WHEN** the organizer chooses to send booking tasks to the linked group
+- **THEN** the message identifies the organizer and lists outstanding calls, reschedules and cancellations with their dates and times. Confirmed and handled work is omitted. With no pending tasks the organizer sees that the list is empty and no message is sent.
+
 ### Requirement: Identify LIFF participants and protect member mappings
 
 The LIFF page SHALL require a trip ID, an enabled server config and a public LIFF app ID. It initiates login if necessary, obtains an ID token from the SDK and sends it to the Bop backend. The server SHALL verify the token with LINE using `LINE_LOGIN_CHANNEL_ID` or legacy `LINE_CHANNEL_ID` as client ID. A successful verification uses the returned subject as identity and the verified display name when present.

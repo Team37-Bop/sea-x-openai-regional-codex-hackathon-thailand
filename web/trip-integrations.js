@@ -1,5 +1,6 @@
 import { el, action, message, tripRequest, label } from './integration-ui.js';
 import { renderFlightPanels } from './flight-panel.js';
+import { pendingReservationMessage } from './booking-tasks.js';
 
 let config;
 let current;
@@ -129,6 +130,15 @@ function drawLine(s) {
           s.output.textContent = deliver(data);
         }),
       ),
+      action('ส่งงานโทรจองเข้า LINE', safe(async () => {
+        const text = pendingReservationMessage(s.state);
+        if (!text) {
+          s.output.textContent = 'ไม่มีงานโทรจองที่รอติดต่อ';
+          return;
+        }
+        const data = await access(s, '/post', { text });
+        s.output.textContent = deliver(data);
+      })),
     );
     const input = el('input');
     input.maxLength = 4995;
@@ -222,72 +232,132 @@ export function renderTripIntegrations(container, state) {
   loadLine(s).catch((err) => { s.output.textContent = err.message; });
   if (s.auth && !s.trip?.linked) startPolling(s);
 }
-export function renderLineVote(container, state, result, apply) {
+const startedVotes = new WeakMap();
+export function renderLineVote(container, state, result, apply, showLocalVote) {
   const s = current;
-  if (!s?.enabled || s.key !== lineSessionKey(state) || !s.auth || !s.trip?.linked) return false;
+  if (!s?.auth || s.key !== lineSessionKey(state) || s.enabled === false || s.trip?.linked === false) return false;
   clearTimeout(s.voteTimer);
-  const panel = el('div');
+  const panel = el('section', null, 'line-vote');
+  s.votePanel = panel;
+  const feedback = message(panel);
+  const ballot = el('div');
+  panel.append(ballot);
   container.append(panel);
-  let voteId;
-  const isActive = () => s === current && panel.isConnected && s.auth;
-  async function update(vote) {
-    if (!isActive() || !vote || vote.id !== voteId) return;
-    panel.replaceChildren(
-      el(
-        'p',
-        'คะแนนกลุ่ม · ' + vote.options.map((o) => o.key + ' ' + (vote.tally?.[o.key] || 0)).join(' / '),
-      ),
-    );
+  let voteId, finished = false, closing = false;
+  const active = () => !finished && s === current && s.votePanel === panel && panel.isConnected;
+  function local(reason) {
+    if (!active()) return;
+    clearTimeout(s.voteTimer);
+    finished = true;
+    ballot.replaceChildren();
+    feedback.textContent = reason;
+    showLocalVote(voteId ? syncLocalChoice : undefined);
+  }
+  async function readVote() {
+    const { vote } = await access(s, '/vote');
+    return vote?.id === voteId ? vote : null;
+  }
+  async function closeVote(key) {
+    const live = await readVote();
+    if (!live || live.status === 'CLOSED') return live;
+    const { vote } = await access(s, '/vote/close', { option: key, voteId });
+    return vote?.id === voteId ? vote : null;
+  }
+  async function syncLocalChoice(option) {
+    // An unpublished ballot may already exist on the server. Finalize it if reachable.
+    try {
+      const vote = await closeVote(option.key);
+      return result.options.find((o) => o.key === vote?.winner) || option;
+    } catch { return option; }
+  }
+  async function choose(key) {
+    if (!active() || closing) return;
+    clearTimeout(s.voteTimer);
+    closing = true;
+    feedback.textContent = 'กำลังปิดโหวต LINE…';
+    ballot.querySelectorAll('button').forEach((button) => { button.disabled = true; });
+    try {
+      const vote = await closeVote(key);
+      if (!active()) return;
+      closing = false;
+      display(vote);
+    } catch {
+      if (!active()) return;
+      closing = false;
+      feedback.textContent = 'ยังยืนยันผลไม่ได้ กำลังตรวจโหวตอีกครั้ง';
+      ballot.querySelectorAll('button').forEach((button) => { button.disabled = false; });
+      void poll();
+    }
+  }
+  function display(vote) {
+    if (!active() || closing) return;
+    if (!vote) return local('โหวตใน LINE เปลี่ยนไปแล้ว เลือกแผนนี้ในแอปได้');
     if (vote.status === 'CLOSED') {
-      const chosen = result.options.find((o) => o.key === vote.winner);
-      if (chosen) apply(chosen);
+      const selected = result.options.find((option) => option.key === vote.winner);
+      if (!selected) return local('ไม่พบตัวเลือกที่ชนะโหวต เลือกแผนในแอปได้');
+      finished = true;
+      clearTimeout(s.voteTimer);
+      apply(selected);
       return;
     }
-    if (vote.status === 'TIE') {
-      panel.append(el('p', 'คะแนนเสมอ ผู้จัดทริปเลือกแผนสุดท้าย'));
-      for (const opt of vote.options)
-        panel.append(
-          action('ใช้ ' + opt.title, async () => {
-            try {
-              await update((await access(s, '/vote/close', { option: opt.key })).vote);
-            } catch (err) {
-              panel.append(el('p', err.message));
-            }
-          }),
-        );
-      return;
+    const members = state.setup.members || [];
+    const votes = Object.values(vote.ballots || {});
+    const votedIds = new Set(votes.map((v) => v.memberId));
+    const pending = members.filter((member) => !votedIds.has(member.id));
+    ballot.replaceChildren(el('p', 'คะแนนกลุ่ม · ' + vote.options.map((o) => o.key + ' ' + (vote.tally?.[o.key] || 0)).join(' / ')));
+    if (votes.length) {
+      const list = el('ul');
+      for (const v of votes) {
+        const who = members.find((m) => m.id === v.memberId)?.name || v.displayName || 'สมาชิก LINE';
+        list.append(el('li', who + ' เลือก ' + v.option));
+      }
+      ballot.append(list);
     }
+    if (vote.status === 'TIE') ballot.append(el('p', 'คะแนนเสมอ ผู้จัดทริปเลือกแผนสุดท้าย'));
+    else if (pending.length) ballot.append(el('p', 'รอโหวตจาก ' + pending.map((m) => m.name).join(', ')));
+    const choices = el('div', null, 'inline');
+    for (const opt of vote.options) choices.append(action('ปิดโหวตและใช้แผน ' + opt.key, () => choose(opt.key)));
+    ballot.append(choices);
     s.voteTimer = setTimeout(poll, 3000);
   }
   async function poll() {
-    if (!isActive()) return;
+    if (!active() || closing) return;
     try {
-      await update((await access(s, '/vote')).vote);
-    } catch (err) {
-      panel.replaceChildren(el('p', err.message));
+      const vote = await readVote();
+      if (!active() || closing) return;
+      feedback.textContent = 'ส่งโหวตเข้ากลุ่ม LINE แล้ว';
+      display(vote);
+    } catch {
+      if (!active() || closing) return;
+      feedback.textContent = 'กำลังรอการเชื่อมต่อเพื่อดูผลโหวต LINE';
       s.voteTimer = setTimeout(poll, 3000);
     }
   }
-  const note = message(panel);
-  panel.append(
-    action(
-      'เปิดโหวตในกลุ่ม LINE',
-      async () => {
-        try {
-          const data = await access(s, '/vote', {
-            reason: result.vote_reason || result.summary,
-            options: result.options.map(({ key, title, head, line }) => ({ key, title, head: head || line })),
-          });
-          voteId = data.vote.id;
-          await update(data.vote);
-          if (data.quotaReached) panel.prepend(el('p', deliver(data)));
-        } catch (err) {
-          note.textContent = err.message;
-        }
-      },
-      'primary',
-    ),
-  );
+  async function start() {
+    feedback.textContent = 'กำลังส่งตัวเลือกให้กลุ่มโหวตใน LINE…';
+    try {
+      await loadLine(s);
+      if (!active()) return;
+      if (!s.enabled || !s.auth || !s.trip?.linked) return local('ยังไม่ได้เชื่อมกลุ่ม LINE เลือกแผนในแอปได้');
+      if (!startedVotes.has(result)) {
+        startedVotes.set(result, access(s, '/vote', {
+          reason: result.vote_reason || result.summary,
+          deadlineMinutes: 120,
+          options: result.options.map(({ key, title, head, line }) => ({ key, title, head: head || line })),
+        }));
+      }
+      const delivery = await startedVotes.get(result);
+      if (!active()) return;
+      voteId = delivery.vote?.id;
+      if (!delivery.posted || !voteId)
+        return local(delivery.quotaReached ? 'ครบโควตา LINE ของเดือนนี้ เลือกแผนในแอปได้' : 'ยังไม่ได้ส่งโหวตเข้า LINE เลือกแผนในแอปได้');
+      feedback.textContent = 'ส่งโหวตเข้ากลุ่ม LINE แล้ว';
+      display(delivery.vote);
+    } catch {
+      local('ยังยืนยันการส่งโหวตเข้า LINE ไม่ได้ เลือกแผนในแอปได้');
+    }
+  }
+  void start();
   return true;
 }
 export function canNotifyWeather(state) {
@@ -353,7 +423,7 @@ export function renderAppliedLine(container, before, after, text, fromLineVote, 
       }));
     } else if (autoSend && !fromLineVote) void send();
     else {
-      status.textContent = fromLineVote ? 'กลุ่มเลือกแผนผ่าน LINE แล้ว · ยังไม่ได้ส่งสรุปนี้' : 'พร้อมส่งเข้ากลุ่ม LINE';
+      status.textContent = fromLineVote ? 'ปิดโหวต LINE แล้ว · ยังไม่ได้ส่งสรุปนี้' : 'พร้อมส่งเข้ากลุ่ม LINE';
       controls.append(action('ส่งสรุปเข้ากลุ่ม LINE', send));
     }
   }

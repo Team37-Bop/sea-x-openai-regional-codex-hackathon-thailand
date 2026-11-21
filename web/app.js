@@ -1214,6 +1214,15 @@ async function adjust(command, day = state.selected) {
   }
   const ballot = {};
   const localActions = [];
+  let syncChoice, choosingLocal = false;
+  async function chooseLocal(option) {
+    if (pendingVotes !== result || choosingLocal) return;
+    choosingLocal = true;
+    const chosen = syncChoice ? await syncChoice(option) : option;
+    if (pendingVotes !== result) return;
+    applyOption(chosen, result.routes);
+    setBusy(false);
+  }
   for (const option of result.options) {
     const row = node('article', null, 'option');
     const heading = node('h3', option.key + ' · ' + option.title);
@@ -1229,29 +1238,35 @@ async function adjust(command, day = state.selected) {
     if (option.line) row.append(lineMessageBubble(option.line, 'ข้อความ LINE หากเลือกแผนนี้'));
     renderRepairOutcome(row, option.plan.repairOutcome);
     choices.append(row);
-    localActions.push(() => actions.append(button('ใช้แผน ' + option.key, () => {
-      applyOption(option, result.routes);
-      setBusy(false);
-    }, 'primary')));
+    localActions.push(() => actions.append(button('ใช้แผน ' + option.key, () => chooseLocal(option), 'primary')));
   }
   area.append(button('ดูแผนปัจจุบัน', () => showPreview(null)));
-  if (renderLineVote(area, state, result, (option) => applyOption(option, result.routes, '', true))) return;
-  for (const show of localActions) show();
-  area.append(button('คงแผนเดิม', () => {
+  const local = node('div');
+  local.hidden = true;
+  const showLocalVote = (sync) => {
+    if (!local.hidden || pendingVotes !== result) return;
+    syncChoice = sync;
+    for (const show of localActions) show();
+    local.hidden = false;
+  };
+  if (!renderLineVote(area, state, result, (option) => applyOption(option, result.routes, '', true), showLocalVote))
+    showLocalVote();
+  area.append(local);
+  local.append(button('คงแผนเดิม', () => {
     pendingVotes = preview = null;
     area.replaceChildren();
     render();
     chatState('kept', 'ใช้กำหนดการเดิม');
     $('#chat-state').focus({ preventScroll: true });
   }));
-  area.append(node('h3', 'โหวตแผนกับเพื่อน'));
+  local.append(node('h3', 'โหวตแผนกับเพื่อน'));
   const selectedLabels = Object.fromEntries(result.options.map((option) => [option.key, option.title]));
   for (const member of state.setup.members) {
     const voter = selectField(member.name, member.id, { '': 'ยังไม่ได้โหวต', ...selectedLabels }, '');
     voter.addEventListener('change', (event) => {
       ballot[member.id] = event.target.value;
     });
-    area.append(voter);
+    local.append(voter);
   }
   const tie = selectField(
     'ตัวเลือกกรณีคะแนนเสมอ (ผู้จัดทริป)',
@@ -1259,7 +1274,7 @@ async function adjust(command, day = state.selected) {
     { '': 'เลือกเมื่อคะแนนเสมอ', ...selectedLabels },
     '',
   );
-  area.append(
+  local.append(
     tie,
     button(
       'ใช้ผลโหวต',
@@ -1283,7 +1298,7 @@ async function adjust(command, day = state.selected) {
   );
   const voteStatus = node('p', '', 'feedback');
   voteStatus.setAttribute('role', 'status');
-  area.append(voteStatus);
+  local.append(voteStatus);
 }
 $('#replan').addEventListener('submit', (event) => {
   event.preventDefault();

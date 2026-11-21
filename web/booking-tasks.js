@@ -238,6 +238,26 @@ function addDirection(selected, fallback, plan, setup, dir, { adjust, run }) {
 export function reservationStatus(state, stop) {
   return state.bookings?.[stop.id]?.state || (stop.res?.done ? 'done' : 'todo');
 }
+export function pendingReservationMessage(state) {
+  const rows = [];
+  for (const task of state.cancellations || []) {
+    if (!task.handled) rows.push(['โทรยกเลิก ' + task.name, dayLabel(task.day), task.time]);
+  }
+  for (const day of state.plan?.days || []) {
+    for (const stop of day?.stops || []) {
+      const record = state.bookings?.[stop.id];
+      if (!stop.res?.todo && !stop.res?.done && !record) continue;
+      const status = reservationStatus(state, stop);
+      if (status === 'done') continue;
+      rows.push([(status === 'move' ? 'โทรเลื่อน ' : 'โทรจอง ') + stop.name, dayLabel(day.date), stop.start]);
+    }
+  }
+  if (!rows.length) return '';
+  const members = state.setup?.members || [];
+  const organizer = members.find((m) => m.role === 'organizer') || members[0];
+  const heading = 'Bop: งานโทรจอง' + (organizer?.name ? 'ของ' + organizer.name : '');
+  return [heading, ...rows.map((row) => row.filter(Boolean).join(' · '))].join('\n');
+}
 export function setReservationDone(state, stop, done) {
   state.bookings ??= {};
   if (done) {
