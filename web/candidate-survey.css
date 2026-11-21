@@ -140,10 +140,6 @@
 .candidate-answers [aria-pressed='true'] .answer-mark { display: inline; }
 .candidate-answers button[aria-pressed='true']:focus-visible { outline-color: white; }
 .survey-footer {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
   position: sticky;
   bottom: 0;
   padding: 12px 22px;
@@ -151,8 +147,22 @@
   background: var(--paper);
   z-index: 1;
 }
-.survey-footer button:first-child {
+.survey-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.survey-more {
   margin-right: auto;
+  color: var(--accent);
+}
+.survey-more[aria-disabled='true'] { opacity: .65; cursor: progress; }
+.survey-feedback { margin: 0; font-size: .86rem; }
+.survey-feedback:not(:empty) { margin-bottom: 7px; }
+.question-option:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 @media (max-width: 680px) {
   .candidate-survey {
@@ -172,4 +182,11 @@
   .survey-footer {
     padding: 9px 15px max(9px, env(safe-area-inset-bottom));
   }
+  .survey-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 5px;
+  }
+  .survey-actions button { min-width: 0; padding-inline: 4px; }
+  .survey-more { margin: 0; }
 }

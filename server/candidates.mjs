@@ -1,5 +1,5 @@
 export { matchesPick } from './pick-match.mjs';
-import { coordinates } from './domain.mjs';
+import { bad, coordinates } from './domain.mjs';
 import { findCity, findPlace } from './geo.mjs';
 import { model, provider } from './model.mjs';
 import { catalogPlace } from './sample.mjs';
@@ -21,7 +21,8 @@ export function resolvePicks(input = {}) {
     .filter((pick) => pick && typeof pick === 'object' && placeText(pick.name))
     .slice(0, 15)
     .map((pick) => {
-      const saved = memory.get(pick.id);
+      const cached = memory.get(pick.id);
+      const saved = cached?.name === placeText(pick.name) ? cached : undefined;
       return {
         id: placeText(pick.id, 200),
         name: placeText(pick.name),
@@ -34,7 +35,10 @@ export function resolvePicks(input = {}) {
     .slice(0, 30)
     .map((pick) => {
       const id = placeText(typeof pick === 'string' ? pick : pick?.id, 200);
-      return memory.get(id) || { id, name: placeText(pick?.name || id), query: placeText(pick?.query) };
+      const name = placeText(pick?.name);
+      const saved = memory.get(id);
+      if (name) return { id, name, query: placeText(pick.query) || (saved?.name === name ? saved.query : name) };
+      return saved || { id, name: id, query: placeText(pick?.query) };
     })
     .filter((p) => p.name);
   return { must, avoid };
@@ -133,10 +137,27 @@ function combineQuestions(questions, incoming, allowed, requireSource = false) {
     }
   }
 }
-async function discoverQuestions(discovery, restrictions, ctx) {
+async function discoverQuestions(discovery, restrictions, ctx, refresh) {
   const categories = ['food', 'sight'];
   if (discovery.days > 1 && discovery.stay?.mode !== 'booked') categories.push('stay');
   const input = { setup: discovery, restrictions, categories };
+  if (refresh !== undefined) {
+    if (!refresh || !categories.includes(refresh.kind) || !Array.isArray(refresh.exclude))
+      throw bad('เลือกหมวดที่ต้องการหาสถานที่เพิ่มอีกครั้ง');
+    const existing = [...new Set(refresh.exclude.map(value => placeText(value, 200)).filter(Boolean))];
+    const seen = new Set(existing.map(comparable));
+    const more = await model(prompt + ' หาตัวเลือกใหม่ในหมวดที่ขอเท่านั้น ห้ามซ้ำกับรายชื่อ existing รวมทั้งชื่อเรียกอีกแบบของสถานที่เดิม ถ้าไม่มีข้อมูลยืนยันให้เว้น', {
+      ...input, categories: [refresh.kind], existing: existing.slice(-120),
+    }, { ...ctx, operation: 'candidates', searches: 3 });
+    const questions = normalizeQuestions(more, ++run);
+    for (const question of questions) {
+      question.options = question.options.filter(({ option, stop }) =>
+        ![option.name, stop.query, ...stop.aliases].some(name => seen.has(comparable(name))));
+    }
+    const fresh = [];
+    combineQuestions(fresh, questions, [refresh.kind], true);
+    return fresh.filter(question => question.options.length);
+  }
   const result = await model(prompt, input, { ...ctx, operation: 'candidates', searches: 3 });
   const runId = ++run;
   const ids = new Set();
@@ -198,7 +219,7 @@ async function firstPass(entry, signal) {
   signal.throwIfAborted();
   return exact || previews.find(Boolean) || null;
 }
-export async function candidates(setup, ctx) {
+export async function candidates(setup, ctx, refresh) {
   const started = performance.now();
   const { picks: _picks, ...discovery } = setup;
   if (!setup.cityLL || !setup.country) {
@@ -207,8 +228,8 @@ export async function candidates(setup, ctx) {
     discovery.country ||= city?.cc;
   }
   const restrictions = setup.members.filter((m) => m.avoid).map((m) => ({ name: m.name, avoid: m.avoid }));
-  ctx.step('กำลังค้นหาสถานที่ให้สมาชิกเลือก');
-  const questions = await discoverQuestions(discovery, restrictions, ctx);
+  ctx.step(refresh ? 'กำลังหาตัวเลือกใหม่ในหมวดนี้' : 'กำลังค้นหาสถานที่ให้สมาชิกเลือก');
+  const questions = await discoverQuestions(discovery, restrictions, ctx, refresh);
   const items = questions.flatMap((q) => q.options);
   const offline = provider === 'fake';
   const batch = { remaining: 8 };

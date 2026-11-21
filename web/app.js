@@ -1196,6 +1196,8 @@ async function generateTrip(input) {
       input.picks = await chooseCandidates({
         dialog: $('#planning-survey'), result: found, partySize: input.members.length, signal,
         reopen: $('#planning-reopen'),
+        findMore: (refresh, refreshSignal) =>
+          api('/api/plan/candidates', { setup: input, refresh }, undefined, { signal: refreshSignal, onStep }),
         onQuestion(question, openCandidate) {
           planningPhase('choosing', 'เลือกสถานที่สำหรับทริป');
           const stops = question.options.filter((place) => coordinates(place.ll));

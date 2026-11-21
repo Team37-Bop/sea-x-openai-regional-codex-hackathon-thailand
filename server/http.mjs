@@ -83,7 +83,7 @@ export function demoSetup(today = new Date().toISOString().slice(0, 10)) {
 }
 const streams = new Map([
   ['/api/plan', (input, ctx) => planTrip(normalize(input?.setup), ctx)],
-  ['/api/plan/candidates', (input, ctx) => candidates(normalize(input?.setup), ctx)],
+  ['/api/plan/candidates', (input, ctx) => candidates(normalize(input?.setup), ctx, input?.refresh)],
   ['/api/replan', (input, ctx) => replan(input ?? {}, ctx)],
   [
     '/api/transport-options',

@@ -49,7 +49,7 @@ Each option SHALL get at most one https photo `{ url, credit, page, match }` in 
 - **THEN** the step "ได้ N คำถาม · M ตัวเลือก · มีรูป K" is emitted
 
 ### Requirement: Answering in the UI
-Once candidates are ready, the UI SHALL present one question at a time in a native modal over the planning map, centered on desktop and attached to the viewport bottom on narrow screens. Focus SHALL move to the question heading on opening and on advancing. Each option can be answered สนใจ, ไม่เอา or ไม่แน่ใจ. The next planning request SHALL send `picks = { must: [full option objects answered สนใจ], avoid: [ids answered ไม่เอา] }`. Skipped questions and uncertain options contribute no picks.
+Once candidates are ready, the UI SHALL present one question at a time in a native modal over the planning map, centered on desktop and attached to the viewport bottom on narrow screens. Focus SHALL move to the question heading on opening and on advancing. Each option can be answered สนใจ, ไม่เอา or ไม่แน่ใจ. The next planning request SHALL send `picks = { must: [full option objects answered สนใจ], avoid: [named references answered ไม่เอา] }`. Skipped questions and uncertain options contribute no picks.
 
 #### Scenario: Skip to auto
 - **WHEN** the organizer presses Escape in the ask dialog
@@ -93,7 +93,7 @@ The server SHALL remember each option’s name, query, resolved coordinates and 
 
 #### Scenario: Process restarted between steps
 - **WHEN** the organizer supplies a complete must-pick object but the server no longer has its ID in memory
-- **THEN** the submitted name and valid coordinates can still be used. A bare unknown avoid ID supplies only its string as the fallback name, so durable ID resolution across instances is unavailable
+- **THEN** the submitted name and valid coordinates can still be used. Named avoid references retain the rejected place across instances. A legacy bare unknown avoid ID supplies only its string as the fallback name, so durable ID resolution across instances is unavailable
 
 #### Scenario: One option selected twice
 - **WHEN** a user repeats the same answer on a candidate card
@@ -111,3 +111,9 @@ The server SHALL remember each option’s name, query, resolved coordinates and 
 
 - **WHEN** the traveler chooses สนใจ, ไม่เอา or ไม่แน่ใจ
 - **THEN** that place immediately shows one pressed answer with a checkmark, a green, red or amber fill respectively and a matching card outline. Selecting another answer moves the mark. Selecting the same answer again clears it. Viewing the map and reopening the question preserves the answer.
+
+#### Scenario: Discover more options without leaving a question
+
+- **WHEN** a traveler requests more choices on a food, sight or lodging-area question
+- **THEN** Bop searches the active category using the same trip preferences and excludes places already shown. New options require a corroborating web source and appear in the same question. Existing answers remain available for the plan.
+- **AND** while searching, the traveler can inspect the map, advance or start planning. An empty result or error keeps the current options and answers available, and a late response cannot replace the next question.
