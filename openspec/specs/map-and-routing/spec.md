@@ -134,3 +134,16 @@ Each setup submission or retry SHALL begin with an empty itinerary overlay, even
 #### Scenario: Inspecting a stop with the response dock open
 - **WHEN** the user selects a stop and its sheet opens alongside a visible Bop response
 - **THEN** the camera places the stop in the available map area. At narrow widths the camera can use the space below the dock. A response outside the map does not consume map space.
+
+### Requirement: Geographically anchored visits
+
+The map SHALL exclude synthetic city or neighbour coordinates marked as location fallbacks, and exclude segments attached to those placeholders. These visits remain available in the itinerary. The all-days map SHALL use distinct place markers and group counts rather than repeating each day's stop numbers. A single day retains its stop order. Labels SHALL yield space to visible markers and the selected visit.
+
+#### Scenario: Multiple visits at one place or nearby places
+- **WHEN** different visits or candidates coincide or would visually overlap at the current zoom
+- **THEN** a single mark stays at a real location. A keyboard-accessible chooser lists the visits chronologically with their dates and stop numbers and opens each one's own details or candidate card. Zooming in separates nearby places that now have sufficient screen space; repeat visits at identical coordinates remain grouped.
+
+#### Scenario: Geocoding an overseas stop for a Thai-language trip
+
+- **WHEN** the plan has a localized city name and an address or venue name in its own language
+- **THEN** search uses the original query, with the trip coordinates as its geographic bias, and can retry a shorter venue name or alias. A failed search does not permanently block future lookups. If an endpoint remains unresolved, its itinerary row remains accessible and the planner does not route to its placeholder coordinate.

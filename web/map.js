@@ -62,6 +62,9 @@ export function coordinates(value) {
   if ([lat, lng].every(Number.isFinite) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180 && (lat || lng))
     return [lng, lat];
 }
+export function visitCoordinates(stop) {
+  return stop?.place?.fallback ? undefined : coordinates(stop?.ll);
+}
 const distance = (p, q) => (p[0] - q[0]) ** 2 + (p[1] - q[1]) ** 2;
 function segment(a, b, record, mode, ghost = false, estimated = false) {
   let points = record?.geom || (Array.isArray(record) ? record : null);
@@ -97,7 +100,6 @@ let map,
   cameraTarget,
   cameraFrame;
 
-const pinSpacing = 35;
 const detailZoom = 17.5;
 const lineFilter = stroke => ['all', ['==', ['get', 'stroke'], stroke], ['==', ['get', 'revision'], overlayRevision]];
 
@@ -150,54 +152,126 @@ function scheduleCamera() {
   });
 }
 
-// Search outward in screen pixels. Each marker keeps its true geographic coordinate.
-function spreadPins() {
-  if (!map || !markers.length) return;
-  const placed = [];
-  const { clientWidth: width, clientHeight: height } = map.getContainer();
-  const clear = (x, y) => placed.every((point) => Math.hypot(x - point.x, y - point.y) >= pinSpacing - 0.1);
-  const focused = markers.find((item) => item.marker.getElement().dataset.focused === 'true');
-  const order = focused ? [focused, ...markers.filter((item) => item !== focused)] : markers;
-  for (const { marker, leader } of order) {
-    const anchor = map.project(marker.getLngLat());
-    if (![anchor.x, anchor.y].every(Number.isFinite)) continue;
-    let dx = 0,
-      dy = 0;
-    if (!clear(anchor.x, anchor.y)) {
-      let fallback;
-      const onScreen = anchor.x >= 0 && anchor.x <= width && anchor.y >= 0 && anchor.y <= height;
-      search: for (let ring = 1; ; ring++) {
-        const candidates = ring * 6;
-        for (let j = 0; j < candidates; j++) {
-          const angle = (2 * Math.PI * j) / candidates;
-          const x = Math.round(Math.cos(angle) * pinSpacing * ring);
-          const y = Math.round(Math.sin(angle) * pinSpacing * ring);
-          const left = anchor.x + x,
-            top = anchor.y + y;
-          if (!clear(left, top)) continue;
-          fallback ??= [x, y];
-          if (onScreen && (left < 16 || left > width - 16 || top < 16 || top > height - 16)) continue;
-          [dx, dy] = [x, y];
-          break search;
-        }
-        if (fallback && ring * pinSpacing > Math.min(width, height) / 2) {
-          [dx, dy] = fallback;
-          break;
-        }
-      }
-    }
-    placed.push({ x: anchor.x + dx, y: anchor.y + dy });
-    const old = marker.getOffset();
-    if (old.x === dx && old.y === dy) continue;
-    marker.setOffset([dx, dy]);
-    const length = Math.hypot(dx, dy);
-    leader.hidden = !length;
-    if (length) {
-      // Start the connector outside the numbered circle and finish at the actual route endpoint.
-      leader.style.width = length - 13 + 'px';
-      leader.style.transform = 'rotate(' + Math.atan2(-dy, -dx) + 'rad) translateX(13px)';
-    }
+const visitDate = new Intl.DateTimeFormat('th-TH', { day: 'numeric', month: 'short', timeZone: 'UTC' });
+let visitPopup, pinFrame;
+
+function showVisits(entry) {
+  const entries = [...entry.group].sort((a, b) => a.order - b.order);
+  if (entries.length === 1 && entry.open) {
+    previousCamera = undefined;
+    entry.open(entry.stop);
+    return;
   }
+  visitPopup?.remove();
+  routePopup?.remove();
+  const content = document.createElement('div');
+  content.className = 'map-visits';
+  const heading = document.createElement('strong');
+  heading.textContent = 'เลือกจุดแวะบนแผนที่';
+  content.append(heading);
+  const point = map.project(entry.marker.getLngLat());
+  const {clientWidth, clientHeight} = map.getContainer();
+  const width = Math.min(250, clientWidth - 14);
+  const above = point.y - 52, below = clientHeight - point.y - 46;
+  const vertical = above >= below ? 'bottom' : 'top';
+  const side = point.x < width / 2 ? '-left' : point.x > clientWidth - width / 2 ? '-right' : '';
+  content.style.maxHeight = Math.max(40, Math.min(230, Math.max(above, below) - 44)) + 'px';
+  const popup = new library.Popup({
+    anchor: vertical + side, offset: 13, maxWidth: width + 'px',
+    className: 'visits-popup', focusAfterOpen: false, closeOnMove: true,
+  });
+  for (const member of entries) {
+    const row = document.createElement(member.open ? 'button' : 'p');
+    const when = document.createElement('small');
+    when.textContent = member.when;
+    row.append(when, document.createTextNode(member.title));
+    if (member.open) {
+      row.type = 'button';
+      row.dataset.visit = member.stop.id;
+      row.onclick = () => {
+        popup.remove();
+        previousCamera = undefined;
+        member.open(member.stop);
+      };
+    }
+    content.append(row);
+  }
+  visitPopup = popup.setLngLat(entry.marker.getLngLat()).setDOMContent(content).addTo(map);
+  popup.getElement().setAttribute('role', 'dialog');
+  popup.getElement().setAttribute('aria-label', heading.textContent);
+  const close = popup.getElement().querySelector('.maplibregl-popup-close-button');
+  close.setAttribute('aria-label', 'ปิดรายการจุดแวะ');
+  close.onclick = () => entry.el.focus({ preventScroll: true });
+  popup.getElement().onkeydown = event => {
+    if (event.key === 'Escape') {
+      event.stopPropagation();
+      popup.remove();
+      entry.el.focus({ preventScroll: true });
+    }
+  };
+  (content.querySelector('button') || close).focus({ preventScroll: true });
+}
+
+export function groupNearbyVisits(projected) {
+  const groups = [];
+  for (const {entry, x, y} of projected) {
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+    const cluster = groups.find(g => Math.hypot(g.x - x, g.y - y) < 44);
+    if (cluster) cluster.members.push(entry);
+    else groups.push({x, y, members: [entry]});
+  }
+  return groups;
+}
+
+function arrangePins() {
+  if (!map || !markers.length) return;
+  const {clientWidth: width, clientHeight: height} = map.getContainer();
+  const focused = markers.find(entry => entry.el.dataset.focused === 'true');
+  const priority = focused ? [focused, ...markers.filter(entry => entry !== focused)] : markers;
+  const groups = groupNearbyVisits(priority.map(entry => {
+    const {x, y} = map.project(entry.marker.getLngLat());
+    return {entry, x, y};
+  }));
+  const active = markers.find(entry => entry.el === document.activeElement);
+  const leaders = new Set(groups.map(group => group.members[0]));
+  for (const entry of markers) entry.el.hidden = !leaders.has(entry);
+  if (active?.el.hidden) groups.find(g => g.members.includes(active))?.members[0].el.focus({preventScroll: true});
+  const obstacles = groups.map(({x, y}) => ({left: x - 18, right: x + 18, top: y - 18, bottom: y + 18}));
+  for (const {members, x, y} of groups) {
+    const entry = members[0];
+    entry.group = members;
+    const {el, group, badge, tag} = entry;
+    const multiple = group.length > 1;
+    el.classList.toggle('group-pin', multiple);
+    el.disabled = !multiple && !entry.open;
+    if (multiple) el.setAttribute('aria-haspopup', 'dialog');
+    else el.removeAttribute('aria-haspopup');
+    entry.face.textContent = entry.overview ? (multiple ? String(group.length) : '') : entry.number;
+    badge.hidden = !multiple || entry.overview;
+    if (!badge.hidden) badge.textContent = '+' + (group.length - 1);
+    const name = multiple ? group.length + ' จุดแวะในบริเวณนี้ · เลือกจุดแวะ' : entry.when + ' · ' + entry.title;
+    el.title = name;
+    el.setAttribute('aria-label', name);
+    tag.hidden = entry.overview && !entry.stop.star && entry !== focused;
+    if (tag.hidden) continue;
+    const w = tag.offsetWidth, h = tag.offsetHeight;
+    const gap = multiple && !entry.overview ? 25 : 18;
+    let placed = false;
+    for (const side of ['right', 'left']) {
+      const left = side === 'right' ? x + gap : x - gap - w;
+      const rect = {left, right: left + w, top: y - h / 2, bottom: y + h / 2};
+      if (rect.left < 0 || rect.right > width || rect.top < 0 || rect.bottom > height) continue;
+      if (obstacles.some(o => o.left < rect.right && rect.left < o.right && o.top < rect.bottom && rect.top < o.bottom)) continue;
+      tag.dataset.side = side;
+      obstacles.push(rect);
+      placed = true;
+      break;
+    }
+    tag.hidden = !placed;
+  }
+}
+function queuePins() {
+  if (!pinFrame) pinFrame = requestAnimationFrame(() => { pinFrame = undefined; arrangePins(); });
 }
 
 function paint() {
@@ -208,54 +282,48 @@ function paint() {
   const activePin = document.activeElement?.closest('.map-pin')?.dataset.mapStop;
   for (const { marker } of markers) marker.remove();
   markers = [];
-  function pin(stop, p, index, ghost) {
+  visitPopup?.remove();
+  function pin(stop, p, index, ghost, day) {
     points.push(p);
     if (stop.id === focusedStop) focusPoint = p;
-    const el = document.createElement(open ? 'button' : 'span');
+    const el = document.createElement('button');
+    el.type = 'button';
     el.className = 'map-pin' + (ghost ? ' removed' : '');
-    if (open) el.type = 'button';
     el.dataset.mapStop = stop.id;
     el.dataset.focused = String(stop.id === focusedStop);
-    const number = drafting && Number.isInteger(stop.ordinal) ? stop.ordinal : index + 1;
-    el.textContent = ghost ? '−' : String(number);
-    el.title = (ghost ? 'นำออก · ' : '') + (stop.name || stop.n) +
-      (drafting && stop.place?.source === 'model' ? ' · ตำแหน่งโดยประมาณ' : '');
-    el.setAttribute('aria-label', el.title);
-    const leader = document.createElement('span');
-    leader.hidden = true;
-    leader.setAttribute('aria-hidden', 'true');
-    Object.assign(leader.style, {
-      position: 'absolute',
-      pointerEvents: 'none',
-      left: '50%',
-      top: '50%',
-      height: '2px',
-      background: '#53657b',
-      boxShadow: '0 0 1px white',
-      transformOrigin: 'left center',
+    const ordinal = drafting && Number.isInteger(stop.ordinal) ? stop.ordinal : index + 1;
+    const date = Date.parse(day.date);
+    const when = [Number.isFinite(date) && visitDate.format(date), (drafting && open ? 'ตัวเลือก ' : 'จุดที่ ') + ordinal, stop.start].filter(Boolean).join(' · ');
+    const title = (ghost ? 'นำออก · ' : '') + (stop.name || stop.n || 'จุดแวะ') +
+      (stop.place?.source === 'model' ? ' · ตำแหน่งโดยประมาณ' : '');
+    const overview = days.length > 1;
+    el.classList.toggle('overview-pin', overview);
+    const [face, badge, tag] = ['map-pin-face', 'map-pin-count', 'map-pin-name'].map(cls => {
+      const span = document.createElement('span');
+      span.className = cls;
+      span.setAttribute('aria-hidden', 'true');
+      el.append(span);
+      return span;
     });
-    el.append(leader);
-    if (open) el.onclick = (event) => {
-      event.stopPropagation();
-      previousCamera = undefined;
-      open(stop);
-    };
+    tag.textContent = stop.name || stop.n;
     const marker = new library.Marker({ element: el }).setLngLat(p).addTo(map);
-    markers.push({ marker, leader });
+    const entry = {marker, el, stop, title, when, number: ghost ? '−' : String(ordinal), overview, open, face, badge, tag, order: markers.length};
+    el.onclick = event => { event.stopPropagation(); showVisits(entry); };
+    markers.push(entry);
     if (stop.id === activePin) el.focus({ preventScroll: true });
   }
   for (const day of days.filter(Boolean)) {
     const stops = day.stops || [];
     stops.forEach((stop, i) => {
-      if (drafting && stop.place?.fallback) return;
-      const p = coordinates(stop.ll),
-        a = coordinates(stops[i - 1]?.ll);
-      if (p) pin(stop, p, i, false);
-      if (!p || !stop.leg) return;
+      const p = visitCoordinates(stop),
+        a = visitCoordinates(stops[i - 1]);
+      if (p) pin(stop, p, i, false, day);
+      if (!p || !stop.leg || stops[i - 1]?.place?.fallback) return;
       const mode = stop.leg.mode || stop.leg.m;
       const record = routes?.[stop.leg.key];
-      if (drafting && (stops[i - 1]?.place?.fallback || record?.approx || !Array.isArray(record?.geom) || record.geom.length < 2)) return;
+      if (drafting && (record?.approx || !Array.isArray(record?.geom) || record.geom.length < 2)) return;
       if (!drafting && !a) return;
+      if (a && distance(a, p) === 0) return;
       const line = segment(a || p, p, record, mode, false, stop.leg.real === false);
       if (drafting && line.properties.approx) return;
       features.push(line);
@@ -264,11 +332,11 @@ function paint() {
     if (before) {
       const kept = new Set(stops.map((s) => s.id));
       before.stops.forEach((stop, i, old) => {
-        const p = coordinates(stop.ll);
+        const p = visitCoordinates(stop);
         if (!p || kept.has(stop.id)) return;
-        pin(stop, p, i, true);
+        pin(stop, p, i, true, before);
         for (const adjacent of [old[i - 1], old[i + 1]]) {
-          const other = coordinates(adjacent?.ll);
+          const other = visitCoordinates(adjacent);
           if (other) features.push(segment(p, other, null, 'walk', true));
         }
       });
@@ -304,7 +372,7 @@ function paint() {
     }
   }
   renderLegend(features);
-  spreadPins();
+  arrangePins();
   const bounds = points.length && points.reduce((box, p) => box.extend(p), new library.LngLatBounds()).toArray();
   cameraTarget = { bounds, focus: focusPoint, focusedStop, drafting, center };
   scheduleCamera();
@@ -322,6 +390,7 @@ export function drawMap(days, routes, open, before, focusedStop, draft) {
     for (const { marker } of markers) marker.remove();
     markers = [];
     routePopup?.remove();
+    visitPopup?.remove();
     map?.stop();
     previousCamera = undefined;
     cameraTarget = drafting ? { drafting, center } : null;
@@ -347,7 +416,7 @@ export function drawMap(days, routes, open, before, focusedStop, draft) {
       const sizeChanges = new ResizeObserver(scheduleCamera);
       for (const target of [container, document.querySelector('#place-panel'), document.querySelector('#chat-response')])
         if (target) sizeChanges.observe(target);
-      for (const event of ['zoom', 'rotate', 'pitch', 'resize', 'moveend']) map.on(event, spreadPins);
+      for (const event of ['move', 'resize', 'moveend']) map.on(event, queuePins);
       let baseReady = false;
       map.on('error', () => {
         if (!baseReady && !map.isStyleLoaded()) {
