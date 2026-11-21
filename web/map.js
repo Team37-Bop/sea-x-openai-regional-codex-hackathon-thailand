@@ -466,7 +466,8 @@ export function drawMap(days, routes, open, before, focusedStop, draft, tripDays
   renderLegend(tripDays);
   if (map || loading || (!draft && !days.some((day) => day?.stops?.length))) return;
   loading = import('/assets/maplibre-gl.mjs?v=6.19.0')
-    .then((lib) => {
+    .then(async (lib) => {
+      if (!await stylesReady) throw new Error('MapLibre stylesheet failed to load');
       library = lib;
       lib.setWorkerUrl('/assets/maplibre-gl-worker.mjs?v=6.19.0');
       const container = document.querySelector('#map');
@@ -525,4 +526,24 @@ export function drawMap(days, routes, open, before, focusedStop, draft, tripDays
       loading = null;
       document.querySelector('#map').textContent = 'เปิดแผนที่ไม่สำเร็จ ดูจุดแวะและเส้นทางในกำหนดการได้';
     });
+  // Fetch the controls' styles in parallel with the module.
+  const stylesReady = loadMapStyles();
+}
+
+let mapStyles;
+function loadMapStyles() {
+  mapStyles ??= new Promise(resolve => {
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = '/assets/maplibre-gl.css?v=6.19.0';
+    link.onload = () => resolve(true);
+    link.onerror = () => {
+      link.remove();
+      mapStyles = undefined;
+      resolve(false);
+    };
+    // The planner styles override the library's default controls and markers.
+    document.head.prepend(link);
+  });
+  return mapStyles;
 }

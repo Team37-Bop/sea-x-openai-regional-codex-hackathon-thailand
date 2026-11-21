@@ -36,8 +36,15 @@ run "protected_streaming_release" {
     error_message = "CloudFront must sign requests to a private frontend bucket."
   }
   assert {
-    condition     = alltrue([for behavior in aws_cloudfront_distribution.app.ordered_cache_behavior : behavior.path_pattern == "/api/*" && length(behavior.allowed_methods) == 7])
-    error_message = "CloudFront must forward every supported API method."
+    condition     = alltrue([for behavior in aws_cloudfront_distribution.app.ordered_cache_behavior : behavior.path_pattern == "/api/*" && length(behavior.allowed_methods) == 7 && behavior.cache_policy_id == data.aws_cloudfront_cache_policy.caching_disabled.id])
+    error_message = "CloudFront must forward every supported API method with caching disabled."
+  }
+  assert {
+    condition = alltrue([
+      for path in ["index.html", "app.js", "liff.js", "planner.css", "assets/liff.js", "assets/maplibre-gl.mjs", "assets/anuphan-variable.woff2"] :
+      try(aws_s3_object.frontend[path].cache_control == "no-cache", false)
+    ])
+    error_message = "HTML, browser entry points, and mutable asset aliases must revalidate on every visit."
   }
   assert {
     condition     = aws_api_gateway_stage.app.xray_tracing_enabled && one(aws_api_gateway_method_settings.all.settings).data_trace_enabled == false && var.waf_mode == "count" && var.waf_api_requests_per_five_minutes == 100

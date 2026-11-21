@@ -1,3 +1,5 @@
+export { publicLineConfig, tripRequest } from './stream.js';
+
 export function el(tag, text, classes) {
   const item = document.createElement(tag);
   if (text != null) item.textContent = text;
@@ -23,20 +25,6 @@ export function message(container) {
   output.setAttribute('role', 'status');
   container.append(output);
   return output;
-}
-export async function tripRequest(path, { method = 'GET', data, token } = {}) {
-  const response = await fetch(path, {
-    method,
-    headers: {
-      ...(data != null ? { 'Content-Type': 'application/json' } : {}),
-      ...(token ? { 'x-bop-trip-token': token } : {}),
-    },
-    ...(data == null ? {} : { body: JSON.stringify(data) }),
-  });
-  const result = await response.json();
-  if (!response.ok)
-    throw Object.assign(new Error(result.message || 'Bop ทำรายการไม่สำเร็จ'), { code: result.error });
-  return result;
 }
 export function label(title, input) {
   const wrap = el('label', title);
